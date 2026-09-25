@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -16,6 +17,7 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
+	"pi-bridge-go/internal/management"
 	"pi-bridge-go/internal/observe"
 	"pi-bridge-go/internal/protocol"
 	run "pi-bridge-go/internal/runtime"
@@ -28,12 +30,37 @@ import (
 // cookieName 是浏览器换取会话 Cookie 后使用的凭据名。
 const cookieName = "pi_bridge_session"
 
+// SupportedMethods 是桥当前实现的全部命令。
+// 能力清单与 main 的指标方法表都从这里取，避免两处漂移。
+var SupportedMethods = []string{
+	"worker.list",
+	"session.start", "session.state", "session.prompt", "session.abort", "session.stop",
+	"session.subscribe", "session.unsubscribe",
+	"session.steer", "session.follow_up", "session.set_queue_mode",
+	"session.models", "session.set_model", "session.cycle_model",
+	"session.thinking_levels", "session.set_thinking", "session.cycle_thinking",
+	"session.compact", "session.set_auto_compaction", "session.set_auto_retry", "session.abort_retry",
+	"session.new", "session.switch", "session.fork", "session.clone",
+	"session.tree", "session.fork_messages", "session.entries",
+	"session.bash", "session.abort_bash", "session.bash_output",
+	"session.ui_response", "session.pending_dialogs",
+	"session.stats", "session.set_name", "session.last_assistant", "session.commands",
+	"session.export_html",
+	"sessions.search", "sessions.delete",
+	"config.models", "config.settings", "config.trust",
+	"terminal.open", "terminal.input", "terminal.resize", "terminal.close", "terminal.list",
+	"files.list", "files.stat", "files.read", "files.roots",
+	"git.status", "git.diff",
+}
+
 // Server 是 HTTP 与 WebSocket 入口，只做接入、鉴权与限额。
 type Server struct {
 	manager      *run.Manager
 	store        *sessions.Store
 	terminals    *terminal.Manager
 	files        *workspace.Files
+	piConfig     *management.Config
+	exportDir    string
 	receipts     *storage.Receipts
 	metrics      *observe.Metrics
 	token, host  string
@@ -43,13 +70,14 @@ type Server struct {
 }
 
 // New 构造入口；token 至少 32 字符，host 为监听地址上的主机名。
-// New 构造入口；token 至少 32 字符，host 为监听地址上的主机名。
-func New(manager *run.Manager, store *sessions.Store, terminals *terminal.Manager, files *workspace.Files, receipts *storage.Receipts, metrics *observe.Metrics, token, host string) *Server {
+func New(manager *run.Manager, store *sessions.Store, terminals *terminal.Manager, files *workspace.Files, piConfig *management.Config, exportDir string, receipts *storage.Receipts, metrics *observe.Metrics, token, host string) *Server {
 	return &Server{
 		manager:     manager,
 		store:       store,
 		terminals:   terminals,
 		files:       files,
+		piConfig:    piConfig,
+		exportDir:   exportDir,
 		receipts:    receipts,
 		metrics:     metrics,
 		token:       token,
@@ -142,7 +170,23 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	switch r.URL.Path {
 	case "/api/v1/capabilities":
-		writeJSON(w, 200, map[string]any{"version": 1, "phase": "A", "piBaseline": "0.85.1", "methods": []string{"session.start", "session.state", "session.prompt", "session.abort", "session.stop", "session.subscribe", "session.unsubscribe", "worker.list"}, "replay": true, "persistentDedup": false, "extensionDialogs": "interactive", "relay": false, "history": "v3-disk-branch", "limits": map[string]int{"connections": 8, "inFlightOperations": 16, "wsRequestBytes": 1 << 20, "wsResponseBytes": 512 << 10, "connectionQueueBytes": 1 << 20, "requestIdsPerConnection": 1024, "replayItems": 256, "replayBytes": 1 << 20}})
+		writeJSON(w, 200, map[string]any{
+			"version": 1, "phase": "A", "piBaseline": "0.85.1",
+			"methods":          SupportedMethods,
+			"replay":           true,
+			"persistentDedup":  true,
+			"extensionDialogs": "interactive",
+			"relay":            s.tunnelBridge != nil,
+			"history":          "v3-disk-branch",
+			"exportDir":        s.exportDir,
+			"limits": map[string]int{
+				"connections": 8, "inFlightOperations": 16,
+				"wsRequestBytes": 1 << 20, "wsResponseBytes": 512 << 10,
+				"connectionQueueBytes": 1 << 20, "requestIdsPerConnection": 1024,
+				"replayItems": 256, "replayBytes": 1 << 20,
+				"terminals": 4, "terminalIdleSeconds": 600,
+			},
+		})
 	case "/api/v1/sessions":
 		limit, err := number(r, "limit", 50)
 		if err != nil {
@@ -181,6 +225,32 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		writeError(w, 404, protocol.E("not_found", "接口不存在"))
 	}
+}
+
+// safeExportName 限制导出文件名，防止借导出路径写到别处。
+// 只允许安全字符，且必须以 .html 结尾。
+func safeExportName(name string) (string, error) {
+	if name == "" {
+		return "session.html", nil
+	}
+	if len(name) > 128 {
+		return "", protocol.E("invalid_params", "文件名过长")
+	}
+	for _, c := range name {
+		switch {
+		case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c >= '0' && c <= '9':
+		case c == '-', c == '_', c == '.':
+		default:
+			return "", protocol.E("invalid_params", "文件名只能包含字母、数字、-、_ 和 .")
+		}
+	}
+	if strings.Contains(name, "..") || strings.HasPrefix(name, ".") {
+		return "", protocol.E("invalid_params", "文件名不合法")
+	}
+	if !strings.HasSuffix(name, ".html") {
+		return "", protocol.E("invalid_params", "导出文件必须以 .html 结尾")
+	}
+	return name, nil
 }
 
 // number 解析分页用数字参数。
@@ -746,6 +816,67 @@ func (s *Server) dispatchCommon(ctx context.Context, r protocol.Request, sink co
 			return nil, err
 		}
 		return map[string]any{"sessionId": id}, nil
+	case "sessions.search":
+		var p struct {
+			Query string `json:"query"`
+			Limit int    `json:"limit"`
+		}
+		if err := protocol.Decode(r.Params, &p); err != nil {
+			return nil, err
+		}
+		if p.Limit <= 0 {
+			p.Limit = 50
+		}
+		limits := sessions.DefaultSearchLimits()
+		limits.MaxMatches = p.Limit
+		return s.store.Search(ctx, p.Query, limits)
+	case "sessions.delete":
+		var p struct {
+			SessionID string `json:"sessionId"`
+		}
+		if err := protocol.Decode(r.Params, &p); err != nil {
+			return nil, err
+		}
+		return s.store.Delete(ctx, p.SessionID)
+	case "session.export_html":
+		var p struct {
+			FileName string `json:"fileName"`
+		}
+		if err := protocol.Decode(r.Params, &p); err != nil {
+			return nil, err
+		}
+		name, err := safeExportName(p.FileName)
+		if err != nil {
+			return nil, err
+		}
+		target := filepath.Join(s.exportDir, name)
+		worker, err := s.manager.Get(r.SessionID)
+		if err != nil {
+			return nil, err
+		}
+		path, err := worker.ExportHTML(ctx, target)
+		if err != nil {
+			return nil, err
+		}
+		if filepath.Clean(path) != filepath.Clean(target) {
+			return nil, protocol.E("conflict", "导出路径与请求不一致")
+		}
+		return map[string]any{"path": path}, nil
+	case "config.models":
+		if err := empty(); err != nil {
+			return nil, err
+		}
+		return s.piConfig.Models()
+	case "config.settings":
+		if err := empty(); err != nil {
+			return nil, err
+		}
+		return s.piConfig.Settings()
+	case "config.trust":
+		if err := empty(); err != nil {
+			return nil, err
+		}
+		return s.piConfig.Trust()
 	case "session.bash":
 		var p struct {
 			Command            string `json:"command"`

@@ -1,0 +1,237 @@
+package sessions
+
+import (
+	"bufio"
+	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
+	"io"
+	"strings"
+	"time"
+
+	"pi-bridge-go/internal/jsonl"
+	"pi-bridge-go/internal/protocol"
+)
+
+// errStopWalk 用于提前结束目录遍历，区别于真正的错误。
+var errStopWalk = errors.New("stop walk")
+
+func isStopWalk(err error) bool { return errors.Is(err, errStopWalk) }
+
+func isEOF(err error) bool { return errors.Is(err, io.EOF) }
+
+// SearchLimits 约束全文搜索的规模，避免一次搜索拖垮桥。
+type SearchLimits struct {
+	MaxFiles     int
+	MaxFileBytes int64
+	LineBytes    int
+	MaxMatches   int
+	MaxSnippet   int
+}
+
+// DefaultSearchLimits 给出默认搜索限额。
+func DefaultSearchLimits() SearchLimits {
+	return SearchLimits{MaxFiles: 200, MaxFileBytes: 16 << 20, LineBytes: 1 << 20, MaxMatches: 100, MaxSnippet: 240}
+}
+
+// Match 是一条搜索结果。
+type Match struct {
+	SessionID string `json:"sessionId"`
+	EntryID   string `json:"entryId"`
+	Role      string `json:"role,omitempty"`
+	Snippet   string `json:"snippet"`
+	Timestamp string `json:"timestamp,omitempty"`
+}
+
+// SearchResult 是搜索结果与截断标记。
+type SearchResult struct {
+	Matches   []Match `json:"matches"`
+	Scanned   int     `json:"scanned"`
+	Truncated bool    `json:"truncated"`
+}
+
+// Search 在受管会话目录内做大小写不敏感的子串搜索。
+// 设计约束：
+//   - 只读，绝不修改会话文件；
+//   - 逐文件、逐行扫描，命中数、文件数、单文件体积都有上限；
+//   - 达到任一上限立即停止并标记 truncated，不做无界扫描。
+func (s *Store) Search(ctx context.Context, query string, limits SearchLimits) (SearchResult, error) {
+	query = strings.TrimSpace(query)
+	if query == "" {
+		return SearchResult{}, protocol.E("invalid_params", "搜索词不能为空")
+	}
+	if len(query) > 200 {
+		return SearchResult{}, protocol.E("invalid_params", "搜索词过长")
+	}
+	needle := strings.ToLower(query)
+	out := SearchResult{Matches: []Match{}}
+	scanned := 0
+	walkErr := walkDir(s.root, ".", func(path string, size int64, _ time.Time) error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if len(out.Matches) >= limits.MaxMatches || scanned >= limits.MaxFiles {
+			out.Truncated = true
+			return errStopWalk
+		}
+		if size > limits.MaxFileBytes {
+			out.Truncated = true
+			return nil
+		}
+		scanned++
+		return s.searchFile(path, needle, limits, &out)
+	})
+	if walkErr != nil && !isStopWalk(walkErr) {
+		return SearchResult{}, walkErr
+	}
+	out.Scanned = scanned
+	if walkErr != nil && isStopWalk(walkErr) {
+		out.Truncated = true
+	}
+	return out, nil
+}
+
+// searchFile 在单个会话文件内搜索。
+func (s *Store) searchFile(path, needle string, limits SearchLimits, out *SearchResult) error {
+	f, err := s.root.Open(path)
+	if err != nil {
+		return nil
+	}
+	defer f.Close()
+	st, err := f.Stat()
+	if err != nil || !st.Mode().IsRegular() {
+		return nil
+	}
+	r := bufio.NewReader(io.LimitReader(f, st.Size()))
+	sessionID := sessionIDFromPath(path)
+	for {
+		b, _, e := jsonl.Read(r, limits.LineBytes)
+		if e != nil {
+			// 末尾半行忽略；超大行直接跳过该文件，不中断整体搜索。
+			if jsonl.ErrTooLarge == e || jsonl.ErrIncomplete == e || isEOF(e) {
+				return nil
+			}
+			return nil
+		}
+		// 会话 ID 以头部记录为准，文件名只作兜底。
+		var header struct {
+			Type string `json:"type"`
+			ID   string `json:"id"`
+		}
+		if jsonUnmarshal(b, &header) == nil && header.Type == "session" && ValidID(header.ID) {
+			sessionID = header.ID
+			continue
+		}
+		if !bytes.Contains(bytes.ToLower(b), []byte(needle)) {
+			continue
+		}
+		var item struct {
+			Type      string          `json:"type"`
+			ID        string          `json:"id"`
+			Timestamp string          `json:"timestamp"`
+			Message   json.RawMessage `json:"message"`
+			Summary   string          `json:"summary"`
+		}
+		if jsonUnmarshal(b, &item) != nil {
+			continue
+		}
+		role := ""
+		text := item.Summary
+		if len(item.Message) > 0 {
+			var msg struct {
+				Role    string          `json:"role"`
+				Content json.RawMessage `json:"content"`
+				Command string          `json:"command"`
+			}
+			if jsonUnmarshal(item.Message, &msg) == nil {
+				role = msg.Role
+				text = flattenContent(msg.Content)
+				if text == "" {
+					text = msg.Command
+				}
+			}
+		}
+		out.Matches = append(out.Matches, Match{
+			SessionID: sessionID,
+			EntryID:   item.ID,
+			Role:      role,
+			Snippet:   snippet(text, needle, limits.MaxSnippet),
+			Timestamp: item.Timestamp,
+		})
+		if len(out.Matches) >= limits.MaxMatches {
+			out.Truncated = true
+			return errStopWalk
+		}
+	}
+}
+
+// flattenContent 把字符串或内容块数组压成一段纯文本，用于生成摘要片段。
+func flattenContent(raw json.RawMessage) string {
+	if len(raw) == 0 {
+		return ""
+	}
+	var s string
+	if jsonUnmarshal(raw, &s) == nil {
+		return s
+	}
+	var blocks []struct {
+		Type string `json:"type"`
+		Text string `json:"text"`
+	}
+	if jsonUnmarshal(raw, &blocks) != nil {
+		return ""
+	}
+	parts := make([]string, 0, len(blocks))
+	for _, b := range blocks {
+		if b.Text != "" {
+			parts = append(parts, b.Text)
+		}
+	}
+	return strings.Join(parts, " ")
+}
+
+// snippet 截取命中位置附近的文本，控制在固定长度内。
+func snippet(text, needle string, max int) string {
+	if max <= 0 {
+		max = 240
+	}
+	runes := []rune(text)
+	if len(runes) <= max {
+		return text
+	}
+	lower := strings.ToLower(text)
+	idx := strings.Index(lower, needle)
+	if idx < 0 || idx > len(text) {
+		return string(runes[:max]) + "…"
+	}
+	// 以 rune 为单位回退，避免把 UTF-8 序列切断。
+	start := len([]rune(text[:idx]))
+	half := max / 2
+	if start > half {
+		start -= half
+	} else {
+		start = 0
+	}
+	end := start + max
+	if end > len(runes) {
+		end = len(runes)
+	}
+	out := string(runes[start:end])
+	if start > 0 {
+		out = "…" + out
+	}
+	if end < len(runes) {
+		out += "…"
+	}
+	return out
+}
+
+// sessionIDFromPath 从文件名解析会话 ID，仅在头部缺失时兜底。
+func sessionIDFromPath(path string) string {
+	base := path
+	if i := strings.LastIndexByte(base, '/'); i >= 0 {
+		base = base[i+1:]
+	}
+	return strings.TrimSuffix(base, ".jsonl")
+}

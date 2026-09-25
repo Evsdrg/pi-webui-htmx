@@ -26,8 +26,11 @@ func Test配对码仅能使用一次(t *testing.T) {
 	if len(code) != 8 {
 		t.Fatalf("配对码长度异常: %q", code)
 	}
-	if strings.ContainsAny(code, "01OIL") {
-		t.Fatalf("配对码包含易混淆字符: %q", code)
+	// 字母表已排除 0/O/1/I，避免手抄时混淆。
+	for _, forbidden := range "01OI" {
+		if strings.ContainsRune(code, forbidden) {
+			t.Fatalf("配对码包含易混淆字符 %q: %q", forbidden, code)
+		}
 	}
 	device, token, err := r.Claim("alice", code)
 	if err != nil {

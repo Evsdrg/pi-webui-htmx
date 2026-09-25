@@ -16,6 +16,7 @@ import (
 	"syscall"
 	"time"
 
+	"pi-bridge-go/internal/management"
 	"pi-bridge-go/internal/observe"
 	run "pi-bridge-go/internal/runtime"
 	"pi-bridge-go/internal/sessions"
@@ -95,7 +96,8 @@ func serve() error {
 			return err
 		}
 	}
-	for _, dir := range []string{absolute, sessionDir, *agentDir} {
+	exportDir := filepath.Join(absolute, "exports")
+	for _, dir := range []string{absolute, sessionDir, *agentDir, exportDir} {
 		if err = os.MkdirAll(dir, 0700); err != nil {
 			return err
 		}
@@ -113,19 +115,8 @@ func serve() error {
 	}
 	defer receipts.Close()
 
-	methods := observe.NewMethods(
-		"worker.list", "session.start", "session.state", "session.prompt", "session.abort",
-		"session.stop", "session.subscribe", "session.unsubscribe",
-		"session.models", "session.set_model", "session.cycle_model",
-		"session.thinking_levels", "session.set_thinking", "session.cycle_thinking",
-		"session.set_queue_mode", "session.steer", "session.follow_up",
-		"session.compact", "session.set_auto_compaction", "session.set_auto_retry", "session.abort_retry",
-		"session.stats", "session.set_name", "session.last_assistant", "session.commands",
-		"session.tree", "session.fork_messages", "session.entries",
-		"session.new", "session.switch", "session.fork", "session.clone",
-		"session.bash", "session.abort_bash", "session.bash_output",
-	)
-	metrics := observe.NewMetrics(methods)
+	// 方法集合与能力清单同源，避免新增命令时漏登记指标。
+	metrics := observe.NewMetrics(observe.NewMethods(transport.SupportedMethods...))
 
 	cfg := run.Defaults()
 	cfg.Binary = *binary
@@ -155,7 +146,8 @@ func serve() error {
 	if err != nil {
 		return err
 	}
-	handler := transport.New(manager, store, terminals, files, receipts, metrics, token, ln.Addr().String())
+	piConfig := management.NewConfig(*agentDir, management.DefaultLimits())
+	handler := transport.New(manager, store, terminals, files, piConfig, exportDir, receipts, metrics, token, ln.Addr().String())
 
 	// 云端隧道：本地主动外连，relay 只搬运字节。
 	var tunnelClient *tunnel.Client

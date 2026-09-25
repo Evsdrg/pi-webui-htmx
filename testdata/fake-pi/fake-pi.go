@@ -132,6 +132,9 @@ func main() {
 			}})
 		case "abort_bash":
 			emit(frame{Type: "response", ID: cmd.ID, Success: true})
+		case "export_html":
+			// 回显请求里的 outputPath，让桥能校验路径一致性。
+			emit(frame{Type: "response", ID: cmd.ID, Success: true, Data: map[string]any{"path": cmd.Message}})
 		case "crash":
 			os.Exit(3)
 		default:

@@ -57,7 +57,23 @@ go run ./cmd/pi-bridge \
 | `/api/v1/sessions/{id}/history?limit&leafId&before` | GET | 所选分支历史分页 |
 | `/api/v1/ws` | WS | 命令、响应与事件 |
 
-WS 命令：`worker.list`、`session.start`、`session.state`、`session.prompt`、`session.abort`、`session.stop`、`session.subscribe`、`session.unsubscribe`。
+WS 命令：
+
+- 进程与会话：`worker.list`、`session.start`、`session.state`、`session.prompt`、
+  `session.abort`、`session.stop`、`session.subscribe`、`session.unsubscribe`
+- 排队：`session.steer`、`session.follow_up`、`session.set_queue_mode`
+- 模型：`session.models`、`session.set_model`、`session.cycle_model`、
+  `session.thinking_levels`、`session.set_thinking`、`session.cycle_thinking`
+- 压缩与重试：`session.compact`、`session.set_auto_compaction`、`session.set_auto_retry`、`session.abort_retry`
+- 分支：`session.new`、`session.switch`、`session.fork`、`session.clone`、
+  `session.tree`、`session.fork_messages`、`session.entries`
+- bash：`session.bash`、`session.abort_bash`、`session.bash_output`
+- 终端：`terminal.open`、`terminal.input`、`terminal.resize`、`terminal.close`、`terminal.list`
+- 文件与 Git：`files.list`、`files.stat`、`files.read`、`files.roots`、`git.status`、`git.diff`
+- 扩展对话：`session.ui_response`、`session.pending_dialogs`
+- 其他：`session.stats`、`session.set_name`、`session.last_assistant`、`session.commands`、
+  `session.export_html`、`sessions.search`、`sessions.delete`、
+  `config.models`、`config.settings`、`config.trust`
 
 协议细节见 [`api/v1/protocol.md`](../api/v1/protocol.md)，模块边界见 [`docs/architecture.md`](docs/architecture.md)，Pi 兼容矩阵见 [`docs/pi-compatibility.md`](docs/pi-compatibility.md)。
 
@@ -124,6 +140,46 @@ kill -TERM $BRIDGE; wait $BRIDGE 2>/dev/null
 
 冒烟标准：握手成功、`worker.list` 返回空表、桥退出后没有残留的 `pi` 进程。**不要在这个阶段发送真实提示词。**
 
+## 刻意不做的能力
+
+| 能力 | 原因 |
+|---|---|
+| 远程安装/卸载 Pi 包 | 等于任意代码执行。包在本机 CLI 用 `pi install` 管理，桥只读结果 |
+| 任意 CLI 命令透传 | 会绕过全部参数与路径校验，`PrefixArgs` 只来自运维配置 |
+| `session.import` | 导入会改写会话文件，先不做成网络接口 |
+| 会话写入接口 | 会话正文由 Pi 独占写入，桥不提供 `files.write` 之类入口 |
+
+## 云端部署
+
+```bash
+# 1. 启动 relay（云上）
+export PI_RELAY_SECRET="至少 32 个随机字符"
+pi-relay --listen 0.0.0.0:30143 --add-user alice      # 打印一次性用户令牌
+pi-relay --listen 0.0.0.0:30143 --add-device dev-1    # 打印一次性设备密钥
+pi-relay --listen 0.0.0.0:30143 --host relay.example.com
+
+# 2. 本地桥登记配对码（用设备密钥）
+curl -X POST https://relay.example.com/api/relay/pair \
+  -d '{"deviceId":"dev-1","secret":"<设备密钥>","name":"我的机器"}'
+
+# 3. 用户在浏览器用配对码领取设备，得到 deviceToken
+curl -X POST https://relay.example.com/api/relay/claim \
+  -H "Authorization: Bearer <用户令牌>" -d '{"pairingCode":"<配对码>"}'
+
+# 4. 本地桥主动外连（无需入站端口）
+export PI_BRIDGE_DEVICE_TOKEN="<deviceToken>"
+pi-bridge --workspace /srv/projects/pi \
+  --relay wss://relay.example.com --device-id dev-1 --device-name "我的机器"
+```
+
+relay 的硬约束：
+
+- 只搬运字节，只读路由帧的 `to`/`from`，绝不解析业务载荷
+- 不落盘会话正文，不接触模型密钥
+- 设备令牌与用户令牌只存 SHA-256，Cookie 编码 `exp.owner.sig`，服务端不存会话
+- 配对码一次性、按码限流；未归属设备不能建隧道
+- TLS 由反向代理终止；relay 本身不做证书管理
+
 ## 已知限制
 
 - A 阶段进程监督仅实现 Linux（独立进程组 + `Pdeathsig`），其他平台显式报错
@@ -131,4 +187,6 @@ kill -TERM $BRIDGE; wait $BRIDGE 2>/dev/null
 - 历史读取是请求内扫描，超大会话受 `Limits` 约束；磁盘索引属于后续阶段
 - 事件没有补发：断线后需重新读取持久历史，等权威 `message_end`
 - 连接内 `requestId` 防重有上限（1024），跨重启的 exactly-once 未实现
-- 云端 relay 未实现，A 阶段只能本机环回访问
+- 隧道模式下同一 `clientId` 重连会顶掉旧连接，多标签需各自使用不同 clientId
+- 非 Linux 平台进程监督未实现（当前显式报错）
+- 与外部 `pi` CLI 的文件级互斥未解决，仅保证桥内单写者

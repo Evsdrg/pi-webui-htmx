@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
+	"pi-bridge-go/internal/management"
 	"pi-bridge-go/internal/observe"
 	run "pi-bridge-go/internal/runtime"
 	"pi-bridge-go/internal/sessions"
@@ -76,7 +77,12 @@ func newTestServer(t *testing.T) (*Server, *run.Manager, string) {
 	terminals := terminal.NewManager(terminal.Defaults())
 	t.Cleanup(terminals.Close)
 
-	return New(m, store, terminals, files, receipts, metrics, testToken, "127.0.0.1:30142"), m, cwd
+	piConfig := management.NewConfig(agentDir, management.DefaultLimits())
+	exportDir := filepath.Join(state, "exports")
+	if err := os.MkdirAll(exportDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	return New(m, store, terminals, files, piConfig, exportDir, receipts, metrics, testToken, "127.0.0.1:30142"), m, cwd
 }
 
 func writeSessionFile(t *testing.T, dir, id, cwd string) {
@@ -305,7 +311,7 @@ func TestWS未实现方法被明确拒绝(t *testing.T) {
 	}
 	send(map[string]any{"version": 1, "kind": "command", "requestId": "s1", "method": "session.start", "params": map[string]any{"cwd": cwd}})
 	_ = read()
-	for _, method := range []string{"session.export_html", "session.import", "session.share", "session.reload", "worker.stop_all", "files.write", "files.delete"} {
+	for _, method := range []string{"session.import", "session.share", "session.reload", "worker.stop_all", "files.write", "files.delete", "packages.install"} {
 		send(map[string]any{"version": 1, "kind": "command", "requestId": "m-" + method, "sessionId": "fake-session", "method": method})
 		m := read()
 		if m["ok"] != false {
@@ -568,5 +574,83 @@ func Test连接内防重在回执不可用时仍生效(t *testing.T) {
 	}
 	if code, _ := dup["error"].(map[string]any)["code"].(string); code != "conflict" {
 		t.Fatalf("错误码应为 conflict，实际 %v", dup["error"])
+	}
+}
+
+func Test能力清单与实际分发一致(t *testing.T) {
+	s, _, cwd := newTestServer(t)
+	srv := httptest.NewUnstartedServer(s)
+	s.host = srv.Listener.Addr().String()
+	srv.Start()
+	defer srv.Close()
+	req, _ := http.NewRequest(http.MethodGet, srv.URL+"/api/v1/capabilities", nil)
+	req.Header.Set("Authorization", "Bearer "+testToken)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	var out map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		t.Fatal(err)
+	}
+	methods, _ := out["methods"].([]any)
+	if len(methods) != len(SupportedMethods) {
+		t.Fatalf("能力清单数量与 SupportedMethods 不一致: %d vs %d", len(methods), len(SupportedMethods))
+	}
+	// 每个声明支持的方法都不应返回 unsupported_method。
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	header := http.Header{}
+	header.Set("Authorization", "Bearer "+testToken)
+	conn, _, err := websocket.Dial(ctx, "ws"+strings.TrimPrefix(srv.URL, "http")+"/api/v1/ws", &websocket.DialOptions{HTTPHeader: header})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.CloseNow()
+	send := func(v map[string]any) {
+		b, _ := json.Marshal(v)
+		_ = conn.Write(ctx, websocket.MessageText, b)
+	}
+	read := func(requestID string) map[string]any {
+		deadline := time.Now().Add(8 * time.Second)
+		for time.Now().Before(deadline) {
+			_, b, err := conn.Read(ctx)
+			if err != nil {
+				t.Fatalf("读取失败: %v", err)
+			}
+			var m map[string]any
+			if json.Unmarshal(b, &m) != nil {
+				continue
+			}
+			if m["kind"] == "response" && m["requestId"] == requestID {
+				return m
+			}
+		}
+		t.Fatalf("未收到 %s 的响应", requestID)
+		return nil
+	}
+	send(map[string]any{"version": 1, "kind": "command", "requestId": "cap-1", "method": "session.start", "params": map[string]any{"cwd": cwd}})
+	started := read("cap-1")
+	if started["ok"] != true {
+		t.Fatalf("启动失败: %v", started)
+	}
+	data, _ := started["data"].(map[string]any)
+	id, _ := data["sessionId"].(string)
+	for i, raw := range methods {
+		method, _ := raw.(string)
+		reqID := "cap-m-" + string(rune('a'+i))
+		params := map[string]any{}
+		switch method {
+		case "session.subscribe", "session.state", "session.stop":
+			params = map[string]any{}
+		}
+		send(map[string]any{"version": 1, "kind": "command", "requestId": reqID, "sessionId": id, "method": method, "params": params})
+		m := read(reqID)
+		if m["ok"] == false {
+			if code, _ := m["error"].(map[string]any)["code"].(string); code == "unsupported_method" {
+				t.Fatalf("能力清单声明支持 %s，实际却未实现", method)
+			}
+		}
 	}
 }

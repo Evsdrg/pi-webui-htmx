@@ -328,3 +328,22 @@ func containsString(list []string, want string) bool {
 	}
 	return false
 }
+
+// ExportHTML 让 Pi 把当前会话导出为 HTML。
+// 输出路径由桥构造并校验，不接受调用方任意指定。
+func (w *Worker) ExportHTML(ctx context.Context, outputPath string) (string, error) {
+	if outputPath == "" {
+		return "", protocol.E("invalid_params", "outputPath 不能为空")
+	}
+	raw, err := w.call(ctx, "export_html", map[string]any{"outputPath": outputPath}, false)
+	if err != nil {
+		return "", err
+	}
+	var out struct {
+		Path string `json:"path"`
+	}
+	if json.Unmarshal(raw, &out) != nil || out.Path == "" {
+		return "", protocol.E("pi_error", "Pi 返回的导出路径无效")
+	}
+	return out.Path, nil
+}

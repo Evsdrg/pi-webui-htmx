@@ -189,6 +189,14 @@ func (x *Index) build(ctx context.Context) error {
 	return nil
 }
 
+// Invalidate 强制下次访问重建索引，用于文件被外部增删之后。
+func (x *Index) Invalidate() {
+	x.mu.Lock()
+	x.builtAt = time.Time{}
+	x.fingerprint = ""
+	x.mu.Unlock()
+}
+
 // Refresh 确保索引可用，返回是否发生了截断。
 func (x *Index) Refresh(ctx context.Context) (bool, error) {
 	if x.fresh(time.Now()) {
