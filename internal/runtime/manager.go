@@ -1,0 +1,643 @@
+// Package runtime 监督独立的 Pi 工作进程，生命周期不依赖浏览器连接。
+package runtime
+
+import (
+	"context"
+	"crypto/rand"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"os"
+	"os/exec"
+	"sync"
+	"sync/atomic"
+	"time"
+
+	"pi-bridge-go/internal/pi"
+	"pi-bridge-go/internal/protocol"
+	"pi-bridge-go/internal/sessions"
+	"pi-bridge-go/internal/workspace"
+)
+
+type Config struct {
+	Binary                                                 string
+	PrefixArgs                                             []string // 仅供运维与测试追加参数，绝不允许来自网络请求
+	Env                                                    []string
+	AgentDir                                               string
+	Store                                                  *sessions.Store
+	Policy                                                 *workspace.Policy
+	Extensions                                             bool
+	MaxWorkers                                             int
+	StartTimeout, OperationTimeout, IdleTimeout, StopGrace time.Duration
+	MaxFrame                                               int
+	SubscriberMessages, SubscriberBytes, EventBytes        int
+}
+
+// Defaults 给出 A 阶段默认限额与超时。
+func Defaults() Config {
+	return Config{Binary: "pi", MaxWorkers: 4, StartTimeout: 20 * time.Second, OperationTimeout: 30 * time.Second, IdleTimeout: 2 * time.Minute, StopGrace: time.Second, MaxFrame: 8 << 20, SubscriberMessages: 32, SubscriberBytes: 1 << 20, EventBytes: 256 << 10}
+}
+
+// State 是 Pi 会话状态的对外投影，不包含私有凭据。
+type State struct {
+	SessionID           string `json:"sessionId"`
+	SessionName         string `json:"sessionName,omitempty"`
+	ThinkingLevel       string `json:"thinkingLevel,omitempty"`
+	IsStreaming         bool   `json:"isStreaming"`
+	IsCompacting        bool   `json:"isCompacting"`
+	PendingMessageCount int    `json:"pendingMessageCount"`
+	MessageCount        int    `json:"messageCount"`
+	Model               *struct {
+		ID       string `json:"id"`
+		Name     string `json:"name"`
+		Provider string `json:"provider"`
+	} `json:"model,omitempty"`
+}
+
+// Info 描述受管工作进程，供列表与订阅确认返回。
+type Info struct {
+	SessionID string `json:"sessionId"`
+	Epoch     string `json:"epoch"`
+	PID       int    `json:"pid"`
+	Cwd       string `json:"cwd"`
+	Status    string `json:"status"`
+	Busy      bool   `json:"busy"`
+	Seq       uint64 `json:"seq"`
+}
+
+// Manager 维护受管工作进程表，并负责空闲回收与整体关闭。
+type Manager struct {
+	cfg     Config
+	ctx     context.Context
+	cancel  context.CancelFunc
+	mu      sync.Mutex
+	startMu sync.Mutex
+	workers map[string]*Worker
+	closed  bool
+}
+
+// New 创建管理器并启动空闲回收协程。
+func New(cfg Config) *Manager {
+	ctx, cancel := context.WithCancel(context.Background())
+	m := &Manager{cfg: cfg, ctx: ctx, cancel: cancel, workers: map[string]*Worker{}}
+	go m.reap()
+	return m
+}
+
+// Context 是管理器级上下文；命令等待基于它，浏览器断开不会取消它。
+func (m *Manager) Context() context.Context { return m.ctx }
+
+// Timeout 返回单次命令的默认等待上限。
+func (m *Manager) Timeout() time.Duration { return m.cfg.OperationTimeout }
+
+// Get 只查询已在运行的工作进程，不会隐式启动。
+func (m *Manager) Get(id string) (*Worker, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	w := m.workers[id]
+	if w == nil {
+		return nil, protocol.E("worker_not_running", "请先显式启动会话")
+	}
+	return w, nil
+}
+
+// List 返回当前受管工作进程状态。
+func (m *Manager) List() []Info {
+	m.mu.Lock()
+	ws := make([]*Worker, 0, len(m.workers))
+	for _, w := range m.workers {
+		ws = append(ws, w)
+	}
+	m.mu.Unlock()
+	out := []Info{}
+	for _, w := range ws {
+		out = append(out, w.Info())
+	}
+	return out
+}
+
+// Start 显式启动或恢复一个工作进程。
+// 列表与历史查询不会走到这里；只有客户端明确要求启动时才会拉起 Pi。
+func (m *Manager) Start(ctx context.Context, id, cwd string) (*Worker, error) {
+	// 串行化冷启动，但不长期持有进程表锁，也不阻塞取消命令。
+	m.startMu.Lock()
+	defer m.startMu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return nil, protocol.E("timeout", "启动在拉起进程前被取消")
+	}
+	m.mu.Lock()
+	if m.closed {
+		m.mu.Unlock()
+		return nil, protocol.E("worker_exited", "桥正在关闭")
+	}
+	if w := m.workers[id]; id != "" && w != nil {
+		m.mu.Unlock()
+		return w, nil
+	}
+	full := len(m.workers) >= m.cfg.MaxWorkers
+	m.mu.Unlock()
+	if full {
+		return nil, protocol.E("limit_exceeded", "活跃工作进程数量已达上限")
+	}
+	file := ""
+	if id != "" {
+		h, err := m.cfg.Store.Find(ctx, id)
+		if err != nil {
+			return nil, err
+		}
+		if cwd != "" && cwd != h.Cwd {
+			return nil, protocol.E("conflict", "恢复会话时 cwd 必须与会话记录一致")
+		}
+		cwd = h.Cwd
+		file = m.cfg.Store.Path(h)
+	}
+	real, err := m.cfg.Policy.Directory(cwd)
+	if err != nil {
+		return nil, err
+	}
+	w, err := launch(m.cfg, real, file)
+	if err != nil {
+		return nil, err
+	}
+	startctx, cancel := context.WithTimeout(m.ctx, m.cfg.StartTimeout)
+	defer cancel()
+	// 握手超时沿用调用方 ctx，但工作进程寿命独立于浏览器。
+	stop := context.AfterFunc(ctx, cancel)
+	defer stop()
+	state, err := w.State(startctx)
+	if err != nil {
+		_ = w.Stop(true)
+		return nil, err
+	}
+	if !sessions.ValidID(state.SessionID) || (id != "" && state.SessionID != id) {
+		_ = w.Stop(true)
+		return nil, protocol.E("conflict", "Pi 返回了不同的会话身份")
+	}
+	w.mu.Lock()
+	w.id = state.SessionID
+	w.status = "idle"
+	if w.active {
+		w.status = "running"
+	}
+	w.mu.Unlock()
+	m.mu.Lock()
+	if m.closed {
+		m.mu.Unlock()
+		_ = w.Stop(true)
+		return nil, protocol.E("worker_exited", "桥正在关闭")
+	}
+	if m.workers[state.SessionID] != nil {
+		m.mu.Unlock()
+		_ = w.Stop(true)
+		return nil, protocol.E("conflict", "该会话已有工作进程")
+	}
+	m.workers[state.SessionID] = w
+	m.mu.Unlock()
+	go func() {
+		<-w.done
+		m.mu.Lock()
+		if m.workers[state.SessionID] == w {
+			delete(m.workers, state.SessionID)
+		}
+		m.mu.Unlock()
+	}()
+	return w, nil
+}
+
+// reap 定期回收空闲工作进程，让内存随进程退出真正归还。
+func (m *Manager) reap() {
+	interval := min(time.Second, m.cfg.IdleTimeout/2)
+	if interval < 10*time.Millisecond {
+		interval = 10 * time.Millisecond
+	}
+	tick := time.NewTicker(interval)
+	defer tick.Stop()
+	for {
+		select {
+		case <-m.ctx.Done():
+			return
+		case <-tick.C:
+			m.mu.Lock()
+			ws := make([]*Worker, 0, len(m.workers))
+			for _, w := range m.workers {
+				ws = append(ws, w)
+			}
+			m.mu.Unlock()
+			for _, w := range ws {
+				w.mu.Lock()
+				idle := !w.busyLocked() && !w.closing && time.Since(w.lastActivity) >= m.cfg.IdleTimeout
+				w.mu.Unlock()
+				if idle {
+					go w.stop(false, true)
+				}
+			}
+		}
+	}
+}
+
+// Close 关闭桥时收敛所有受管进程，并等待它们退出。
+func (m *Manager) Close() {
+	m.mu.Lock()
+	m.closed = true
+	m.mu.Unlock()
+	m.cancel()
+	m.startMu.Lock()
+	defer m.startMu.Unlock()
+	m.mu.Lock()
+	ws := make([]*Worker, 0, len(m.workers))
+	for _, w := range m.workers {
+		ws = append(ws, w)
+	}
+	m.mu.Unlock()
+	var wg sync.WaitGroup
+	for _, w := range ws {
+		wg.Add(1)
+		go func() { defer wg.Done(); _ = w.Stop(true) }()
+	}
+	wg.Wait()
+}
+
+// queuedEvent 是等待投递给某个订阅者的事件及其占用字节数。
+type queuedEvent struct {
+	message protocol.Message
+	bytes   int64
+}
+
+// Subscription 是一个连接对某个工作进程的订阅。
+type Subscription struct {
+	worker *Worker
+	ch     chan queuedEvent
+	bytes  atomic.Int64
+	once   sync.Once
+}
+
+// Next 取下一条事件；订阅被关闭时要求客户端重新同步，而不是静默续传。
+func (s *Subscription) Next(ctx context.Context) (protocol.Message, error) {
+	select {
+	case <-ctx.Done():
+		return protocol.Message{}, ctx.Err()
+	case item, ok := <-s.ch:
+		if !ok {
+			return protocol.Message{}, errors.New("订阅已关闭，需要重新同步")
+		}
+		s.bytes.Add(-item.bytes)
+		return item.message, nil
+	}
+}
+
+// Close 只解除该连接与工作进程的订阅关系，不会中断 Pi 任务。
+func (s *Subscription) Close() {
+	s.once.Do(func() {
+		w := s.worker
+		w.mu.Lock()
+		if _, ok := w.subs[s]; ok {
+			delete(w.subs, s)
+			close(s.ch)
+		}
+		w.mu.Unlock()
+	})
+}
+
+// Worker 是一个受管 Pi 进程及其连接、订阅与运行状态。
+type Worker struct {
+	cfg                                Config
+	mu                                 sync.Mutex
+	id, epoch, cwd, status             string
+	cmd                                *exec.Cmd
+	client                             *pi.Client
+	done                               chan struct{}
+	active, queued, uncertain, closing bool
+	pending                            int
+	seq                                uint64
+	lastActivity                       time.Time
+	subs                               map[*Subscription]struct{}
+}
+
+// busyLocked 判断是否存在进行中或结果未定的工作；调用时必须已持有锁。
+func (w *Worker) busyLocked() bool { return w.active || w.queued || w.uncertain || w.pending > 0 }
+
+// Info 返回工作进程快照。
+func (w *Worker) Info() Info { w.mu.Lock(); defer w.mu.Unlock(); return w.infoLocked() }
+func (w *Worker) infoLocked() Info {
+	return Info{w.id, w.epoch, w.cmd.Process.Pid, w.cwd, w.status, w.busyLocked(), w.seq}
+}
+
+// Subscribe 先注册有界队列，再返回当前 epoch 与序号，确保不丢订阅确认之后的事件。
+func (w *Worker) Subscribe() (*Subscription, Info, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.closing {
+		return nil, Info{}, protocol.E("worker_exited", "工作进程正在关闭")
+	}
+	if len(w.subs) >= 8 {
+		return nil, Info{}, protocol.E("limit_exceeded", "该工作进程的订阅数量已达上限")
+	}
+	s := &Subscription{worker: w, ch: make(chan queuedEvent, w.cfg.SubscriberMessages)}
+	w.subs[s] = struct{}{}
+	return s, w.infoLocked(), nil
+}
+
+// publishLocked 向所有订阅者投递事件；慢订阅者会被摘除并关闭，绝不阻塞 Pi 输出。
+func (w *Worker) publishLocked(event string, data any) {
+	w.seq++
+	message := protocol.Message{Version: 1, Kind: "event", SessionID: w.id, StreamID: "worker", Epoch: w.epoch, Seq: w.seq, Event: event, Data: data}
+	b, _ := json.Marshal(message)
+	n := int64(len(b))
+	for s := range w.subs {
+		if s.bytes.Add(n) > int64(w.cfg.SubscriberBytes) {
+			s.bytes.Add(-n)
+			delete(w.subs, s)
+			close(s.ch)
+			continue
+		}
+		select {
+		case s.ch <- queuedEvent{message, n}:
+		default:
+			s.bytes.Add(-n)
+			delete(w.subs, s)
+			close(s.ch)
+		}
+	}
+}
+
+// event 处理来自 Pi 的原始事件，更新运行状态并转发给订阅者。
+func (w *Worker) event(raw json.RawMessage) {
+	var ev struct {
+		Type     string   `json:"type"`
+		ID       string   `json:"id"`
+		Method   string   `json:"method"`
+		Steering []string `json:"steering"`
+		FollowUp []string `json:"followUp"`
+	}
+	if json.Unmarshal(raw, &ev) != nil {
+		return
+	}
+	w.mu.Lock()
+	switch ev.Type {
+	case "agent_start", "compaction_start", "auto_retry_start", "summarization_retry_scheduled":
+		w.active = true
+		w.status = "running"
+		w.lastActivity = time.Now()
+	case "agent_settled":
+		w.active = false
+		w.uncertain = false
+		w.status = "idle"
+		w.lastActivity = time.Now()
+	case "queue_update":
+		w.queued = len(ev.Steering)+len(ev.FollowUp) > 0
+	}
+	if len(raw) > w.cfg.EventBytes {
+		w.publishLocked("bridge.event_omitted", map[string]any{"type": ev.Type, "reason": "事件体积超过上限", "resyncRequired": true})
+	} else {
+		w.publishLocked("pi.event", raw)
+	}
+	w.mu.Unlock()
+	// A 阶段没有对话界面，显式取消，避免 Pi 永久等待交互。
+	if ev.Type == "extension_ui_request" {
+		switch ev.Method {
+		case "select", "confirm", "input", "editor":
+			w.client.Notify(map[string]any{"type": "extension_ui_response", "id": ev.ID, "cancelled": true})
+		}
+	}
+}
+
+// call 向 Pi 发送命令。mutation 标记有副作用的命令，结果不明时置为待确认。
+func (w *Worker) call(ctx context.Context, method string, fields map[string]any, mutation bool) (json.RawMessage, error) {
+	w.mu.Lock()
+	if w.closing {
+		w.mu.Unlock()
+		return nil, protocol.E("worker_exited", "工作进程正在关闭")
+	}
+	w.pending++
+	if mutation {
+		w.lastActivity = time.Now()
+	}
+	w.mu.Unlock()
+	defer func() { w.mu.Lock(); w.pending--; w.mu.Unlock() }()
+	data, err := w.client.Call(ctx, method, fields)
+	if err != nil {
+		var unknown *pi.UnknownOutcome
+		var re *pi.RPCError
+		switch {
+		case errors.As(err, &unknown):
+			if mutation {
+				w.mu.Lock()
+				w.uncertain = true
+				w.mu.Unlock()
+				return nil, protocol.E("outcome_unknown", "Pi 可能已接受该命令，请勿自动重试")
+			}
+			return nil, protocol.E("timeout", "暂时无法获取 Pi 状态")
+		case errors.As(err, &re):
+			return nil, protocol.E("pi_error", re.Message)
+		case errors.Is(err, pi.ErrLimit):
+			return nil, protocol.E("limit_exceeded", "Pi 在途命令过多")
+		default:
+			return nil, protocol.E("worker_exited", "Pi RPC 不可用")
+		}
+	}
+	return data, nil
+}
+
+// State 查询 Pi 状态，并在握手期间确认会话身份没有被改变。
+func (w *Worker) State(ctx context.Context) (State, error) {
+	w.mu.Lock()
+	seq := w.seq
+	w.mu.Unlock()
+	raw, err := w.call(ctx, "get_state", nil, false)
+	if err != nil {
+		return State{}, err
+	}
+	var state State
+	if json.Unmarshal(raw, &state) != nil || !sessions.ValidID(state.SessionID) {
+		return State{}, protocol.E("pi_error", "Pi 返回的状态无效")
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.id != "" && w.id != state.SessionID {
+		return State{}, protocol.E("conflict", "Pi 改变了会话身份，请停止该工作进程")
+	}
+	if seq == w.seq {
+		w.active = state.IsStreaming || state.IsCompacting
+		w.queued = state.PendingMessageCount > 0
+	}
+	return state, nil
+}
+
+// Prompt 发送提示词；返回只代表 Pi 已接受，不代表任务完成。
+func (w *Worker) Prompt(ctx context.Context, text, behavior string) error {
+	if text == "" {
+		return protocol.E("invalid_params", "提示词不能为空")
+	}
+	if behavior != "" && behavior != "steer" && behavior != "followUp" {
+		return protocol.E("invalid_params", "streamingBehavior 无效")
+	}
+	fields := map[string]any{"message": text}
+	if behavior != "" {
+		fields["streamingBehavior"] = behavior
+	}
+	_, err := w.call(ctx, "prompt", fields, true)
+	return err
+}
+
+// Abort 先清空队列再中止，否则 abort 之后队列里的消息会继续执行。
+func (w *Worker) Abort(ctx context.Context) (json.RawMessage, error) {
+	queue, err := w.call(ctx, "clear_queue", nil, true)
+	if err != nil {
+		return nil, err
+	}
+	_, err = w.call(ctx, "abort", nil, true)
+	if err == nil {
+		w.mu.Lock()
+		w.active = false
+		w.queued = false
+		w.uncertain = false
+		w.status = "idle"
+		w.lastActivity = time.Now()
+		w.mu.Unlock()
+	}
+	return queue, err
+}
+
+// Stop 主动停止工作进程；默认拒绝仍在忙的会话，force 必须显式。
+func (w *Worker) Stop(force bool) error { return w.stop(force, false) }
+
+// stop 执行分级停止：关闭 stdin、SIGTERM、SIGKILL，每段都有宽限期。
+func (w *Worker) stop(force, idleOnly bool) error {
+	w.mu.Lock()
+	if w.closing {
+		w.mu.Unlock()
+		<-w.done
+		return nil
+	}
+	if !force && w.busyLocked() {
+		w.mu.Unlock()
+		return protocol.E("busy", "工作进程仍在忙，必须显式使用 force")
+	}
+	if idleOnly && time.Since(w.lastActivity) < w.cfg.IdleTimeout {
+		w.mu.Unlock()
+		return nil
+	}
+	w.closing = true
+	w.status = "stopping"
+	w.publishLocked("bridge.worker_state", w.infoLocked())
+	w.mu.Unlock()
+	w.client.CloseInput()
+	select {
+	case <-w.done:
+		return nil
+	case <-time.After(w.cfg.StopGrace):
+	}
+	signalGroup(w.cmd, false)
+	select {
+	case <-w.done:
+		return nil
+	case <-time.After(w.cfg.StopGrace):
+	}
+	signalGroup(w.cmd, true)
+	w.client.Close()
+	select {
+	case <-w.done:
+		return nil
+	case <-time.After(w.cfg.StopGrace):
+		return protocol.E("timeout", "强杀后工作进程仍未退出")
+	}
+}
+
+// launch 按运维配置启动 Pi 子进程，并接管其 stdio。
+// 只接受本机配置参数，不把可执行文件路径或额外 CLI 参数暴露给网络请求。
+func launch(cfg Config, cwd, file string) (*Worker, error) {
+	epoch := make([]byte, 16)
+	if _, err := rand.Read(epoch); err != nil {
+		return nil, err
+	}
+	args := append([]string{}, cfg.PrefixArgs...)
+	args = append(args, "--mode", "rpc", "--offline", "--no-approve", "--session-dir", cfg.Store.Dir())
+	if file != "" {
+		args = append(args, "--session", file)
+	}
+	if !cfg.Extensions {
+		args = append(args, "--no-extensions", "--no-skills", "--no-prompt-templates", "--no-themes", "--no-context-files")
+	}
+	cmd := exec.Command(cfg.Binary, args...)
+	cmd.Dir = cwd
+	cmd.Env = append(append(os.Environ(), cfg.Env...), "PI_CODING_AGENT_DIR="+cfg.AgentDir, "PI_OFFLINE=1", "PI_TELEMETRY=0")
+	if err := prepareProcess(cmd); err != nil {
+		return nil, err
+	}
+	inR, inW, err := os.Pipe()
+	if err != nil {
+		return nil, err
+	}
+	outR, outW, err := os.Pipe()
+	if err != nil {
+		inR.Close()
+		inW.Close()
+		return nil, err
+	}
+	null, err := os.OpenFile(os.DevNull, os.O_WRONLY, 0)
+	if err != nil {
+		inR.Close()
+		inW.Close()
+		outR.Close()
+		outW.Close()
+		return nil, err
+	}
+	cmd.Stdin = inR
+	cmd.Stdout = outW
+	cmd.Stderr = null
+	if err = cmd.Start(); err != nil {
+		inR.Close()
+		inW.Close()
+		outR.Close()
+		outW.Close()
+		null.Close()
+		return nil, protocol.E("worker_exited", fmt.Sprintf("无法启动 Pi 可执行文件：%T", err))
+	}
+	inR.Close()
+	outW.Close()
+	null.Close()
+	w := &Worker{cfg: cfg, epoch: hex.EncodeToString(epoch), cwd: cwd, status: "starting", cmd: cmd, done: make(chan struct{}), lastActivity: time.Now(), subs: map[*Subscription]struct{}{}}
+	w.client = pi.New(inW, outR, cfg.MaxFrame, w.event)
+	w.client.Start()
+	processDone := make(chan error, 1)
+	go func() { processDone <- cmd.Wait() }()
+	go func() {
+		var exitErr error
+		select {
+		case exitErr = <-processDone:
+		case <-w.client.Done():
+			signalGroup(cmd, false)
+			select {
+			case exitErr = <-processDone:
+			case <-time.After(cfg.StopGrace):
+				signalGroup(cmd, true)
+				exitErr = <-processDone
+			}
+		}
+		// 主进程退出后，子孙进程可能仍持有管道；只回收它自己的进程组。
+		signalGroup(cmd, true)
+		select {
+		case <-w.client.Done():
+		case <-time.After(cfg.StopGrace):
+			w.client.Close()
+		}
+		w.mu.Lock()
+		w.active = false
+		w.queued = false
+		w.uncertain = false
+		w.closing = true
+		w.status = "stopped"
+		if exitErr != nil {
+			w.status = "failed"
+		}
+		w.publishLocked("bridge.worker_state", w.infoLocked())
+		for s := range w.subs {
+			delete(w.subs, s)
+			close(s.ch)
+		}
+		w.mu.Unlock()
+		close(w.done)
+	}()
+	return w, nil
+}
