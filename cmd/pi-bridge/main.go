@@ -15,8 +15,10 @@ import (
 	"syscall"
 	"time"
 
+	"pi-bridge-go/internal/observe"
 	run "pi-bridge-go/internal/runtime"
 	"pi-bridge-go/internal/sessions"
+	"pi-bridge-go/internal/storage"
 	"pi-bridge-go/internal/transport"
 	"pi-bridge-go/internal/workspace"
 )
@@ -91,6 +93,18 @@ func serve() error {
 	}
 	defer store.Close()
 
+	receipts, err := storage.NewReceipts(filepath.Join(absolute, "receipts"), storage.DefaultLimits())
+	if err != nil {
+		return err
+	}
+	defer receipts.Close()
+
+	methods := observe.NewMethods(
+		"worker.list", "session.start", "session.state", "session.prompt",
+		"session.abort", "session.stop", "session.subscribe", "session.unsubscribe",
+	)
+	metrics := observe.NewMetrics(methods)
+
 	cfg := run.Defaults()
 	cfg.Binary = *binary
 	cfg.AgentDir = *agentDir
@@ -99,6 +113,7 @@ func serve() error {
 	cfg.Extensions = *extensions
 	cfg.IdleTimeout = *idle
 	cfg.MaxWorkers = *maxWorkers
+	cfg.Metrics = metrics
 	manager := run.New(cfg)
 	defer manager.Close()
 
@@ -106,7 +121,7 @@ func serve() error {
 	if err != nil {
 		return err
 	}
-	handler := transport.New(manager, store, token, ln.Addr().String())
+	handler := transport.New(manager, store, receipts, metrics, token, ln.Addr().String())
 	server := &http.Server{Handler: handler, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, WriteTimeout: 15 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 16 << 10}
 
 	sigctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)

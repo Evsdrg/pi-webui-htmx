@@ -16,9 +16,11 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
+	"pi-bridge-go/internal/observe"
 	"pi-bridge-go/internal/protocol"
 	run "pi-bridge-go/internal/runtime"
 	"pi-bridge-go/internal/sessions"
+	"pi-bridge-go/internal/storage"
 )
 
 // cookieName 是浏览器换取会话 Cookie 后使用的凭据名。
@@ -28,14 +30,26 @@ const cookieName = "pi_bridge_session"
 type Server struct {
 	manager     *run.Manager
 	store       *sessions.Store
+	receipts    *storage.Receipts
+	metrics     *observe.Metrics
 	token, host string
 	connections chan struct{}
 	operations  chan struct{}
 }
 
 // New 构造入口；token 至少 32 字符，host 为监听地址上的主机名。
-func New(manager *run.Manager, store *sessions.Store, token, host string) *Server {
-	return &Server{manager: manager, store: store, token: token, host: host, connections: make(chan struct{}, 8), operations: make(chan struct{}, 16)}
+// New 构造入口；token 至少 32 字符，host 为监听地址上的主机名。
+func New(manager *run.Manager, store *sessions.Store, receipts *storage.Receipts, metrics *observe.Metrics, token, host string) *Server {
+	return &Server{
+		manager:     manager,
+		store:       store,
+		receipts:    receipts,
+		metrics:     metrics,
+		token:       token,
+		host:        host,
+		connections: make(chan struct{}, 8),
+		operations:  make(chan struct{}, 16),
+	}
 }
 
 // bearer 校验 Bearer token；只接受请求头，不接收 URL 查询参数。
@@ -108,6 +122,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !s.authorized(r) {
+		s.metrics.AuthFailure()
 		writeError(w, 401, protocol.E("unauthorized", "需要身份验证"))
 		return
 	}
@@ -117,7 +132,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	switch r.URL.Path {
 	case "/api/v1/capabilities":
-		writeJSON(w, 200, map[string]any{"version": 1, "phase": "A", "piBaseline": "0.85.1", "methods": []string{"session.start", "session.state", "session.prompt", "session.abort", "session.stop", "session.subscribe", "session.unsubscribe", "worker.list"}, "replay": false, "persistentDedup": false, "extensionDialogs": "cancelled", "relay": false, "history": "v3-disk-branch", "limits": map[string]int{"connections": 8, "inFlightOperations": 16, "wsRequestBytes": 1 << 20, "wsResponseBytes": 512 << 10, "connectionQueueBytes": 1 << 20, "requestIdsPerConnection": 1024}})
+		writeJSON(w, 200, map[string]any{"version": 1, "phase": "A", "piBaseline": "0.85.1", "methods": []string{"session.start", "session.state", "session.prompt", "session.abort", "session.stop", "session.subscribe", "session.unsubscribe", "worker.list"}, "replay": true, "persistentDedup": false, "extensionDialogs": "cancelled", "relay": false, "history": "v3-disk-branch", "limits": map[string]int{"connections": 8, "inFlightOperations": 16, "wsRequestBytes": 1 << 20, "wsResponseBytes": 512 << 10, "connectionQueueBytes": 1 << 20, "requestIdsPerConnection": 1024, "replayItems": 256, "replayBytes": 1 << 20}})
 	case "/api/v1/sessions":
 		limit, err := number(r, "limit", 50)
 		if err != nil {
@@ -131,6 +146,8 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		list, err := s.store.List(r.Context(), offset, limit)
 		respond(w, list, err)
+	case "/api/v1/metrics":
+		writeJSON(w, 200, map[string]any{"metrics": s.metrics.Snapshot(), "sessions": s.store.Index().Stats(), "receipts": s.receipts.Stats(), "workers": s.manager.List()})
 	case "/api/v1/ws":
 		s.serveWS(w, r)
 	default:
@@ -143,6 +160,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				writeError(w, 400, err)
 				return
 			}
+			s.metrics.HistoryRequest()
 			page, err := s.store.History(r.Context(), id, r.URL.Query().Get("leafId"), r.URL.Query().Get("before"), limit)
 			respond(w, page, err)
 			return
@@ -218,6 +236,30 @@ type connection struct {
 
 // send 把消息放入发送队列；单条或队列总量超限即判定该连接异常并关闭，
 // 绝不因为某个慢客户端拖住 Pi 输出或让队列无界增长。
+// sendRaw 发送已序列化的帧，用于补发。
+func (c *connection) sendRaw(b []byte) bool {
+	if len(b) == 0 || len(b) > 512<<10 {
+		c.cancel()
+		return false
+	}
+	if c.queued.Add(int64(len(b))) > 1<<20 {
+		c.queued.Add(-int64(len(b)))
+		c.cancel()
+		return false
+	}
+	select {
+	case c.out <- b:
+		return true
+	case <-c.ctx.Done():
+		c.queued.Add(-int64(len(b)))
+		return false
+	default:
+		c.queued.Add(-int64(len(b)))
+		c.cancel()
+		return false
+	}
+}
+
 func (c *connection) send(m protocol.Message) bool {
 	b, err := json.Marshal(m)
 	if err != nil || len(b) > 512<<10 {
@@ -307,6 +349,16 @@ func (s *Server) serveWS(w http.ResponseWriter, r *http.Request) {
 			c.send(protocol.Reply("", nil, protocol.E("invalid_request", "命令必须带长度受限的 requestId")))
 			continue
 		}
+		// 跨重启去重：同一 requestId 已执行过就直接回放结论，绝不重新执行。
+		if rec, ok := s.receipts.Lookup(req.RequestID); ok && rec.Outcome != storage.OutcomeRejected {
+			c.send(protocol.Reply(req.RequestID, map[string]any{
+				"duplicate": true,
+				"outcome":   string(rec.Outcome),
+				"method":    rec.Method,
+				"at":        rec.At.UTC().Format(time.RFC3339Nano),
+			}, nil))
+			continue
+		}
 		if seen[req.RequestID] {
 			c.send(protocol.Reply(req.RequestID, nil, protocol.E("conflict", "requestId 已被使用，有副作用的命令请勿重试")))
 			continue
@@ -346,10 +398,59 @@ func (s *Server) serveWS(w http.ResponseWriter, r *http.Request) {
 			// 命令寿命有意长于浏览器连接：断开只停止等待，不取消已接受的任务。
 			opctx, stop := context.WithTimeout(s.manager.Context(), s.manager.Timeout())
 			defer stop()
+			s.metrics.CommandStarted(req.Method)
 			data, err := c.dispatch(opctx, req)
+			if err != nil {
+				s.metrics.CommandFailed(req.Method, errorCodeOf(err))
+			}
 			c.send(protocol.Reply(req.RequestID, data, err))
+			s.recordReceipt(req, err)
 		}(req, sem, urgent)
 	}
+}
+
+// errorCodeOf 取协议错误码，未知错误归一化。
+func errorCodeOf(err error) string {
+	var pe *protocol.Error
+	if errors.As(err, &pe) {
+		return pe.Code
+	}
+	return "internal"
+}
+
+// notExecutedCodes 是「命令从未送达 Pi」的错误码集合。
+// 这些失败允许客户端用同一 requestId 重试，因此回执记为 rejected，
+// 不会在后续连接里被当成重复执行而挡住合法重试。
+var notExecutedCodes = map[string]struct{}{
+	"invalid_request": {}, "invalid_params": {}, "unsupported_method": {},
+	"unsupported_version": {}, "busy": {}, "limit_exceeded": {},
+	"resync_required": {}, "unauthorized": {}, "host_denied": {},
+	"origin_denied": {},
+}
+
+// recordReceipt 落一条命令回执，供跨重启去重与对账。
+// 写失败不影响命令结果。
+func (s *Server) recordReceipt(req protocol.Request, err error) {
+	if s.receipts == nil {
+		return
+	}
+	outcome := storage.OutcomeOK
+	if err != nil {
+		code := errorCodeOf(err)
+		if _, skip := notExecutedCodes[code]; skip {
+			outcome = storage.OutcomeRejected
+		} else if code == "outcome_unknown" {
+			outcome = storage.OutcomeUnknown
+		} else {
+			outcome = storage.OutcomeError
+		}
+	}
+	_ = s.receipts.Record(storage.Receipt{
+		RequestID: req.RequestID,
+		SessionID: req.SessionID,
+		Method:    req.Method,
+		Outcome:   outcome,
+	})
 }
 
 // dispatch 执行一条命令。ctx 只约束等待，不把浏览器断开当作取消任务。
@@ -430,8 +531,25 @@ func (c *connection) dispatch(ctx context.Context, r protocol.Request) (any, err
 		if err := protocol.Decode(r.Params, &p); err != nil {
 			return nil, err
 		}
+		// 带游标订阅时先补发，补不上就明确要求重新同步，不伪造无损恢复。
 		if p.Epoch != "" || p.AfterSeq != nil {
-			return nil, protocol.E("resync_required", "A 阶段不支持事件补发，请重新读取持久历史后再订阅")
+			after := uint64(0)
+			if p.AfterSeq != nil {
+				after = *p.AfterSeq
+			}
+			items, ok := w.Replay(p.Epoch, after)
+			if !ok {
+				c.server.metrics.ReplayMiss()
+				return nil, protocol.E("resync_required", "事件游标已失效，请重新读取持久历史后再订阅")
+			}
+			if len(items) > 0 {
+				c.server.metrics.ReplayHit()
+			}
+			for _, item := range items {
+				if !c.sendRaw(item.Payload) {
+					return nil, protocol.E("conflict", "连接已关闭")
+				}
+			}
 		}
 		c.mu.Lock()
 		defer c.mu.Unlock()

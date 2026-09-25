@@ -14,6 +14,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"pi-bridge-go/internal/events"
 	"pi-bridge-go/internal/pi"
 	"pi-bridge-go/internal/protocol"
 	"pi-bridge-go/internal/sessions"
@@ -29,14 +30,17 @@ type Config struct {
 	Policy                                                 *workspace.Policy
 	Extensions                                             bool
 	MaxWorkers                                             int
+	Metrics                                                MetricsSink
 	StartTimeout, OperationTimeout, IdleTimeout, StopGrace time.Duration
 	MaxFrame                                               int
 	SubscriberMessages, SubscriberBytes, EventBytes        int
+	ReplayItems, ReplayBytes                               int
 }
 
 // Defaults 给出 A 阶段默认限额与超时。
 func Defaults() Config {
-	return Config{Binary: "pi", MaxWorkers: 4, StartTimeout: 20 * time.Second, OperationTimeout: 30 * time.Second, IdleTimeout: 2 * time.Minute, StopGrace: time.Second, MaxFrame: 8 << 20, SubscriberMessages: 32, SubscriberBytes: 1 << 20, EventBytes: 256 << 10}
+	return Config{Binary: "pi", MaxWorkers: 4, StartTimeout: 20 * time.Second, OperationTimeout: 30 * time.Second, IdleTimeout: 2 * time.Minute, StopGrace: time.Second, MaxFrame: 8 << 20, SubscriberMessages: 32, SubscriberBytes: 1 << 20, EventBytes: 256 << 10,
+		ReplayItems: 256, ReplayBytes: 1 << 20}
 }
 
 // State 是 Pi 会话状态的对外投影，不包含私有凭据。
@@ -75,12 +79,21 @@ type Manager struct {
 	startMu sync.Mutex
 	workers map[string]*Worker
 	closed  bool
+	metrics MetricsSink
+}
+
+// MetricsSink 是运行时刻度接入点；为 nil 时全部退化为空操作。
+type MetricsSink interface {
+	WorkerStarted()
+	WorkerReaped()
+	WorkerExited()
+	EventDropped()
 }
 
 // New 创建管理器并启动空闲回收协程。
 func New(cfg Config) *Manager {
 	ctx, cancel := context.WithCancel(context.Background())
-	m := &Manager{cfg: cfg, ctx: ctx, cancel: cancel, workers: map[string]*Worker{}}
+	m := &Manager{cfg: cfg, ctx: ctx, cancel: cancel, workers: map[string]*Worker{}, metrics: cfg.Metrics}
 	go m.reap()
 	return m
 }
@@ -193,6 +206,9 @@ func (m *Manager) Start(ctx context.Context, id, cwd string) (*Worker, error) {
 		return nil, protocol.E("conflict", "该会话已有工作进程")
 	}
 	m.workers[state.SessionID] = w
+	if m.metrics != nil {
+		m.metrics.WorkerStarted()
+	}
 	m.mu.Unlock()
 	go func() {
 		<-w.done
@@ -229,6 +245,9 @@ func (m *Manager) reap() {
 				idle := !w.busyLocked() && !w.closing && time.Since(w.lastActivity) >= m.cfg.IdleTimeout
 				w.mu.Unlock()
 				if idle {
+					if m.metrics != nil {
+						m.metrics.WorkerReaped()
+					}
 					go w.stop(false, true)
 				}
 			}
@@ -312,6 +331,7 @@ type Worker struct {
 	seq                                uint64
 	lastActivity                       time.Time
 	subs                               map[*Subscription]struct{}
+	replay                             *events.Ring
 }
 
 // busyLocked 判断是否存在进行中或结果未定的工作；调用时必须已持有锁。
@@ -321,6 +341,20 @@ func (w *Worker) busyLocked() bool { return w.active || w.queued || w.uncertain 
 func (w *Worker) Info() Info { w.mu.Lock(); defer w.mu.Unlock(); return w.infoLocked() }
 func (w *Worker) infoLocked() Info {
 	return Info{w.id, w.epoch, w.cmd.Process.Pid, w.cwd, w.status, w.busyLocked(), w.seq}
+}
+
+// Replay 返回指定 epoch 内 afterSeq 之后的事件。
+// epoch 不匹配或所需序号已被淘汰时返回 ok=false，调用方必须要求重新同步。
+func (w *Worker) Replay(epoch string, afterSeq uint64) ([]events.Item, bool) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.closing {
+		return nil, false
+	}
+	if epoch != w.epoch {
+		return nil, false
+	}
+	return w.replay.Replay(afterSeq)
 }
 
 // Subscribe 先注册有界队列，再返回当前 epoch 与序号，确保不丢订阅确认之后的事件。
@@ -342,13 +376,22 @@ func (w *Worker) Subscribe() (*Subscription, Info, error) {
 func (w *Worker) publishLocked(event string, data any) {
 	w.seq++
 	message := protocol.Message{Version: 1, Kind: "event", SessionID: w.id, StreamID: "worker", Epoch: w.epoch, Seq: w.seq, Event: event, Data: data}
-	b, _ := json.Marshal(message)
+	b, err := json.Marshal(message)
+	if err != nil {
+		// 单条事件序列化失败不应影响会话本身，记为控制事件并继续。
+		w.seq--
+		return
+	}
 	n := int64(len(b))
+	w.replay.Push(w.seq, b)
 	for s := range w.subs {
 		if s.bytes.Add(n) > int64(w.cfg.SubscriberBytes) {
 			s.bytes.Add(-n)
 			delete(w.subs, s)
 			close(s.ch)
+			if w.cfg.Metrics != nil {
+				w.cfg.Metrics.EventDropped()
+			}
 			continue
 		}
 		select {
@@ -357,6 +400,9 @@ func (w *Worker) publishLocked(event string, data any) {
 			s.bytes.Add(-n)
 			delete(w.subs, s)
 			close(s.ch)
+			if w.cfg.Metrics != nil {
+				w.cfg.Metrics.EventDropped()
+			}
 		}
 	}
 }
@@ -597,7 +643,17 @@ func launch(cfg Config, cwd, file string) (*Worker, error) {
 	inR.Close()
 	outW.Close()
 	null.Close()
-	w := &Worker{cfg: cfg, epoch: hex.EncodeToString(epoch), cwd: cwd, status: "starting", cmd: cmd, done: make(chan struct{}), lastActivity: time.Now(), subs: map[*Subscription]struct{}{}}
+	w := &Worker{
+		cfg:          cfg,
+		epoch:        hex.EncodeToString(epoch),
+		cwd:          cwd,
+		status:       "starting",
+		cmd:          cmd,
+		done:         make(chan struct{}),
+		lastActivity: time.Now(),
+		subs:         map[*Subscription]struct{}{},
+		replay:       events.NewRing(cfg.ReplayItems, int64(cfg.ReplayBytes)),
+	}
 	w.client = pi.New(inW, outR, cfg.MaxFrame, w.event)
 	w.client.Start()
 	processDone := make(chan error, 1)
@@ -637,6 +693,9 @@ func launch(cfg Config, cwd, file string) (*Worker, error) {
 			close(s.ch)
 		}
 		w.mu.Unlock()
+		if cfg.Metrics != nil {
+			cfg.Metrics.WorkerExited()
+		}
 		close(w.done)
 	}()
 	return w, nil

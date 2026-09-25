@@ -8,11 +8,8 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
-	"io/fs"
 	"os"
 	"path/filepath"
-	"sort"
-	"strings"
 	"time"
 
 	"pi-bridge-go/internal/jsonl"
@@ -30,11 +27,13 @@ type Limits struct {
 func DefaultLimits() Limits { return Limits{64 << 20, 8 << 20, 2 << 20, 100000, 10000} }
 
 // Store 通过 os.Root 访问受管会话目录，防止路径穿越与符号链接逃逸。
+// 列表与查找走内存索引，历史读取按需解析单个文件。
 type Store struct {
 	root   *os.Root
 	dir    string
 	policy *workspace.Policy
 	limits Limits
+	index  *Index
 }
 
 // Header 是会话首条记录的解析结果，path 不对外暴露。
@@ -60,8 +59,9 @@ type Page struct {
 
 // Listing 是会话目录分页结果。
 type Listing struct {
-	Items   []Header `json:"items"`
-	HasMore bool     `json:"hasMore"`
+	Items     []Header `json:"items"`
+	HasMore   bool     `json:"hasMore"`
+	Truncated bool     `json:"truncated"`
 }
 
 func New(dir string, p *workspace.Policy, limits Limits) (*Store, error) {
@@ -73,9 +73,18 @@ func New(dir string, p *workspace.Policy, limits Limits) (*Store, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Store{r, abs, p, limits}, nil
+	return &Store{
+		root:   r,
+		dir:    abs,
+		policy: p,
+		limits: limits,
+		index:  NewIndex(r, abs, p, limits, 2*time.Second),
+	}, nil
 }
-func (s *Store) Close() error { return s.root.Close() }
+
+// Index 返回内部索引，供诊断端点使用。
+func (s *Store) Index() *Index { return s.index }
+func (s *Store) Close() error  { return s.root.Close() }
 
 // Dir 返回受管会话目录的绝对路径，供启动 Pi 时指定 --session-dir。
 func (s *Store) Dir() string { return s.dir }
@@ -93,109 +102,36 @@ func ValidID(id string) bool {
 	return true
 }
 
-// catalog 遍历受管目录并解析会话头。只读、不改写，因此不会触发 Pi 的格式迁移。
-// 不属于当前工作区的会话直接跳过，不向外暴露其存在。
-func (s *Store) catalog(ctx context.Context) ([]Header, error) {
-	out := []Header{}
-	seen := map[string]bool{}
-	walked := 0
-	err := fs.WalkDir(s.root.FS(), ".", func(path string, d fs.DirEntry, walkerr error) error {
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		if walkerr != nil {
-			return walkerr
-		}
-		walked++
-		if walked > s.limits.Files*4 {
-			return protocol.E("limit_exceeded", "会话目录遍历次数超过上限")
-		}
-		if d.IsDir() || d.Type()&os.ModeSymlink != 0 || !strings.HasSuffix(path, ".jsonl") {
-			return nil
-		}
-		if len(out) >= s.limits.Files {
-			return protocol.E("limit_exceeded", "会话文件数量超过上限")
-		}
-		f, err := s.root.Open(path)
-		if err != nil {
-			return err
-		}
-		defer f.Close()
-		st, err := f.Stat()
-		if err != nil {
-			return err
-		}
-		if !st.Mode().IsRegular() {
-			return nil
-		}
-		b, _, err := jsonl.Read(bufio.NewReader(f), 64<<10)
-		if errors.Is(err, io.EOF) || errors.Is(err, jsonl.ErrIncomplete) {
-			return nil
-		}
-		if err != nil {
-			return protocol.E("invalid_history", "无法读取会话头部")
-		}
-		var h Header
-		if json.Unmarshal(b, &h) != nil || h.Type != "session" || !ValidID(h.ID) {
-			return protocol.E("invalid_history", "会话头部无效")
-		}
-		// 不对外暴露不属于当前授权工作区的会话。
-		if _, err = s.policy.Directory(h.Cwd); err != nil {
-			return nil
-		}
-		if h.Version != 3 {
-			return protocol.E("unsupported_version", "仅支持 Pi v3 会话格式")
-		}
-		if seen[h.ID] {
-			return protocol.E("conflict", "配置目录内出现重复会话 ID")
-		}
-		seen[h.ID] = true
-		h.Modified = st.ModTime()
-		h.path = path
-		out = append(out, h)
-		return nil
-	})
-	if err != nil {
-		return nil, err
-	}
-	sort.Slice(out, func(i, j int) bool {
-		if out[i].Modified.Equal(out[j].Modified) {
-			return out[i].ID < out[j].ID
-		}
-		return out[i].Modified.After(out[j].Modified)
-	})
-	return out, nil
-}
-
 // List 按最近修改时间倒序返回会话目录。
+// 命中索引缓存时不做任何磁盘遍历。
 func (s *Store) List(ctx context.Context, offset, limit int) (Listing, error) {
 	if offset < 0 || limit < 1 || limit > 200 {
 		return Listing{}, protocol.E("invalid_params", "分页参数无效")
 	}
-	all, err := s.catalog(ctx)
+	items, hasMore, truncated, err := s.index.Page(ctx, offset, limit)
 	if err != nil {
 		return Listing{}, err
 	}
-	start := min(offset, len(all))
-	end := min(start+limit, len(all))
-	return Listing{all[start:end], end < len(all)}, nil
+	out := make([]Header, 0, len(items))
+	for _, e := range items {
+		out = append(out, Header{
+			Type: "session", Version: 3, ID: e.id, Cwd: e.cwd,
+			Modified: e.modified, path: e.path,
+		})
+	}
+	return Listing{Items: out, HasMore: hasMore, Truncated: truncated}, nil
 }
 
-// Find 按会话 ID 查找会话头。
+// Find 按会话 ID 查找会话元数据。
 func (s *Store) Find(ctx context.Context, id string) (Header, error) {
 	if !ValidID(id) {
 		return Header{}, protocol.E("invalid_params", "会话 ID 无效")
 	}
-	all, err := s.catalog(ctx)
+	e, err := s.index.Lookup(ctx, id)
 	if err != nil {
 		return Header{}, err
 	}
-	for _, h := range all {
-		if h.ID == id {
-			return h, nil
-		}
-	}
-	return Header{}, protocol.E("not_found", "会话不存在")
+	return Header{Type: "session", Version: 3, ID: e.id, Cwd: e.cwd, Modified: e.modified, path: e.path}, nil
 }
 
 // Path 返回会话文件的绝对路径，仅用于启动受管 Pi 进程。
