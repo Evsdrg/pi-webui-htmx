@@ -16,6 +16,7 @@ import (
 	run "pi-bridge-go/internal/runtime"
 	"pi-bridge-go/internal/sessions"
 	"pi-bridge-go/internal/storage"
+	"pi-bridge-go/internal/terminal"
 	"pi-bridge-go/internal/workspace"
 )
 
@@ -66,7 +67,16 @@ func newTestServer(t *testing.T) (*Server, *run.Manager, string) {
 	cfg.Metrics = metrics
 	m := run.New(cfg)
 	t.Cleanup(m.Close)
-	return New(m, store, receipts, metrics, testToken, "127.0.0.1:30142"), m, cwd
+
+	files, err := workspace.NewFiles(policy, workspace.DefaultLimits())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(files.Close)
+	terminals := terminal.NewManager(terminal.Defaults())
+	t.Cleanup(terminals.Close)
+
+	return New(m, store, terminals, files, receipts, metrics, testToken, "127.0.0.1:30142"), m, cwd
 }
 
 func writeSessionFile(t *testing.T, dir, id, cwd string) {
@@ -295,7 +305,7 @@ func TestWS未实现方法被明确拒绝(t *testing.T) {
 	}
 	send(map[string]any{"version": 1, "kind": "command", "requestId": "s1", "method": "session.start", "params": map[string]any{"cwd": cwd}})
 	_ = read()
-	for _, method := range []string{"session.compact", "session.fork", "session.switch", "model.set"} {
+	for _, method := range []string{"session.export_html", "session.import", "session.share", "session.reload", "worker.stop_all", "files.write", "files.delete"} {
 		send(map[string]any{"version": 1, "kind": "command", "requestId": "m-" + method, "sessionId": "fake-session", "method": method})
 		m := read()
 		if m["ok"] != false {

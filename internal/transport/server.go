@@ -21,6 +21,8 @@ import (
 	run "pi-bridge-go/internal/runtime"
 	"pi-bridge-go/internal/sessions"
 	"pi-bridge-go/internal/storage"
+	"pi-bridge-go/internal/terminal"
+	"pi-bridge-go/internal/workspace"
 )
 
 // cookieName 是浏览器换取会话 Cookie 后使用的凭据名。
@@ -30,6 +32,8 @@ const cookieName = "pi_bridge_session"
 type Server struct {
 	manager     *run.Manager
 	store       *sessions.Store
+	terminals   *terminal.Manager
+	files       *workspace.Files
 	receipts    *storage.Receipts
 	metrics     *observe.Metrics
 	token, host string
@@ -39,10 +43,12 @@ type Server struct {
 
 // New 构造入口；token 至少 32 字符，host 为监听地址上的主机名。
 // New 构造入口；token 至少 32 字符，host 为监听地址上的主机名。
-func New(manager *run.Manager, store *sessions.Store, receipts *storage.Receipts, metrics *observe.Metrics, token, host string) *Server {
+func New(manager *run.Manager, store *sessions.Store, terminals *terminal.Manager, files *workspace.Files, receipts *storage.Receipts, metrics *observe.Metrics, token, host string) *Server {
 	return &Server{
 		manager:     manager,
 		store:       store,
+		terminals:   terminals,
+		files:       files,
 		receipts:    receipts,
 		metrics:     metrics,
 		token:       token,
@@ -132,7 +138,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	switch r.URL.Path {
 	case "/api/v1/capabilities":
-		writeJSON(w, 200, map[string]any{"version": 1, "phase": "A", "piBaseline": "0.85.1", "methods": []string{"session.start", "session.state", "session.prompt", "session.abort", "session.stop", "session.subscribe", "session.unsubscribe", "worker.list"}, "replay": true, "persistentDedup": false, "extensionDialogs": "cancelled", "relay": false, "history": "v3-disk-branch", "limits": map[string]int{"connections": 8, "inFlightOperations": 16, "wsRequestBytes": 1 << 20, "wsResponseBytes": 512 << 10, "connectionQueueBytes": 1 << 20, "requestIdsPerConnection": 1024, "replayItems": 256, "replayBytes": 1 << 20}})
+		writeJSON(w, 200, map[string]any{"version": 1, "phase": "A", "piBaseline": "0.85.1", "methods": []string{"session.start", "session.state", "session.prompt", "session.abort", "session.stop", "session.subscribe", "session.unsubscribe", "worker.list"}, "replay": true, "persistentDedup": false, "extensionDialogs": "interactive", "relay": false, "history": "v3-disk-branch", "limits": map[string]int{"connections": 8, "inFlightOperations": 16, "wsRequestBytes": 1 << 20, "wsResponseBytes": 512 << 10, "connectionQueueBytes": 1 << 20, "requestIdsPerConnection": 1024, "replayItems": 256, "replayBytes": 1 << 20}})
 	case "/api/v1/sessions":
 		limit, err := number(r, "limit", 50)
 		if err != nil {
@@ -231,7 +237,31 @@ type connection struct {
 	queued         atomic.Int64
 	mu             sync.Mutex
 	subs           map[string]*run.Subscription
+	termSubs       map[string]*terminal.Subscription
 	normal, urgent chan struct{}
+}
+
+// trackTerminal 登记终端订阅，连接关闭时统一解除。
+func (c *connection) trackTerminal(id string, sub *terminal.Subscription) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.termSubs == nil {
+		c.termSubs = map[string]*terminal.Subscription{}
+	}
+	if old, ok := c.termSubs[id]; ok {
+		old.Close()
+	}
+	c.termSubs[id] = sub
+}
+
+// dropTerminal 解除并移除终端订阅。
+func (c *connection) dropTerminal(id string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if sub, ok := c.termSubs[id]; ok {
+		sub.Close()
+		delete(c.termSubs, id)
+	}
 }
 
 // send 把消息放入发送队列；单条或队列总量超限即判定该连接异常并关闭，
@@ -320,12 +350,16 @@ func (s *Server) serveWS(w http.ResponseWriter, r *http.Request) {
 	ws.SetReadLimit(1 << 20)
 	ctx, cancel := context.WithCancel(s.manager.Context())
 	defer cancel()
-	c := &connection{server: s, ws: ws, ctx: ctx, cancel: cancel, out: make(chan []byte, 32), subs: map[string]*run.Subscription{}, normal: make(chan struct{}, 8), urgent: make(chan struct{}, 2)}
+	c := &connection{server: s, ws: ws, ctx: ctx, cancel: cancel, out: make(chan []byte, 32), subs: map[string]*run.Subscription{}, termSubs: map[string]*terminal.Subscription{}, normal: make(chan struct{}, 8), urgent: make(chan struct{}, 2)}
 	go c.writer()
 	defer func() {
 		c.mu.Lock()
 		for id, sub := range c.subs {
 			delete(c.subs, id)
+			sub.Close()
+		}
+		for id, sub := range c.termSubs {
+			delete(c.termSubs, id)
 			sub.Close()
 		}
 		c.mu.Unlock()
@@ -485,6 +519,420 @@ func (c *connection) dispatch(ctx context.Context, r protocol.Request) (any, err
 			return nil, err
 		}
 		return w.State(ctx)
+	case "session.models":
+		if err := empty(); err != nil {
+			return nil, err
+		}
+		return w.Models(ctx)
+	case "session.set_model":
+		var p struct {
+			Provider string `json:"provider"`
+			ModelID  string `json:"modelId"`
+		}
+		if err := protocol.Decode(r.Params, &p); err != nil {
+			return nil, err
+		}
+		return w.SetModel(ctx, p.Provider, p.ModelID)
+	case "session.cycle_model":
+		if err := empty(); err != nil {
+			return nil, err
+		}
+		return w.CycleModel(ctx)
+	case "session.thinking_levels":
+		if err := empty(); err != nil {
+			return nil, err
+		}
+		return w.ThinkingLevels(ctx)
+	case "session.set_thinking":
+		var p struct {
+			Level string `json:"level"`
+		}
+		if err := protocol.Decode(r.Params, &p); err != nil {
+			return nil, err
+		}
+		if err := w.SetThinkingLevel(ctx, p.Level); err != nil {
+			return nil, err
+		}
+		return map[string]any{"level": p.Level}, nil
+	case "session.cycle_thinking":
+		if err := empty(); err != nil {
+			return nil, err
+		}
+		level, err := w.CycleThinkingLevel(ctx)
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{"level": level}, nil
+	case "session.set_queue_mode":
+		var p struct {
+			Kind string `json:"kind"`
+			Mode string `json:"mode"`
+		}
+		if err := protocol.Decode(r.Params, &p); err != nil {
+			return nil, err
+		}
+		if err := w.SetQueueMode(ctx, p.Kind, p.Mode); err != nil {
+			return nil, err
+		}
+		return map[string]any{"kind": p.Kind, "mode": p.Mode}, nil
+	case "session.steer":
+		var p struct {
+			Text string `json:"text"`
+		}
+		if err := protocol.Decode(r.Params, &p); err != nil {
+			return nil, err
+		}
+		if err := w.Steer(ctx, p.Text); err != nil {
+			return nil, err
+		}
+		return map[string]bool{"queued": true}, nil
+	case "session.follow_up":
+		var p struct {
+			Text string `json:"text"`
+		}
+		if err := protocol.Decode(r.Params, &p); err != nil {
+			return nil, err
+		}
+		if err := w.FollowUp(ctx, p.Text); err != nil {
+			return nil, err
+		}
+		return map[string]bool{"queued": true}, nil
+	case "session.compact":
+		var p struct {
+			Instructions string `json:"customInstructions"`
+		}
+		if err := protocol.Decode(r.Params, &p); err != nil {
+			return nil, err
+		}
+		return w.Compact(ctx, p.Instructions)
+	case "session.set_auto_compaction":
+		var p struct {
+			Enabled bool `json:"enabled"`
+		}
+		if err := protocol.Decode(r.Params, &p); err != nil {
+			return nil, err
+		}
+		if err := w.SetAutoCompaction(ctx, p.Enabled); err != nil {
+			return nil, err
+		}
+		return map[string]bool{"enabled": p.Enabled}, nil
+	case "session.set_auto_retry":
+		var p struct {
+			Enabled bool `json:"enabled"`
+		}
+		if err := protocol.Decode(r.Params, &p); err != nil {
+			return nil, err
+		}
+		if err := w.SetAutoRetry(ctx, p.Enabled); err != nil {
+			return nil, err
+		}
+		return map[string]bool{"enabled": p.Enabled}, nil
+	case "session.abort_retry":
+		if err := empty(); err != nil {
+			return nil, err
+		}
+		if err := w.AbortRetry(ctx); err != nil {
+			return nil, err
+		}
+		return map[string]bool{"aborted": true}, nil
+	case "session.stats":
+		if err := empty(); err != nil {
+			return nil, err
+		}
+		return w.Stats(ctx)
+	case "session.set_name":
+		var p struct {
+			Name string `json:"name"`
+		}
+		if err := protocol.Decode(r.Params, &p); err != nil {
+			return nil, err
+		}
+		if err := w.SetName(ctx, p.Name); err != nil {
+			return nil, err
+		}
+		return map[string]bool{"renamed": true}, nil
+	case "session.last_assistant":
+		if err := empty(); err != nil {
+			return nil, err
+		}
+		text, err := w.LastAssistantText(ctx)
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{"text": text}, nil
+	case "session.commands":
+		if err := empty(); err != nil {
+			return nil, err
+		}
+		return w.Commands(ctx)
+	case "session.tree":
+		if err := empty(); err != nil {
+			return nil, err
+		}
+		return w.Tree(ctx)
+	case "session.fork_messages":
+		if err := empty(); err != nil {
+			return nil, err
+		}
+		return w.ForkMessages(ctx)
+	case "session.entries":
+		var p struct {
+			Since string `json:"since"`
+			Limit int    `json:"limit"`
+		}
+		if err := protocol.Decode(r.Params, &p); err != nil {
+			return nil, err
+		}
+		if p.Limit == 0 {
+			p.Limit = 100
+		}
+		return w.Entries(ctx, p.Since, p.Limit)
+	case "session.new":
+		var p struct {
+			ParentSession string `json:"parentSession"`
+		}
+		if err := protocol.Decode(r.Params, &p); err != nil {
+			return nil, err
+		}
+		id, err := w.NewSession(ctx, p.ParentSession)
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{"sessionId": id}, nil
+	case "session.switch":
+		var p struct {
+			SessionPath string `json:"sessionPath"`
+		}
+		if err := protocol.Decode(r.Params, &p); err != nil {
+			return nil, err
+		}
+		id, err := w.SwitchSession(ctx, p.SessionPath)
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{"sessionId": id}, nil
+	case "session.fork":
+		var p struct {
+			EntryID string `json:"entryId"`
+		}
+		if err := protocol.Decode(r.Params, &p); err != nil {
+			return nil, err
+		}
+		return w.Fork(ctx, p.EntryID)
+	case "session.clone":
+		if err := empty(); err != nil {
+			return nil, err
+		}
+		id, err := w.Clone(ctx)
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{"sessionId": id}, nil
+	case "session.bash":
+		var p struct {
+			Command            string `json:"command"`
+			ExcludeFromContext bool   `json:"excludeFromContext"`
+		}
+		if err := protocol.Decode(r.Params, &p); err != nil {
+			return nil, err
+		}
+		result, err := w.Bash(ctx, r.RequestID, p.Command, p.ExcludeFromContext)
+		if err != nil {
+			return nil, err
+		}
+		return result, nil
+	case "session.abort_bash":
+		if err := empty(); err != nil {
+			return nil, err
+		}
+		if err := w.AbortBash(ctx); err != nil {
+			return nil, err
+		}
+		return map[string]bool{"aborted": true}, nil
+	case "session.ui_response":
+		var p struct {
+			ID        string  `json:"id"`
+			Value     *string `json:"value"`
+			Confirmed *bool   `json:"confirmed"`
+			Cancelled bool    `json:"cancelled"`
+		}
+		if err := protocol.Decode(r.Params, &p); err != nil {
+			return nil, err
+		}
+		if err := w.UIResponse(ctx, p.ID, p.Value, p.Confirmed, p.Cancelled); err != nil {
+			return nil, err
+		}
+		return map[string]bool{"answered": true}, nil
+	case "session.pending_dialogs":
+		if err := empty(); err != nil {
+			return nil, err
+		}
+		return map[string]any{"ids": w.PendingDialogs()}, nil
+	case "terminal.open":
+		var p struct {
+			Cwd   string `json:"cwd"`
+			Shell string `json:"shell"`
+			Cols  uint16 `json:"cols"`
+			Rows  uint16 `json:"rows"`
+		}
+		if err := protocol.Decode(r.Params, &p); err != nil {
+			return nil, err
+		}
+		if p.Cwd == "" {
+			return nil, protocol.E("invalid_params", "cwd 不能为空")
+		}
+		term, err := c.server.terminals.Open(p.Cwd, p.Shell, p.Cols, p.Rows)
+		if err != nil {
+			return nil, err
+		}
+		info := term.Info()
+		sub, err := term.Subscribe(64, 1<<20)
+		if err != nil {
+			_ = term.Close(true)
+			return nil, protocol.E("worker_exited", "终端已关闭")
+		}
+		c.trackTerminal(term.ID(), sub)
+		go func() {
+			defer sub.Close()
+			for {
+				chunk, err := sub.Next(c.ctx)
+				if err != nil {
+					if c.ctx.Err() == nil {
+						c.send(protocol.Message{Version: 1, Kind: "control", Event: "bridge.terminal_closed", Data: map[string]any{"terminalId": term.ID()}})
+					}
+					return
+				}
+				if !c.send(protocol.Message{Version: 1, Kind: "event", Event: "terminal.output", Data: map[string]any{"terminalId": term.ID(), "data": string(chunk)}}) {
+					return
+				}
+			}
+		}()
+		return map[string]any{"terminalId": info.ID, "cwd": info.Cwd, "pid": info.PID, "cols": info.Cols, "rows": info.Rows}, nil
+	case "terminal.input":
+		var p struct {
+			TerminalID string `json:"terminalId"`
+			Data       string `json:"data"`
+		}
+		if err := protocol.Decode(r.Params, &p); err != nil {
+			return nil, err
+		}
+		term, err := c.server.terminals.Get(p.TerminalID)
+		if err != nil {
+			return nil, err
+		}
+		if err := term.Write([]byte(p.Data)); err != nil {
+			return nil, err
+		}
+		return map[string]bool{"written": true}, nil
+	case "terminal.resize":
+		var p struct {
+			TerminalID string `json:"terminalId"`
+			Cols       uint16 `json:"cols"`
+			Rows       uint16 `json:"rows"`
+		}
+		if err := protocol.Decode(r.Params, &p); err != nil {
+			return nil, err
+		}
+		term, err := c.server.terminals.Get(p.TerminalID)
+		if err != nil {
+			return nil, err
+		}
+		if err := term.Resize(p.Cols, p.Rows); err != nil {
+			return nil, err
+		}
+		return map[string]bool{"resized": true}, nil
+	case "terminal.close":
+		var p struct {
+			TerminalID string `json:"terminalId"`
+		}
+		if err := protocol.Decode(r.Params, &p); err != nil {
+			return nil, err
+		}
+		c.dropTerminal(p.TerminalID)
+		if err := c.server.terminals.CloseTerminal(p.TerminalID); err != nil {
+			return nil, err
+		}
+		return map[string]bool{"closed": true}, nil
+	case "terminal.list":
+		if err := empty(); err != nil {
+			return nil, err
+		}
+		return map[string]any{"terminals": c.server.terminals.List()}, nil
+	case "files.list":
+		var p struct {
+			Path string `json:"path"`
+		}
+		if err := protocol.Decode(r.Params, &p); err != nil {
+			return nil, err
+		}
+		entries, truncated, err := c.server.files.List(p.Path)
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{"entries": entries, "truncated": truncated}, nil
+	case "files.stat":
+		var p struct {
+			Path string `json:"path"`
+		}
+		if err := protocol.Decode(r.Params, &p); err != nil {
+			return nil, err
+		}
+		return c.server.files.Stat(p.Path)
+	case "files.read":
+		var p struct {
+			Path string `json:"path"`
+		}
+		if err := protocol.Decode(r.Params, &p); err != nil {
+			return nil, err
+		}
+		text, truncated, size, err := c.server.files.Read(p.Path)
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{"text": text, "truncated": truncated, "size": size}, nil
+	case "files.roots":
+		if err := empty(); err != nil {
+			return nil, err
+		}
+		return map[string]any{"roots": c.server.files.Roots()}, nil
+	case "git.status":
+		var p struct {
+			Path string `json:"path"`
+		}
+		if err := protocol.Decode(r.Params, &p); err != nil {
+			return nil, err
+		}
+		return c.server.files.GitStatus(ctx, p.Path)
+	case "git.diff":
+		var p struct {
+			Path     string `json:"path"`
+			Staged   bool   `json:"staged"`
+			MaxBytes int    `json:"maxBytes"`
+		}
+		if err := protocol.Decode(r.Params, &p); err != nil {
+			return nil, err
+		}
+		if p.MaxBytes == 0 {
+			p.MaxBytes = 512 << 10
+		}
+		text, truncated, err := c.server.files.GitDiff(ctx, p.Path, p.Staged, p.MaxBytes)
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{"diff": text, "truncated": truncated}, nil
+	case "session.bash_output":
+		var p struct {
+			Path     string `json:"path"`
+			MaxBytes int    `json:"maxBytes"`
+		}
+		if err := protocol.Decode(r.Params, &p); err != nil {
+			return nil, err
+		}
+		text, truncated, err := w.ReadBashOutput(ctx, p.Path, p.MaxBytes)
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{"text": text, "truncated": truncated}, nil
 	case "session.prompt":
 		var p struct {
 			Text     string `json:"text"`

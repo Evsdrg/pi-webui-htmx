@@ -35,12 +35,13 @@ type Config struct {
 	MaxFrame                                               int
 	SubscriberMessages, SubscriberBytes, EventBytes        int
 	ReplayItems, ReplayBytes                               int
+	MaxDialogs                                             int
 }
 
 // Defaults 给出 A 阶段默认限额与超时。
 func Defaults() Config {
 	return Config{Binary: "pi", MaxWorkers: 4, StartTimeout: 20 * time.Second, OperationTimeout: 30 * time.Second, IdleTimeout: 2 * time.Minute, StopGrace: time.Second, MaxFrame: 8 << 20, SubscriberMessages: 32, SubscriberBytes: 1 << 20, EventBytes: 256 << 10,
-		ReplayItems: 256, ReplayBytes: 1 << 20}
+		ReplayItems: 256, ReplayBytes: 1 << 20, MaxDialogs: 16}
 }
 
 // State 是 Pi 会话状态的对外投影，不包含私有凭据。
@@ -189,6 +190,7 @@ func (m *Manager) Start(ctx context.Context, id, cwd string) (*Worker, error) {
 	}
 	w.mu.Lock()
 	w.id = state.SessionID
+	w.owner = m
 	w.status = "idle"
 	if w.active {
 		w.status = "running"
@@ -327,15 +329,26 @@ type Worker struct {
 	client                             *pi.Client
 	done                               chan struct{}
 	active, queued, uncertain, closing bool
+	waitingInput                       bool
+	pendingDialogs                     map[string]struct{}
 	pending                            int
 	seq                                uint64
 	lastActivity                       time.Time
 	subs                               map[*Subscription]struct{}
 	replay                             *events.Ring
+	owner                              *Manager
+	store                              *sessions.Store
+}
+
+// newReplayRing 按配置构造补发环。
+func newReplayRing(cfg Config) *events.Ring {
+	return events.NewRing(cfg.ReplayItems, int64(cfg.ReplayBytes))
 }
 
 // busyLocked 判断是否存在进行中或结果未定的工作；调用时必须已持有锁。
-func (w *Worker) busyLocked() bool { return w.active || w.queued || w.uncertain || w.pending > 0 }
+func (w *Worker) busyLocked() bool {
+	return w.active || w.queued || w.uncertain || w.waitingInput || w.pending > 0
+}
 
 // Info 返回工作进程快照。
 func (w *Worker) Info() Info { w.mu.Lock(); defer w.mu.Unlock(); return w.infoLocked() }
@@ -428,24 +441,35 @@ func (w *Worker) event(raw json.RawMessage) {
 	case "agent_settled":
 		w.active = false
 		w.uncertain = false
-		w.status = "idle"
+		if !w.waitingInput {
+			w.status = "idle"
+		}
 		w.lastActivity = time.Now()
 	case "queue_update":
 		w.queued = len(ev.Steering)+len(ev.FollowUp) > 0
 	}
 	if len(raw) > w.cfg.EventBytes {
 		w.publishLocked("bridge.event_omitted", map[string]any{"type": ev.Type, "reason": "事件体积超过上限", "resyncRequired": true})
-	} else {
-		w.publishLocked("pi.event", raw)
+		w.mu.Unlock()
+		return
 	}
-	w.mu.Unlock()
-	// A 阶段没有对话界面，显式取消，避免 Pi 永久等待交互。
+	// 扩展对话需要人工输入，登记为等待中；worker 不得因此被判定为空闲回收。
 	if ev.Type == "extension_ui_request" {
-		switch ev.Method {
-		case "select", "confirm", "input", "editor":
-			w.client.Notify(map[string]any{"type": "extension_ui_response", "id": ev.ID, "cancelled": true})
+		if _, tracked := w.pendingDialogs[ev.ID]; !tracked {
+			if len(w.pendingDialogs) >= w.cfg.MaxDialogs {
+				w.publishLocked("pi.event", raw)
+				w.mu.Unlock()
+				// 超出上限时明确取消，避免 Pi 永久挂起。
+				w.client.Notify(map[string]any{"type": "extension_ui_response", "id": ev.ID, "cancelled": true})
+				return
+			}
+			w.pendingDialogs[ev.ID] = struct{}{}
+			w.waitingInput = true
+			w.status = "waiting_input"
 		}
 	}
+	w.publishLocked("pi.event", raw)
+	w.mu.Unlock()
 }
 
 // call 向 Pi 发送命令。mutation 标记有副作用的命令，结果不明时置为待确认。
@@ -485,8 +509,25 @@ func (w *Worker) call(ctx context.Context, method string, fields map[string]any,
 	return data, nil
 }
 
-// State 查询 Pi 状态，并在握手期间确认会话身份没有被改变。
+// State 查询 Pi 状态，并确认会话身份没有被意外改变。
+// 只有这条路径会做身份校验；身份变更类命令必须用 stateAfterRebind。
 func (w *Worker) State(ctx context.Context) (State, error) {
+	state, err := w.stateAfterRebind(ctx)
+	if err != nil {
+		return State{}, err
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.id != "" && w.id != state.SessionID {
+		return State{}, protocol.E("conflict", "Pi 改变了会话身份，请停止该工作进程")
+	}
+	return state, nil
+}
+
+// stateAfterRebind 读取状态但不校验身份。
+// fork/clone/switch/new 之后 Pi 的会话 ID 本来就会变，
+// 那些命令靠它拿到新身份，再交给 Manager.Rebind 原子入表。
+func (w *Worker) stateAfterRebind(ctx context.Context) (State, error) {
 	w.mu.Lock()
 	seq := w.seq
 	w.mu.Unlock()
@@ -500,9 +541,6 @@ func (w *Worker) State(ctx context.Context) (State, error) {
 	}
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	if w.id != "" && w.id != state.SessionID {
-		return State{}, protocol.E("conflict", "Pi 改变了会话身份，请停止该工作进程")
-	}
 	if seq == w.seq {
 		w.active = state.IsStreaming || state.IsCompacting
 		w.queued = state.PendingMessageCount > 0
@@ -644,16 +682,19 @@ func launch(cfg Config, cwd, file string) (*Worker, error) {
 	outW.Close()
 	null.Close()
 	w := &Worker{
-		cfg:          cfg,
-		epoch:        hex.EncodeToString(epoch),
-		cwd:          cwd,
-		status:       "starting",
-		cmd:          cmd,
-		done:         make(chan struct{}),
-		lastActivity: time.Now(),
-		subs:         map[*Subscription]struct{}{},
-		replay:       events.NewRing(cfg.ReplayItems, int64(cfg.ReplayBytes)),
+		cfg:            cfg,
+		epoch:          hex.EncodeToString(epoch),
+		cwd:            cwd,
+		status:         "starting",
+		cmd:            cmd,
+		done:           make(chan struct{}),
+		lastActivity:   time.Now(),
+		subs:           map[*Subscription]struct{}{},
+		pendingDialogs: map[string]struct{}{},
+		replay:         events.NewRing(cfg.ReplayItems, int64(cfg.ReplayBytes)),
+		store:          cfg.Store,
 	}
+	w.owner = nil // 由 Manager.Start 在入表前赋值
 	w.client = pi.New(inW, outR, cfg.MaxFrame, w.event)
 	w.client.Start()
 	processDone := make(chan error, 1)
@@ -682,6 +723,7 @@ func launch(cfg Config, cwd, file string) (*Worker, error) {
 		w.active = false
 		w.queued = false
 		w.uncertain = false
+		w.waitingInput = false
 		w.closing = true
 		w.status = "stopped"
 		if exitErr != nil {
@@ -700,3 +742,6 @@ func launch(cfg Config, cwd, file string) (*Worker, error) {
 	}()
 	return w, nil
 }
+
+// nowUTC 返回当前 UTC 时间，集中一处便于测试替换。
+func nowUTC() time.Time { return time.Now().UTC() }

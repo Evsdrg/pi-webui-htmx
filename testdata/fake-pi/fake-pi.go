@@ -83,6 +83,55 @@ func main() {
 			emit(frame{Type: "extension_ui_request", ID: "dialog-1", Method: "confirm", Title: "确认？"})
 			// 不等回执，验证桥不会让 Pi 永久挂起。
 			emit(frame{Type: "response", ID: cmd.ID, Success: true})
+		case "new_session", "switch_session", "fork", "clone":
+			// 模拟 Pi 切换会话身份：返回新的 sessionId。
+			next := "forked-" + sessionID()
+			_ = os.Setenv("FAKE_PI_SESSION_ID", next)
+			emit(frame{Type: "response", ID: cmd.ID, Success: true, Data: map[string]any{
+				"cancelled": false, "sessionId": next, "text": "分叉出的消息",
+			}})
+		case "set_model":
+			emit(frame{Type: "response", ID: cmd.ID, Success: true, Data: map[string]any{
+				"id": "new-model", "name": "新模型", "provider": cmd.Message,
+			}})
+		case "get_available_models":
+			emit(frame{Type: "response", ID: cmd.ID, Success: true, Data: map[string]any{"models": []map[string]any{
+				{"id": "m1", "name": "模型一", "provider": "p1", "api": "anthropic-messages", "reasoning": true, "input": []string{"text"}, "contextWindow": 200000, "maxTokens": 8192},
+			}}})
+		case "get_available_thinking_levels":
+			emit(frame{Type: "response", ID: cmd.ID, Success: true, Data: map[string]any{"levels": []string{"off", "low", "high"}}})
+		case "set_thinking_level", "set_steering_mode", "set_follow_up_mode", "set_auto_compaction", "set_auto_retry", "abort_retry", "set_session_name":
+			emit(frame{Type: "response", ID: cmd.ID, Success: true})
+		case "compact":
+			emit(frame{Type: "response", ID: cmd.ID, Success: true, Data: map[string]any{
+				"summary": "压缩摘要", "firstKeptEntryId": "a", "tokensBefore": 100, "estimatedTokensAfter": 20,
+			}})
+		case "get_session_stats":
+			emit(frame{Type: "response", ID: cmd.ID, Success: true, Data: map[string]any{
+				"sessionId": sessionID(), "userMessages": 1, "assistantMessages": 1, "totalMessages": 2, "cost": 0.1,
+			}})
+		case "get_commands":
+			emit(frame{Type: "response", ID: cmd.ID, Success: true, Data: map[string]any{"commands": []map[string]any{
+				{"name": "demo", "description": "演示", "source": "extension"},
+			}}})
+		case "get_tree":
+			emit(frame{Type: "response", ID: cmd.ID, Success: true, Data: map[string]any{"tree": []any{}, "leafId": "a"}})
+		case "get_entries":
+			emit(frame{Type: "response", ID: cmd.ID, Success: true, Data: map[string]any{"entries": []any{}, "leafId": "a"}})
+		case "get_fork_messages":
+			emit(frame{Type: "response", ID: cmd.ID, Success: true, Data: map[string]any{"messages": []map[string]any{
+				{"entryId": "a", "text": "第一条"},
+			}}})
+		case "get_last_assistant_text":
+			emit(frame{Type: "response", ID: cmd.ID, Success: true, Data: map[string]any{"text": "最后的回复"}})
+		case "cycle_model", "cycle_thinking_level":
+			emit(frame{Type: "response", ID: cmd.ID, Success: true, Data: nil})
+		case "bash":
+			emit(frame{Type: "response", ID: cmd.ID, Success: true, Data: map[string]any{
+				"output": "假输出", "exitCode": 0, "cancelled": false, "truncated": false,
+			}})
+		case "abort_bash":
+			emit(frame{Type: "response", ID: cmd.ID, Success: true})
 		case "crash":
 			os.Exit(3)
 		default:

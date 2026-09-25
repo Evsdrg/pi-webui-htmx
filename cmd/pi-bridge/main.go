@@ -19,6 +19,7 @@ import (
 	run "pi-bridge-go/internal/runtime"
 	"pi-bridge-go/internal/sessions"
 	"pi-bridge-go/internal/storage"
+	"pi-bridge-go/internal/terminal"
 	"pi-bridge-go/internal/transport"
 	"pi-bridge-go/internal/workspace"
 )
@@ -43,6 +44,8 @@ func serve() error {
 	extensions := flag.Bool("extensions", false, "加载 Pi 已配置资源；项目信任仍保持拒绝")
 	idle := flag.Duration("idle-timeout", 2*time.Minute, "空闲工作进程的回收时间")
 	maxWorkers := flag.Int("max-workers", 4, "活跃工作进程上限")
+	maxTerminals := flag.Int("max-terminals", 4, "并发终端上限")
+	terminalIdle := flag.Duration("terminal-idle", 10*time.Minute, "空闲终端的回收时间")
 	flag.Parse()
 
 	if *root == "" {
@@ -100,8 +103,16 @@ func serve() error {
 	defer receipts.Close()
 
 	methods := observe.NewMethods(
-		"worker.list", "session.start", "session.state", "session.prompt",
-		"session.abort", "session.stop", "session.subscribe", "session.unsubscribe",
+		"worker.list", "session.start", "session.state", "session.prompt", "session.abort",
+		"session.stop", "session.subscribe", "session.unsubscribe",
+		"session.models", "session.set_model", "session.cycle_model",
+		"session.thinking_levels", "session.set_thinking", "session.cycle_thinking",
+		"session.set_queue_mode", "session.steer", "session.follow_up",
+		"session.compact", "session.set_auto_compaction", "session.set_auto_retry", "session.abort_retry",
+		"session.stats", "session.set_name", "session.last_assistant", "session.commands",
+		"session.tree", "session.fork_messages", "session.entries",
+		"session.new", "session.switch", "session.fork", "session.clone",
+		"session.bash", "session.abort_bash", "session.bash_output",
 	)
 	metrics := observe.NewMetrics(methods)
 
@@ -114,6 +125,18 @@ func serve() error {
 	cfg.IdleTimeout = *idle
 	cfg.MaxWorkers = *maxWorkers
 	cfg.Metrics = metrics
+	files, err := workspace.NewFiles(policy, workspace.DefaultLimits())
+	if err != nil {
+		return err
+	}
+	defer files.Close()
+
+	termCfg := terminal.Defaults()
+	termCfg.MaxTerminals = *maxTerminals
+	termCfg.IdleTimeout = *terminalIdle
+	terminals := terminal.NewManager(termCfg)
+	defer terminals.Close()
+
 	manager := run.New(cfg)
 	defer manager.Close()
 
@@ -121,7 +144,7 @@ func serve() error {
 	if err != nil {
 		return err
 	}
-	handler := transport.New(manager, store, receipts, metrics, token, ln.Addr().String())
+	handler := transport.New(manager, store, terminals, files, receipts, metrics, token, ln.Addr().String())
 	server := &http.Server{Handler: handler, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, WriteTimeout: 15 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 16 << 10}
 
 	sigctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
