@@ -30,15 +30,16 @@ const cookieName = "pi_bridge_session"
 
 // Server 是 HTTP 与 WebSocket 入口，只做接入、鉴权与限额。
 type Server struct {
-	manager     *run.Manager
-	store       *sessions.Store
-	terminals   *terminal.Manager
-	files       *workspace.Files
-	receipts    *storage.Receipts
-	metrics     *observe.Metrics
-	token, host string
-	connections chan struct{}
-	operations  chan struct{}
+	manager      *run.Manager
+	store        *sessions.Store
+	terminals    *terminal.Manager
+	files        *workspace.Files
+	receipts     *storage.Receipts
+	metrics      *observe.Metrics
+	token, host  string
+	connections  chan struct{}
+	operations   chan struct{}
+	tunnelBridge *TunnelBridge
 }
 
 // New 构造入口；token 至少 32 字符，host 为监听地址上的主机名。
@@ -57,6 +58,9 @@ func New(manager *run.Manager, store *sessions.Store, terminals *terminal.Manage
 		operations:  make(chan struct{}, 16),
 	}
 }
+
+// SetTunnelBridge 注入隧道接入层，使云端帧能复用同一套命令分发。
+func (s *Server) SetTunnelBridge(b *TunnelBridge) { s.tunnelBridge = b }
 
 // bearer 校验 Bearer token；只接受请求头，不接收 URL 查询参数。
 func (s *Server) bearer(r *http.Request) bool {
@@ -153,7 +157,11 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		list, err := s.store.List(r.Context(), offset, limit)
 		respond(w, list, err)
 	case "/api/v1/metrics":
-		writeJSON(w, 200, map[string]any{"metrics": s.metrics.Snapshot(), "sessions": s.store.Index().Stats(), "receipts": s.receipts.Stats(), "workers": s.manager.List()})
+		out := map[string]any{"metrics": s.metrics.Snapshot(), "sessions": s.store.Index().Stats(), "receipts": s.receipts.Stats(), "workers": s.manager.List(), "terminals": s.terminals.List()}
+		if s.tunnelBridge != nil {
+			out["tunnel"] = s.tunnelBridge.Stats()
+		}
+		writeJSON(w, 200, out)
 	case "/api/v1/ws":
 		s.serveWS(w, r)
 	default:
@@ -487,15 +495,25 @@ func (s *Server) recordReceipt(req protocol.Request, err error) {
 	})
 }
 
-// dispatch 执行一条命令。ctx 只约束等待，不把浏览器断开当作取消任务。
-func (c *connection) dispatch(ctx context.Context, r protocol.Request) (any, error) {
+// connSink 是连接相关的少量能力：生命周期上下文、发送帧、登记终端订阅。
+// WebSocket 连接与隧道虚拟连接各自实现它，从而共用同一份命令分发。
+type connSink interface {
+	connContext() context.Context
+	send(m protocol.Message) bool
+	trackTerminal(id string, sub *terminal.Subscription)
+	dropTerminal(id string)
+}
+
+// dispatchCommon 执行除订阅以外的命令。
+// WebSocket 连接与隧道虚拟连接共用这一份实现，避免两处逻辑漂移。
+func (s *Server) dispatchCommon(ctx context.Context, r protocol.Request, sink connSink) (any, error) {
 	empty := func() error { return protocol.Decode(r.Params, &struct{}{}) }
 	switch r.Method {
 	case "worker.list":
 		if err := empty(); err != nil {
 			return nil, err
 		}
-		return c.server.manager.List(), nil
+		return s.manager.List(), nil
 	case "session.start":
 		var p struct {
 			Cwd string `json:"cwd"`
@@ -503,13 +521,13 @@ func (c *connection) dispatch(ctx context.Context, r protocol.Request) (any, err
 		if err := protocol.Decode(r.Params, &p); err != nil {
 			return nil, err
 		}
-		w, err := c.server.manager.Start(ctx, r.SessionID, p.Cwd)
+		w, err := s.manager.Start(ctx, r.SessionID, p.Cwd)
 		if err != nil {
 			return nil, err
 		}
 		return w.Info(), nil
 	}
-	w, err := c.server.manager.Get(r.SessionID)
+	w, err := s.manager.Get(r.SessionID)
 	if err != nil {
 		return nil, err
 	}
@@ -781,7 +799,7 @@ func (c *connection) dispatch(ctx context.Context, r protocol.Request) (any, err
 		if p.Cwd == "" {
 			return nil, protocol.E("invalid_params", "cwd 不能为空")
 		}
-		term, err := c.server.terminals.Open(p.Cwd, p.Shell, p.Cols, p.Rows)
+		term, err := s.terminals.Open(p.Cwd, p.Shell, p.Cols, p.Rows)
 		if err != nil {
 			return nil, err
 		}
@@ -791,18 +809,19 @@ func (c *connection) dispatch(ctx context.Context, r protocol.Request) (any, err
 			_ = term.Close(true)
 			return nil, protocol.E("worker_exited", "终端已关闭")
 		}
-		c.trackTerminal(term.ID(), sub)
+		sink.trackTerminal(term.ID(), sub)
+		connCtx := sink.connContext()
 		go func() {
 			defer sub.Close()
 			for {
-				chunk, err := sub.Next(c.ctx)
+				chunk, err := sub.Next(connCtx)
 				if err != nil {
-					if c.ctx.Err() == nil {
-						c.send(protocol.Message{Version: 1, Kind: "control", Event: "bridge.terminal_closed", Data: map[string]any{"terminalId": term.ID()}})
+					if connCtx.Err() == nil {
+						sink.send(protocol.Message{Version: 1, Kind: "control", Event: "bridge.terminal_closed", Data: map[string]any{"terminalId": term.ID()}})
 					}
 					return
 				}
-				if !c.send(protocol.Message{Version: 1, Kind: "event", Event: "terminal.output", Data: map[string]any{"terminalId": term.ID(), "data": string(chunk)}}) {
+				if !sink.send(protocol.Message{Version: 1, Kind: "event", Event: "terminal.output", Data: map[string]any{"terminalId": term.ID(), "data": string(chunk)}}) {
 					return
 				}
 			}
@@ -816,7 +835,7 @@ func (c *connection) dispatch(ctx context.Context, r protocol.Request) (any, err
 		if err := protocol.Decode(r.Params, &p); err != nil {
 			return nil, err
 		}
-		term, err := c.server.terminals.Get(p.TerminalID)
+		term, err := s.terminals.Get(p.TerminalID)
 		if err != nil {
 			return nil, err
 		}
@@ -833,7 +852,7 @@ func (c *connection) dispatch(ctx context.Context, r protocol.Request) (any, err
 		if err := protocol.Decode(r.Params, &p); err != nil {
 			return nil, err
 		}
-		term, err := c.server.terminals.Get(p.TerminalID)
+		term, err := s.terminals.Get(p.TerminalID)
 		if err != nil {
 			return nil, err
 		}
@@ -848,8 +867,8 @@ func (c *connection) dispatch(ctx context.Context, r protocol.Request) (any, err
 		if err := protocol.Decode(r.Params, &p); err != nil {
 			return nil, err
 		}
-		c.dropTerminal(p.TerminalID)
-		if err := c.server.terminals.CloseTerminal(p.TerminalID); err != nil {
+		sink.dropTerminal(p.TerminalID)
+		if err := s.terminals.CloseTerminal(p.TerminalID); err != nil {
 			return nil, err
 		}
 		return map[string]bool{"closed": true}, nil
@@ -857,7 +876,7 @@ func (c *connection) dispatch(ctx context.Context, r protocol.Request) (any, err
 		if err := empty(); err != nil {
 			return nil, err
 		}
-		return map[string]any{"terminals": c.server.terminals.List()}, nil
+		return map[string]any{"terminals": s.terminals.List()}, nil
 	case "files.list":
 		var p struct {
 			Path string `json:"path"`
@@ -865,7 +884,7 @@ func (c *connection) dispatch(ctx context.Context, r protocol.Request) (any, err
 		if err := protocol.Decode(r.Params, &p); err != nil {
 			return nil, err
 		}
-		entries, truncated, err := c.server.files.List(p.Path)
+		entries, truncated, err := s.files.List(p.Path)
 		if err != nil {
 			return nil, err
 		}
@@ -877,7 +896,7 @@ func (c *connection) dispatch(ctx context.Context, r protocol.Request) (any, err
 		if err := protocol.Decode(r.Params, &p); err != nil {
 			return nil, err
 		}
-		return c.server.files.Stat(p.Path)
+		return s.files.Stat(p.Path)
 	case "files.read":
 		var p struct {
 			Path string `json:"path"`
@@ -885,7 +904,7 @@ func (c *connection) dispatch(ctx context.Context, r protocol.Request) (any, err
 		if err := protocol.Decode(r.Params, &p); err != nil {
 			return nil, err
 		}
-		text, truncated, size, err := c.server.files.Read(p.Path)
+		text, truncated, size, err := s.files.Read(p.Path)
 		if err != nil {
 			return nil, err
 		}
@@ -894,7 +913,7 @@ func (c *connection) dispatch(ctx context.Context, r protocol.Request) (any, err
 		if err := empty(); err != nil {
 			return nil, err
 		}
-		return map[string]any{"roots": c.server.files.Roots()}, nil
+		return map[string]any{"roots": s.files.Roots()}, nil
 	case "git.status":
 		var p struct {
 			Path string `json:"path"`
@@ -902,7 +921,7 @@ func (c *connection) dispatch(ctx context.Context, r protocol.Request) (any, err
 		if err := protocol.Decode(r.Params, &p); err != nil {
 			return nil, err
 		}
-		return c.server.files.GitStatus(ctx, p.Path)
+		return s.files.GitStatus(ctx, p.Path)
 	case "git.diff":
 		var p struct {
 			Path     string `json:"path"`
@@ -915,7 +934,7 @@ func (c *connection) dispatch(ctx context.Context, r protocol.Request) (any, err
 		if p.MaxBytes == 0 {
 			p.MaxBytes = 512 << 10
 		}
-		text, truncated, err := c.server.files.GitDiff(ctx, p.Path, p.Staged, p.MaxBytes)
+		text, truncated, err := s.files.GitDiff(ctx, p.Path, p.Staged, p.MaxBytes)
 		if err != nil {
 			return nil, err
 		}
@@ -960,81 +979,106 @@ func (c *connection) dispatch(ctx context.Context, r protocol.Request) (any, err
 		}
 		err := w.Stop(p.Force)
 		return map[string]bool{"stopped": err == nil}, err
-	case "session.unsubscribe":
-		if err := empty(); err != nil {
-			return nil, err
-		}
-		c.mu.Lock()
-		if sub := c.subs[r.SessionID]; sub != nil {
-			sub.Close()
-			delete(c.subs, r.SessionID)
-		}
-		c.mu.Unlock()
-		return map[string]bool{"subscribed": false}, nil
-	case "session.subscribe":
-		var p struct {
-			Epoch    string  `json:"epoch"`
-			AfterSeq *uint64 `json:"afterSeq"`
-		}
-		if err := protocol.Decode(r.Params, &p); err != nil {
-			return nil, err
-		}
-		// 带游标订阅时先补发，补不上就明确要求重新同步，不伪造无损恢复。
-		if p.Epoch != "" || p.AfterSeq != nil {
-			after := uint64(0)
-			if p.AfterSeq != nil {
-				after = *p.AfterSeq
-			}
-			items, ok := w.Replay(p.Epoch, after)
-			if !ok {
-				c.server.metrics.ReplayMiss()
-				return nil, protocol.E("resync_required", "事件游标已失效，请重新读取持久历史后再订阅")
-			}
-			if len(items) > 0 {
-				c.server.metrics.ReplayHit()
-			}
-			for _, item := range items {
-				if !c.sendRaw(item.Payload) {
-					return nil, protocol.E("conflict", "连接已关闭")
-				}
-			}
-		}
-		c.mu.Lock()
-		defer c.mu.Unlock()
-		if c.ctx.Err() != nil {
-			return nil, protocol.E("conflict", "连接已关闭")
-		}
-		if old := c.subs[r.SessionID]; old != nil {
-			old.Close()
-			delete(c.subs, r.SessionID)
-		}
-		sub, info, err := w.Subscribe()
-		if err != nil {
-			return nil, err
-		}
-		c.subs[r.SessionID] = sub
-		// 先入队订阅确认，再允许推送协程投递事件，避免确认晚于首批事件。
-		c.send(protocol.Reply(r.RequestID, map[string]any{"subscribed": true, "epoch": info.Epoch, "seq": info.Seq, "replay": false}, nil))
-		go func() {
-			defer sub.Close()
-			for {
-				m, err := sub.Next(c.ctx)
-				if err != nil {
-					if c.ctx.Err() == nil {
-						c.send(protocol.Message{Version: 1, Kind: "control", SessionID: r.SessionID, Event: "bridge.subscription_closed", Data: map[string]bool{"resyncRequired": true}})
-					}
-					return
-				}
-				if !c.send(m) {
-					return
-				}
-			}
-		}()
-		return noReply{}, nil
 	default:
 		return nil, protocol.E("unsupported_method", "A 阶段未实现该方法")
 	}
 }
+
+// subscribe 处理事件订阅：先做游标补发，再注册有界队列并持续推送。
+func (c *connection) subscribe(ctx context.Context, r protocol.Request) (any, error) {
+	var p struct {
+		Epoch    string  `json:"epoch"`
+		AfterSeq *uint64 `json:"afterSeq"`
+	}
+	if err := protocol.Decode(r.Params, &p); err != nil {
+		return nil, err
+	}
+	w, err := c.server.manager.Get(r.SessionID)
+	if err != nil {
+		return nil, err
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.ctx.Err() != nil {
+		return nil, protocol.E("conflict", "连接已关闭")
+	}
+	// 带游标订阅时先补发，补不上就明确要求重新同步，不伪造无损恢复。
+	if p.Epoch != "" || p.AfterSeq != nil {
+		after := uint64(0)
+		if p.AfterSeq != nil {
+			after = *p.AfterSeq
+		}
+		items, ok := w.Replay(p.Epoch, after)
+		if !ok {
+			c.server.metrics.ReplayMiss()
+			return nil, protocol.E("resync_required", "事件游标已失效，请重新读取持久历史后再订阅")
+		}
+		if len(items) > 0 {
+			c.server.metrics.ReplayHit()
+		}
+		for _, item := range items {
+			if !c.sendRaw(item.Payload) {
+				return nil, protocol.E("conflict", "连接已关闭")
+			}
+		}
+	}
+	if old := c.subs[r.SessionID]; old != nil {
+		old.Close()
+		delete(c.subs, r.SessionID)
+	}
+	sub, info, err := w.Subscribe()
+	if err != nil {
+		return nil, err
+	}
+	c.subs[r.SessionID] = sub
+	// 先入队订阅确认，再允许推送协程投递事件，避免确认晚于首批事件。
+	c.send(protocol.Reply(r.RequestID, map[string]any{"subscribed": true, "epoch": info.Epoch, "seq": info.Seq, "replay": true}, nil))
+	go func() {
+		defer sub.Close()
+		for {
+			m, err := sub.Next(c.ctx)
+			if err != nil {
+				if c.ctx.Err() == nil {
+					c.send(protocol.Message{Version: 1, Kind: "control", SessionID: r.SessionID, Event: "bridge.subscription_closed", Data: map[string]bool{"resyncRequired": true}})
+				}
+				return
+			}
+			if !c.send(m) {
+				return
+			}
+		}
+	}()
+	return noReply{}, nil
+}
+
+// unsubscribe 只解除该连接的订阅，不中断任务。
+func (c *connection) unsubscribe(r protocol.Request) (any, error) {
+	if err := protocol.Decode(r.Params, &struct{}{}); err != nil {
+		return nil, err
+	}
+	c.mu.Lock()
+	if sub := c.subs[r.SessionID]; sub != nil {
+		sub.Close()
+		delete(c.subs, r.SessionID)
+	}
+	c.mu.Unlock()
+	return map[string]bool{"subscribed": false}, nil
+}
+
+// dispatch 执行一条命令；ctx 只约束等待，不把浏览器断开当作取消任务。
+func (c *connection) dispatch(ctx context.Context, r protocol.Request) (any, error) {
+	switch r.Method {
+	case "session.subscribe":
+		return c.subscribe(ctx, r)
+	case "session.unsubscribe":
+		return c.unsubscribe(r)
+	default:
+		return c.server.dispatchCommon(ctx, r, c)
+	}
+}
+
+// connContext 实现 connSink。
+func (c *connection) connContext() context.Context { return c.ctx }
 
 // noReply 表示该命令已自行发送响应，无需框架再补一条。
 // 当前用于订阅：先发确认，再由推送协程持续发送事件。

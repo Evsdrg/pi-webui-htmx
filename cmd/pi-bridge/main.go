@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -21,6 +22,7 @@ import (
 	"pi-bridge-go/internal/storage"
 	"pi-bridge-go/internal/terminal"
 	"pi-bridge-go/internal/transport"
+	"pi-bridge-go/internal/tunnel"
 	"pi-bridge-go/internal/workspace"
 )
 
@@ -37,6 +39,9 @@ func serve() error {
 		return err
 	}
 	listen := flag.String("listen", "127.0.0.1:30142", "仅接受环回地址的监听地址")
+	relayURL := flag.String("relay", "", "云端转发器地址，例如 wss://relay.example.com；为空表示仅本地")
+	deviceID := flag.String("device-id", "", "设备标识；启用 --relay 时必填")
+	deviceName := flag.String("device-name", "", "设备显示名，随配对信息一起登记")
 	root := flag.String("workspace", "", "必填：允许的工作区根目录")
 	binary := flag.String("pi", "pi", "Pi 可执行文件路径")
 	stateDir := flag.String("state-dir", filepath.Join(cache, "pi-bridge-go"), "桥自有的运行目录")
@@ -50,6 +55,12 @@ func serve() error {
 
 	if *root == "" {
 		return errors.New("必须指定 --workspace")
+	}
+	if *relayURL != "" && *deviceID == "" {
+		return errors.New("启用 --relay 时必须提供 --device-id")
+	}
+	if *relayURL != "" && !strings.HasPrefix(*relayURL, "ws://") && !strings.HasPrefix(*relayURL, "wss://") {
+		return errors.New("--relay 必须以 ws:// 或 wss:// 开头")
 	}
 	token := os.Getenv("PI_BRIDGE_TOKEN")
 	if len(token) < 32 {
@@ -145,6 +156,25 @@ func serve() error {
 		return err
 	}
 	handler := transport.New(manager, store, terminals, files, receipts, metrics, token, ln.Addr().String())
+
+	// 云端隧道：本地主动外连，relay 只搬运字节。
+	var tunnelClient *tunnel.Client
+	if *relayURL != "" {
+		deviceToken := os.Getenv("PI_BRIDGE_DEVICE_TOKEN")
+		if deviceToken == "" {
+			return errors.New("启用 --relay 时必须设置 PI_BRIDGE_DEVICE_TOKEN")
+		}
+		bridge := transport.NewTunnelBridge(handler, nil, 8, 5*time.Minute)
+		handler.SetTunnelBridge(bridge)
+		cfg := tunnel.Defaults()
+		cfg.RelayURL = *relayURL
+		cfg.DeviceID = *deviceID
+		cfg.DeviceToken = deviceToken
+		tunnelClient = tunnel.NewClient(cfg, bridge)
+		bridge.SetSender(tunnelClient.Send)
+		go tunnelClient.Run(context.Background())
+		slog.Info("已启用云端隧道", "转发器", *relayURL, "设备", *deviceID, "设备名", *deviceName)
+	}
 	server := &http.Server{Handler: handler, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, WriteTimeout: 15 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 16 << 10}
 
 	sigctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
