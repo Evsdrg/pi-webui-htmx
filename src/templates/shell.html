@@ -40,14 +40,16 @@
       <div id="ext-widgets-before" class="ext-widgets"></div>
       <form id="composer" autocomplete="off">
         <label class="sr-only" for="prompt">消息</label>
-        <textarea id="prompt" name="text" rows="3" placeholder="描述任务，或输入 / 选择命令…" maxlength="200000"></textarea>
+        <textarea id="prompt" name="text" rows="3" placeholder="描述任务，或输入 / 选择命令；可粘贴或拖入图片…" maxlength="200000"></textarea>
+        <div id="attachments" class="attachments" hidden></div>
+        <p id="composer-drop" class="composer-drop" hidden>松手即把图片加入本条消息</p>
         <div id="command-menu" class="command-menu" hidden></div>
         <div class="queue-hint" id="queue-hint" hidden></div>
         <div class="composer-actions">
           <label class="select-label"><span class="sr-only">模型</span><select id="model-select" name="model" aria-label="模型" hx-get="/ui/models" hx-trigger="models-refresh from:body"><option value="">Pi 默认模型</option></select></label>
           <label class="select-label"><span class="sr-only">思考强度</span><select id="thinking-select" aria-label="思考强度" disabled><option value="">默认思考</option></select></label>
           
-          <div class="spacer"></div><button class="icon-btn" type="button" data-action="commands" aria-label="查看斜杠命令">/</button>
+          <div class="spacer"></div><button class="icon-btn" type="button" data-action="commands" aria-label="查看斜杠命令">/</button><button class="icon-btn" type="button" data-action="attach" aria-label="添加图片附件">＋</button><input id="attach-input" type="file" accept="image/png,image/jpeg,image/gif,image/webp" multiple hidden>
           <button id="abort-button" type="button" class="btn" data-action="abort" hidden>■ 中止</button><button id="send-button" type="submit" class="btn btn-primary" disabled>发送 ↑</button>
         </div>
       </form>

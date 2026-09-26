@@ -23,7 +23,7 @@ function emit(type: string, extra: Record<string, unknown> = {}) {
 }
 function mount() {
  document.body.innerHTML = `<form id=auth-form><input id=bridge-token><button>连接</button></form><dialog id=auth-dialog></dialog><div id=auth-error></div>
- <form id=composer><textarea id=prompt></textarea><button id=send-button></button><button id=abort-button></button><select id=model-select></select><select id=thinking-select></select></form>
+ <form id=composer><textarea id=prompt></textarea><div id=attachments hidden></div><p id=composer-drop hidden></p><input id=attach-input type=file><button id=send-button></button><button id=abort-button></button><select id=model-select></select><select id=thinking-select></select></form>
  <form id=new-form><input id=cwd-input></form><dialog id=new-dialog></dialog><datalist id=workspace-roots></datalist><input id=session-search>
  <dialog id=session-dialog><input id=session-name><div class=session-action-grid><button data-action=rename>保存名称</button><button data-action=compact>压缩</button><button data-action=clone>克隆</button><button data-action=export>导出</button><button data-action=stop>释放</button><button data-action=delete>删除</button></div>
  <label class=switch><input type=checkbox id=auto-compaction><span>自动压缩</span></label><label class=switch><input type=checkbox id=auto-retry><span>自动重试</span></label>
@@ -185,5 +185,23 @@ describe('模型配置编辑器', () => {
     await (workbench as unknown as { action(a: string, b: HTMLElement): Promise<void> }).action('models-discover', document.createElement('button'));
     await vi.waitFor(() => expect(document.getElementById('discover-result').textContent).toContain('GPT X'));
     expect(document.getElementById('discover-result').querySelector('script')).toBeNull();
+  });
+});
+
+describe('附件随消息发送', () => {
+  it('有附件时 prompt 带 images，发送成功后清空', async () => {
+    (document.getElementById('prompt') as HTMLTextAreaElement).value = '看这张图';
+    document.querySelector<HTMLFormElement>('#composer')!.requestSubmit();
+    await vi.waitFor(() => expect(fake.request).toHaveBeenCalledWith('session.prompt', 's1', { text: '看这张图' }, 30_000));
+    // 无附件时不得带 images 键。
+    const call = vi.mocked(fake.request).mock.calls.find((c) => c[0] === 'session.prompt');
+    expect(Object.keys((call?.[2] ?? {}) as object)).not.toContain('images');
+    expect(document.getElementById('attachments')!.hidden).toBe(true);
+  });
+
+  it('附件容器初始隐藏，发送后仍保持隐藏', () => {
+    const box = document.getElementById('attachments')!;
+    expect(box.hidden).toBe(true);
+    expect(box.childElementCount).toBe(0);
   });
 });

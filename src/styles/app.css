@@ -204,3 +204,12 @@ input,select,textarea { background:var(--bg); border:1px solid var(--border); bo
 .discover-list { margin:6px 0 0; padding-left:18px; }
 .discover-list li { font-size:12px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .models-dialog code { font-family:var(--font-mono, ui-monospace, monospace); font-size:11px; background:var(--bg-subtle); padding:1px 4px; border-radius:4px; }
+
+/* 附件：缩略图 + 移除按钮，拖拽时整块 composer 高亮。 */
+.attachments { display:flex; flex-wrap:wrap; gap:8px; margin:0 0 8px; }
+.attachment { position:relative; width:64px; height:64px; border:1px solid var(--border); border-radius:8px; overflow:hidden; background:var(--bg-subtle); }
+.attachment img { width:100%; height:100%; object-fit:cover; display:block; }
+.attachment button { position:absolute; top:2px; right:2px; width:18px; height:18px; line-height:1; border:0; border-radius:50%; background:rgba(0,0,0,.65); color:#fff; font-size:12px; cursor:pointer; }
+.attachment .attachment-meta { position:absolute; left:0; right:0; bottom:0; font-size:9px; text-align:center; background:rgba(0,0,0,.55); color:#fff; padding:1px 0; }
+#composer.dragging { outline:2px dashed var(--accent); outline-offset:2px; }
+.composer-drop { margin:0 0 8px; font-size:11px; color:var(--accent); }

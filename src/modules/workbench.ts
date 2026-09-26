@@ -1,6 +1,8 @@
 import { BridgeClient, BridgeError } from './bridge';
 import { LiveView, EventCursor, record, text, runStateAfter, type RunState } from './stream';
 import { closeMobileSidebar, readDraft, saveDraft } from './layout';
+import { addFiles, toWire, formatSize } from './attachments';
+import type { Attachment } from './attachments';
 import type { Capabilities, EventMessage, Message, Method, WorkerInfo } from '@/types/protocol';
 
 const el = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
@@ -19,6 +21,7 @@ export class Workbench {
   private diskSession = !!this.sessionId;
   private cursor = new EventCursor();
   private live = new LiveView(el('live'));
+  private attachments: Attachment[] = [];
   private statuses = new Map<string, string>();
   private widgets = new Map<string, { lines: string[]; placement: string }>();
   private commands: { name: string; description: string }[] = [];
@@ -61,6 +64,7 @@ export class Workbench {
         .then(async () => { this.notify(enabled ? '已开启自动压缩。' : '已关闭自动压缩。'); await this.refreshState(); })
         .catch((err) => { this.fail(err); void this.refreshState(); });
     }, { signal });
+    this.wireAttachments();
     el('auto-retry').addEventListener('change', () => {
       const enabled = el<HTMLInputElement>('auto-retry').checked;
       // Pi 没有自动重试的读回字段，失败时把勾选还原，避免界面停在假状态。
@@ -230,10 +234,13 @@ export class Workbench {
         if (choice?.dataset.provider && choice.dataset.modelId) await this.request('session.set_model', { provider: choice.dataset.provider, modelId: choice.dataset.modelId });
         this.live.begin(message); this.setRun('running'); el('welcome').hidden = true;
       }
-      if (busy && queuedKind) await this.sendQueued(message, queuedKind);
+      const images = this.attachments;
+      if (busy && queuedKind) await this.sendQueued(message, queuedKind, images);
+      else await this.request('session.prompt', { text: message, ...(images.length ? { images: toWire(images) } : {}) });
       if (generation !== this.generation) return;
       if (input.value.trim() === message) input.value = '';
       saveDraft(draftKey, ''); this.saveCurrentDraft();
+      this.clearAttachments();
       if (busy) this.notify('消息已排队');
       void this.refreshThinking().catch((err) => this.fail(err));
     } catch (error) { this.fail(error); if (this.bridge.connected) void this.reconcile().catch(() => {}); }
@@ -433,6 +440,7 @@ export class Workbench {
         break;
       }
       case 'abort-retry': await this.command('session.abort_retry'); this.notify('已请求中止重试。'); await this.reconcile(); break;
+      case 'attach': el<HTMLInputElement>('attach-input').click(); break;
       case 'workspace': {
         const panel = el('workspace-panel'); panel.hidden = !panel.hidden; el('workbench').dataset.rightPanel = panel.hidden ? 'closed' : 'open';
         button.setAttribute('aria-expanded', String(!panel.hidden));
@@ -453,6 +461,59 @@ export class Workbench {
     if (state.autoCompactionEnabled !== undefined) compaction.checked = state.autoCompactionEnabled;
     this.updateControls();
   }
+  // wireAttachments 接管文件选择、粘贴与拖拽三条入口。
+  // 拖拽用计数器而不是 dragenter/dragleave 配对：子元素穿越会误触发 leave。
+  private wireAttachments(): void {
+    const signal = this.abort.signal;
+    const picker = el<HTMLInputElement>('attach-input');
+    picker.addEventListener('change', () => { if (picker.files) void this.attach(picker.files); picker.value = ''; }, { signal });
+    el<HTMLTextAreaElement>('prompt').addEventListener('paste', (event) => {
+      const files = Array.from(event.clipboardData?.files ?? []);
+      if (!files.length) return;
+      event.preventDefault();
+      void this.attach(files);
+    }, { signal });
+    let depth = 0;
+    const composer = el('composer');
+    const dropHint = el('composer-drop');
+    composer.addEventListener('dragenter', (event) => { event.preventDefault(); depth++; composer.classList.add('dragging'); dropHint.hidden = false; }, { signal });
+    composer.addEventListener('dragover', (event) => event.preventDefault(), { signal });
+    composer.addEventListener('dragleave', () => { if (--depth <= 0) { depth = 0; composer.classList.remove('dragging'); dropHint.hidden = true; } }, { signal });
+    composer.addEventListener('drop', (event) => {
+      event.preventDefault(); depth = 0; composer.classList.remove('dragging'); dropHint.hidden = true;
+      if (event.dataTransfer?.files.length) void this.attach(event.dataTransfer.files);
+    }, { signal });
+  }
+
+  private async attach(files: FileList | File[]): Promise<void> {
+    const { added, rejected } = await addFiles(files, this.attachments);
+    if (rejected.length) this.notify(rejected.join('；'), 'warning');
+    if (!added.length) return;
+    this.attachments = this.attachments.concat(added);
+    this.renderAttachments();
+  }
+
+  private renderAttachments(): void {
+    const box = el('attachments');
+    box.replaceChildren();
+    box.hidden = this.attachments.length === 0;
+    this.attachments.forEach((item, index) => {
+      const cell = document.createElement('div');
+      cell.className = 'attachment';
+      const image = document.createElement('img');
+      image.src = `data:${item.mimeType};base64,${item.data}`;
+      image.alt = item.name;
+      const remove = document.createElement('button');
+      remove.type = 'button'; remove.textContent = '×'; remove.setAttribute('aria-label', `移除 ${item.name}`);
+      remove.addEventListener('click', () => { this.attachments.splice(index, 1); this.renderAttachments(); });
+      const meta = document.createElement('span');
+      meta.className = 'attachment-meta'; meta.textContent = formatSize(item.size);
+      cell.append(image, remove, meta);
+      box.append(cell);
+    });
+  }
+
+  private clearAttachments(): void { this.attachments = []; this.renderAttachments(); }
   private draftKey(): string { return this.sessionId || `new:${this.cwd}`; }
   private saveCurrentDraft(): void { saveDraft(this.draftKey(), el<HTMLTextAreaElement>('prompt').value); }
   private setConnection(online: boolean): void { el('conn-state').textContent = online ? '已连接' : '未连接'; el('conn-state').className = `state state-${online ? 'online' : 'offline'}`; if (online) this.notice(''); this.updateControls(); }
@@ -462,9 +523,9 @@ export class Workbench {
   private queueKind(): 'steer' | 'followUp' { return document.querySelector<HTMLInputElement>('input[name="queue-kind"]:checked')?.value === 'followUp' ? 'followUp' : 'steer'; }
   // sendQueued 在运行中发送：先把模式同步给桥，再带 streamingBehavior 提交。
   // 不先同步的话，用户改了 radio 但桥仍是旧模式，行为与界面显示不一致。
-  private async sendQueued(text: string, kind: 'steer' | 'followUp'): Promise<void> {
+  private async sendQueued(text: string, kind: 'steer' | 'followUp', images: Attachment[]): Promise<void> {
     await this.request('session.set_queue_mode', { kind, mode: kind === 'steer' ? 'all' : 'one-at-a-time' });
-    await this.request('session.prompt', { text, streamingBehavior: kind });
+    await this.request('session.prompt', { text, streamingBehavior: kind, ...(images.length ? { images: toWire(images) } : {}) });
   }
   private notice(message: string): void { el('connection-notice').textContent = message; el('connection-notice').hidden = !message; }
   private notify(message: string, kind = 'info'): void { void import('./toast').then(({showToast}) => showToast(message, kind === 'error' ? 'error' : kind === 'warning' ? 'warning' : 'info')); }
