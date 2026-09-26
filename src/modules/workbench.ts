@@ -5,7 +5,7 @@ import type { Capabilities, EventMessage, Message, Method, WorkerInfo } from '@/
 
 const el = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 const DIALOGS = new Set(['select','confirm','input','editor']);
-interface State { sessionId: string; sessionName?: string; isStreaming: boolean; isCompacting: boolean; thinkingLevel?: string; model?: { id: string; provider: string; name: string }; pendingMessageCount?: number }
+interface State { sessionId: string; sessionName?: string; isStreaming: boolean; isCompacting: boolean; thinkingLevel?: string; model?: { id: string; provider: string; name: string }; pendingMessageCount?: number; steeringMode?: string; followUpMode?: string; autoCompactionEnabled?: boolean }
 
 export class Workbench {
   readonly bridge = new BridgeClient(`${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}/api/v1/ws`);
@@ -52,6 +52,19 @@ export class Workbench {
       this.searchTimer = setTimeout(() => void this.search(query), 250);
     }, { signal });
     el('model-select').addEventListener('change', () => void this.changeModel().catch((err) => this.fail(err)), { signal });
+    el('auto-compaction').addEventListener('change', () => {
+      const enabled = el<HTMLInputElement>('auto-compaction').checked;
+      // 成功后必须回读：command() 会先ensureWorker，其中的预取状态刷新
+      // 发生在 set 之前，会把勾选重置成旧值。回读才能反映 Pi 的真实状态。
+      void this.command('session.set_auto_compaction', { enabled })
+        .then(async () => { this.notify(enabled ? '已开启自动压缩。' : '已关闭自动压缩。'); await this.refreshState(); })
+        .catch((err) => { this.fail(err); void this.refreshState(); });
+    }, { signal });
+    el('auto-retry').addEventListener('change', () => {
+      const enabled = el<HTMLInputElement>('auto-retry').checked;
+      // Pi 没有自动重试的读回字段，失败时把勾选还原，避免界面停在假状态。
+      void this.command('session.set_auto_retry', { enabled }).then(() => this.notify(enabled ? '已开启自动重试。' : '已关闭自动重试。')).catch((err) => { this.fail(err); el<HTMLInputElement>('auto-retry').checked = !enabled; });
+    }, { signal });
     el('thinking-select').addEventListener('change', () => { const level = el<HTMLSelectElement>('thinking-select').value; void this.command('session.set_thinking', { level }).catch((err) => this.fail(err)); }, { signal });
     document.addEventListener('click', (event) => this.onClick(event), { signal });
     document.addEventListener('keydown', (event) => { if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'k') { event.preventDefault(); void this.newSession().catch((err) => this.fail(err)); } }, { signal });
@@ -144,6 +157,7 @@ export class Workbench {
     if (state.sessionName) el('session-title').textContent = state.sessionName;
     if (state.model) { this.currentModel = { provider: state.model.provider, id: state.model.id, name: state.model.name }; this.selectModel(state.model.provider, state.model.id, state.model.name); }
     await this.refreshThinking(state.thinkingLevel);
+    this.refreshQueueState(state);
   }
   private async subscribe(): Promise<void> {
     const id = this.sessionId; if (!id || this.subscribed === id) return;
@@ -175,6 +189,7 @@ export class Workbench {
     if (state.model) { this.currentModel = { provider: state.model.provider, id: state.model.id, name: state.model.name }; this.selectModel(state.model.provider, state.model.id, state.model.name); }
     if (wasBusy && !busy) await this.settled();
     await this.refreshThinking(state.thinkingLevel);
+    this.refreshQueueState(state);
     await this.refreshDialogs();
   }
   private selectSession(id: string, cwd: string, title: string, push = true): void {
@@ -202,8 +217,11 @@ export class Workbench {
     const input = el<HTMLTextAreaElement>('prompt'); const message = input.value.trim();
     if (!message || this.sending) return;
     this.sending = true; this.updateControls(); const generation = this.generation; const draftKey = this.draftKey();
+    // 排队意图必须在 ensureWorker 之前取：它会刷新会话状态，
+    // 而刷新会把单选按钮重置成 Pi 的当前值，晚一步读就丢了用户的选择。
+    const busy = this.run !== 'idle';
+    const queuedKind = busy ? this.queueKind() : undefined;
     try {
-      const busy = this.run !== 'idle';
       await this.ensureWorker();
       if (generation !== this.generation) return;
       if (!busy) {
@@ -211,7 +229,7 @@ export class Workbench {
         if (choice?.dataset.provider && choice.dataset.modelId) await this.request('session.set_model', { provider: choice.dataset.provider, modelId: choice.dataset.modelId });
         this.live.begin(message); this.setRun('running'); el('welcome').hidden = true;
       }
-      await this.request('session.prompt', { text: message, ...(busy ? { streamingBehavior: el<HTMLSelectElement>('queue-mode').value } : {}) });
+      if (busy && queuedKind) await this.sendQueued(message, queuedKind);
       if (generation !== this.generation) return;
       if (input.value.trim() === message) input.value = '';
       saveDraft(draftKey, ''); this.saveCurrentDraft();
@@ -378,7 +396,12 @@ export class Workbench {
       case 'refresh-sessions': this.refreshSessions(); break;
       case 'models-refresh': window.htmx.trigger(document.body, 'models-refresh'); break;
       case 'settings': el<HTMLDialogElement>('settings-dialog').showModal(); window.htmx.trigger(document.body, 'packages-refresh'); break;
-      case 'session-menu': el<HTMLInputElement>('session-name').value = el('session-title').textContent ?? ''; el<HTMLDialogElement>('session-dialog').showModal(); break;
+      case 'session-menu': {
+        el<HTMLInputElement>('session-name').value = el('session-title').textContent ?? '';
+        el<HTMLDialogElement>('session-dialog').showModal();
+        if (this.sessionId) await this.refreshState();
+        break;
+      }
       case 'abort': await this.request('session.abort'); this.notice('已请求中止，等待 Pi 完成清理。'); break;
       case 'rename': await this.command('session.set_name', { name: el<HTMLInputElement>('session-name').value }); el('session-title').textContent = el<HTMLInputElement>('session-name').value; this.refreshSessions(); break;
       case 'compact': this.setRun('compacting'); try { await this.command('session.compact'); await this.refreshHistory(); } finally { await this.reconcile(); } break;
@@ -388,6 +411,17 @@ export class Workbench {
       case 'delete': if (this.sessionId && confirm('删除此会话的磁盘记录？此操作无法撤销。')) { await this.request('sessions.delete', { sessionId: this.sessionId }, ''); this.selectSession('', this.cwd, '新会话'); this.refreshSessions(); el<HTMLDialogElement>('session-dialog').close(); } break;
       case 'copy-turn': await navigator.clipboard.writeText(button.closest('.turn')?.querySelector('.turn-assistant .bubble')?.textContent ?? ''); this.notify('已复制'); break;
       case 'commands': this.commands = (await this.command<Record<string,unknown>[]>('session.commands')).map((c) => ({name: text(c.name), description: text(c.description)})); el<HTMLTextAreaElement>('prompt').value = '/'; this.showCommands(); el('prompt').focus(); break;
+      case 'export': {
+        // 用完整会话 ID，截断只会得到 "history-" 这种没有辨识度的名字。
+        const name = `session-${this.sessionId.slice(0, 64)}.html`;
+        const result = await this.command<{ path: string }>('session.export_html', { fileName: name });
+        const file = text(result.path).split('/').pop() || name;
+        this.notify('已导出，开始下载。');
+        // 走普通导航而不是 fetch：需要浏览器弹出下载，且要带登录 Cookie。
+        location.assign(`/ui/exports/${encodeURIComponent(file)}`);
+        break;
+      }
+      case 'abort-retry': await this.command('session.abort_retry'); this.notify('已请求中止重试。'); await this.reconcile(); break;
       case 'workspace': {
         const panel = el('workspace-panel'); panel.hidden = !panel.hidden; el('workbench').dataset.rightPanel = panel.hidden ? 'closed' : 'open';
         button.setAttribute('aria-expanded', String(!panel.hidden));
@@ -395,11 +429,32 @@ export class Workbench {
       }
     }
   }
+  // refreshQueueState 反映 Pi 可读回的排队模式与自动压缩。
+  // 自动重试没有读回字段，只在用户本次操作时更新，不清空。
+  private refreshQueueState(state: State): void {
+    const steering = document.querySelector<HTMLInputElement>('input[name="queue-kind"][value="steer"]');
+    const followUp = document.querySelector<HTMLInputElement>('input[name="queue-kind"][value="followUp"]');
+    if (steering && followUp) {
+      const kind = state.steeringMode === 'one-at-a-time' ? 'followUp' : 'steer';
+      (kind === 'steer' ? steering : followUp).checked = true;
+    }
+    const compaction = el<HTMLInputElement>('auto-compaction');
+    if (state.autoCompactionEnabled !== undefined) compaction.checked = state.autoCompactionEnabled;
+    this.updateControls();
+  }
   private draftKey(): string { return this.sessionId || `new:${this.cwd}`; }
   private saveCurrentDraft(): void { saveDraft(this.draftKey(), el<HTMLTextAreaElement>('prompt').value); }
   private setConnection(online: boolean): void { el('conn-state').textContent = online ? '已连接' : '未连接'; el('conn-state').className = `state state-${online ? 'online' : 'offline'}`; if (online) this.notice(''); this.updateControls(); }
   private setRun(state: RunState): void { this.run = state; el('session-state').textContent = {idle:'就绪',running:'运行中',retrying:'重试中',compacting:'压缩中',waiting_input:'等待确认'}[state]; this.updateControls(); }
-  private updateControls(): void { el<HTMLButtonElement>('send-button').disabled = !this.bridge.connected || this.sending || !el<HTMLTextAreaElement>('prompt').value.trim(); el('abort-button').hidden = this.run === 'idle'; el('queue-mode').hidden = this.run === 'idle'; el<HTMLSelectElement>('model-select').disabled = this.run !== 'idle'; el<HTMLSelectElement>('thinking-select').disabled = this.run !== 'idle' || !this.sessionId; }
+  private updateControls(): void { el<HTMLButtonElement>('send-button').disabled = !this.bridge.connected || this.sending || !el<HTMLTextAreaElement>('prompt').value.trim(); el('abort-button').hidden = this.run === 'idle'; const hint = el('queue-hint'); const busy = this.run !== 'idle'; hint.hidden = !busy; if (busy) hint.textContent = this.queueKind() === 'steer' ? '本轮结束后插入指令' : '排到队列末尾，本轮完成后追加'; el<HTMLSelectElement>('model-select').disabled = busy; el<HTMLSelectElement>('thinking-select').disabled = busy || !this.sessionId; }
+  // queueKind 读会话对话框里的 radio；缺省 steer，与 Pi 的默认一致。
+  private queueKind(): 'steer' | 'followUp' { return document.querySelector<HTMLInputElement>('input[name="queue-kind"]:checked')?.value === 'followUp' ? 'followUp' : 'steer'; }
+  // sendQueued 在运行中发送：先把模式同步给桥，再带 streamingBehavior 提交。
+  // 不先同步的话，用户改了 radio 但桥仍是旧模式，行为与界面显示不一致。
+  private async sendQueued(text: string, kind: 'steer' | 'followUp'): Promise<void> {
+    await this.request('session.set_queue_mode', { kind, mode: kind === 'steer' ? 'all' : 'one-at-a-time' });
+    await this.request('session.prompt', { text, streamingBehavior: kind });
+  }
   private notice(message: string): void { el('connection-notice').textContent = message; el('connection-notice').hidden = !message; }
   private notify(message: string, kind = 'info'): void { void import('./toast').then(({showToast}) => showToast(message, kind === 'error' ? 'error' : kind === 'warning' ? 'warning' : 'info')); }
   private fail(error: unknown): void { const message = error instanceof Error ? error.message : '操作失败'; this.notify(message, 'error'); this.notice(message); }

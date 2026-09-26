@@ -34,10 +34,12 @@ let entries = file ? fs.readFileSync(file,'utf8').trim().split('\n').map(v=>JSON
 let id = entries[0]?.id ?? crypto.randomUUID();
 let parent = entries.at(-1)?.id ?? null;
 let name = entries.filter(v=>v.type==='session_info').at(-1)?.name ?? '浏览器测试会话';
-let active = false; let cancel = false; let thinking = 'off'; let model = {id:'demo-fast',name:'演示 · 快速模型',provider:'fixture'};
+let active = false; let cancel = false; let thinking = 'off';
+let steeringMode = 'all'; let followUpMode = 'all'; let autoCompaction = false; let autoRetry = false; let model = {id:'demo-fast',name:'演示 · 快速模型',provider:'fixture'};
 const dialogs = new Map();
 const emit = value => process.stdout.write(JSON.stringify(value)+'\n');
 const reply = (cmd,data={}) => emit({type:'response',command:cmd.type,id:cmd.id,success:true,data});
+const replyErr = (cmd,message) => emit({type:'response',command:cmd.type,id:cmd.id,success:false,error:message});
 function append(entry){
  if(!file){const dir=path.join(sessionDir,'fixture');fs.mkdirSync(dir,{recursive:true});file=path.join(dir,`${id}.jsonl`);const header={type:'session',version:3,id,timestamp:now(),cwd:process.cwd()};fs.writeFileSync(file,JSON.stringify(header)+'\n');entries=[header];}
  const row={...entry,id:crypto.randomUUID(),parentId:parent,timestamp:now()};parent=row.id;entries.push(row);fs.appendFileSync(file,JSON.stringify(row)+'\n');
@@ -61,7 +63,7 @@ async function prompt(cmd){
 const lines=readline.createInterface({input:process.stdin});
 lines.on('line',line=>{let cmd;try{cmd=JSON.parse(line);}catch{return;}
  switch(cmd.type){
- case 'get_state':reply(cmd,{sessionId:id,sessionName:name,model,thinkingLevel:thinking,isStreaming:active,isCompacting:false,pendingMessageCount:0,messageCount:entries.length});break;
+ case 'get_state':reply(cmd,{sessionId:id,sessionName:name,model,thinkingLevel:thinking,isStreaming:active,isCompacting:false,pendingMessageCount:0,messageCount:entries.length,steeringMode,followUpMode,autoCompactionEnabled:autoCompaction});break;
  case 'prompt':void prompt(cmd);break;
  case 'abort':cancel=true;for(const resolve of dialogs.values())resolve();dialogs.clear();reply(cmd,{steering:[],followUp:[]});break;
  case 'extension_ui_response':dialogs.get(cmd.id)?.();dialogs.delete(cmd.id);break;
@@ -69,6 +71,14 @@ lines.on('line',line=>{let cmd;try{cmd=JSON.parse(line);}catch{return;}
  case 'set_model':model={id:cmd.modelId,provider:cmd.provider,name:cmd.modelId};reply(cmd,model);break;
  case 'get_available_thinking_levels':reply(cmd,{levels:['off','low','high']});break;
  case 'set_thinking_level':thinking=cmd.level;reply(cmd);break;
+ case 'set_steering_mode':steeringMode=cmd.mode;reply(cmd);break;
+ case 'set_follow_up_mode':followUpMode=cmd.mode;reply(cmd);break;
+ case 'set_auto_compaction':autoCompaction=cmd.enabled;reply(cmd,{enabled:autoCompaction});break;
+ case 'set_auto_retry':autoRetry=cmd.enabled;reply(cmd,{enabled:autoRetry});break;
+ case 'abort_retry':autoRetry=false;reply(cmd,{aborted:true});break;
+ // 桥传 outputPath 并要求返回值与之一致；夹具必须按它给的位置写，
+ // 否则桥的「路径与请求不一致」校验会正确拒绝。
+ case 'export_html':{const file=cmd.outputPath;if(!file){replyErr(cmd,'缺少 outputPath');break;}fs.mkdirSync(path.dirname(file),{recursive:true});fs.writeFileSync(file,'<html><body>导出自测试夹具</body></html>');reply(cmd,{path:file});break;}
  case 'get_commands':reply(cmd,{commands:[{name:'dialog',description:'测试通用扩展对话',source:'extension'},{name:'review',description:'检查当前工作区',source:'extension'}]});break;
  case 'get_session_stats':reply(cmd,{sessionId:id,totalMessages:entries.length,cost:0});break;
  case 'set_session_name':name=cmd.name;append({type:'session_info',name});reply(cmd);break;

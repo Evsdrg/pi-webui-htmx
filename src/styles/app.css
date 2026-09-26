@@ -181,3 +181,14 @@ input,select,textarea { background:var(--bg); border:1px solid var(--border); bo
   .welcome h2 { font-size:23px; } .jump-latest { right:16px; }
 }
 @media (prefers-reduced-motion:reduce) { *,*::before,*::after { animation:none !important; transition:none !important; scroll-behavior:auto !important; } }
+
+/* 开关与单选：会话对话框内的排队/压缩设置。 */
+.switch-grid { display:grid; gap:8px; margin:10px 0 6px; }
+.switch { display:flex; align-items:center; gap:8px; font-size:12px; color:var(--text-muted); cursor:pointer; }
+.switch input { accent-color:var(--accent); width:15px; height:15px; cursor:pointer; }
+.switch span { color:var(--text); }
+.queue-modes { border:1px solid var(--border); border-radius:8px; padding:10px 12px; margin:12px 0 0; display:grid; gap:8px; }
+.queue-modes legend { font-size:11px; color:var(--text-muted); padding:0 4px; }
+.queue-hint { font-size:11px; color:var(--text-muted); padding:0 2px; }
+.session-action-grid { display:flex; flex-wrap:wrap; gap:6px; margin:10px 0; }
+.session-action-grid .btn { font-size:12px; }

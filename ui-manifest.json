@@ -27,22 +27,28 @@
     "extStatus": "/ui/extensions/status",
     "extWidgets": "/ui/extensions/widgets",
     "extDialog": "/ui/extensions/dialogs?sessionId={id}",
-    "diff": "/ui/diff"
+    "diff": "/ui/diff",
+    "exports": "/ui/exports/{name}"
   },
   "requiredMethods": [
-    "worker.list",
-    "session.start",
-    "session.state",
-    "session.prompt",
-    "session.abort",
-    "session.subscribe",
-    "session.unsubscribe",
-    "sessions.search",
     "config.models",
     "config.packages",
-    "session.ui_response",
+    "files.roots",
+    "session.abort",
+    "session.abort_retry",
+    "session.export_html",
     "session.pending_dialogs",
-    "files.roots"
+    "session.prompt",
+    "session.set_auto_compaction",
+    "session.set_auto_retry",
+    "session.set_queue_mode",
+    "session.start",
+    "session.state",
+    "session.subscribe",
+    "session.ui_response",
+    "session.unsubscribe",
+    "sessions.search",
+    "worker.list"
   ],
   "extensionChannel": {
     "fireAndForget": [
