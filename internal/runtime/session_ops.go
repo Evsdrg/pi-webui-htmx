@@ -279,18 +279,18 @@ func (w *Worker) Tree(ctx context.Context) (map[string]any, error) {
 }
 
 // ForkMessages 返回可供 fork 的用户消息。
-func (w *Worker) ForkMessages(ctx context.Context) ([]map[string]any, error) {
+// 保持 Pi 的 {messages:[...]} 形状，与 Tree 一致——同一层不该有的命令
+// 返回对象、有的返回裸数组，前端要为两种情况各写一遍解析。
+func (w *Worker) ForkMessages(ctx context.Context) (map[string]any, error) {
 	raw, err := w.call(ctx, "get_fork_messages", nil, false)
 	if err != nil {
 		return nil, err
 	}
-	var out struct {
-		Messages []map[string]any `json:"messages"`
-	}
+	var out map[string]any
 	if json.Unmarshal(raw, &out) != nil {
 		return nil, protocol.E("pi_error", "Pi 返回的 fork 列表无效")
 	}
-	return out.Messages, nil
+	return out, nil
 }
 
 // Entries 返回追加顺序的条目；since 为空时返回全部。

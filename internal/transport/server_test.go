@@ -996,3 +996,52 @@ func TestState透传队列与自动压缩(t *testing.T) {
 		}
 	}
 }
+
+// Test小片段不标ContentEncoding 是回归测试。
+//
+// writeHTML 曾经只要协商到编码就设 Content-Encoding，不看 ShouldCompress。
+// 于是任何小于 1 KB 的 HTML 片段被标成 br，写的却是明文——浏览器按 br
+// 解压明文必然失败，fetch 直接 reject（"Failed to fetch"），htmx 换不进去。
+// 影响面：历史分页的小页、扩展对话框、包清单，以及一切短片段。
+//
+// 现有 Test协商编码与实际压缩器一致 只造了超过阈值的样本，覆盖不到这条。
+func Test小片段不标ContentEncoding(t *testing.T) {
+	dir := t.TempDir()
+	write := func(rel, body string) {
+		path := filepath.Join(dir, filepath.FromSlash(rel))
+		if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(body), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("src/templates/sessions.html", `{{range .Items}}<a class="session-item" href="/?session={{.ID}}" data-session="{{.ID}}"><span class="session-title">{{.Title}}</span></a>{{end}}`)
+	write("ui-manifest.json", `{"protocolVersion":1,"requiredMethods":[],"templates":{"sessions":"templates/sessions.html"},"build":{"entry":"src/entry/app.ts"}}`)
+	write("dist/.vite/manifest.json", `{"src/entry/app.ts":{"file":"assets/app-abc123.js","isEntry":true,"css":[]}}`)
+	write("dist/assets/app-abc123.js", "console.log(1)")
+	t.Setenv("PI_WEBUI_DIR", dir)
+	s, _, cwd := newTestServer(t)
+	// 只放一个会话，让片段远小于压缩阈值。
+	writeSessionFile(t, s.store.Dir(), "sess-small", cwd)
+
+	req := httptest.NewRequest(http.MethodGet, "/ui/sessions", nil)
+	req.Host = "127.0.0.1:30142"
+	req.Header.Set("Authorization", "Bearer "+testToken)
+	req.Header.Set("Accept-Encoding", "br")
+	rec := httptest.NewRecorder()
+	s.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("状态码 %d", rec.Code)
+	}
+	body := rec.Body.Bytes()
+	if len(body) >= 1024 {
+		t.Fatalf("样本 %d 字节，没落在阈值以下，测不到这条路径", len(body))
+	}
+	if enc := rec.Header().Get("Content-Encoding"); enc != "" {
+		t.Fatalf("小于阈值的响应不得标 Content-Encoding（实际 %q），客户端会按该编码解压明文", enc)
+	}
+	if !bytes.Contains(body, []byte("session-item")) {
+		t.Fatal("未压缩响应不是预期 HTML")
+	}
+}

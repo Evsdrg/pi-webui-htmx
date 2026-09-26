@@ -684,11 +684,16 @@ func writeHTML(w http.ResponseWriter, html string) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Vary", "Accept-Encoding")
 	encoding := takeEncoding(w)
-	if encoding != "" {
+	body := []byte(html)
+	// 必须与 ShouldCompress 一致：Compress 在 body 小于阈值时直接写原文，
+	// 这里若仍然标 Content-Encoding，客户端会按该编码解压明文并失败。
+	// 浏览器表现为 fetch 直接 reject（"Failed to fetch"），任何小于 1 KB
+	// 的 HTML 片段——历史分页、扩展对话框、包清单——全都换不进去。
+	if presentation.ShouldCompress(body, encoding) {
 		w.Header().Set("Content-Encoding", encoding)
 	}
 	w.WriteHeader(200)
-	_, _ = presentation.Compress(w, []byte(html), encoding)
+	_, _ = presentation.Compress(w, body, encoding)
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {
