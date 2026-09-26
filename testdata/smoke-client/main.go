@@ -18,6 +18,7 @@ func main() {
 	token := flag.String("token", "", "Bearer token")
 	cwd := flag.String("cwd", "", "启动会话的工作目录")
 	hold := flag.Bool("hold", false, "启动后不停止，用于测量工作态内存")
+	dialog := flag.Bool("dialog", false, "触发扩展对话并持续读事件")
 	flag.Parse()
 	if *token == "" {
 		fmt.Fprintln(os.Stderr, "缺少 --token")
@@ -66,6 +67,29 @@ func main() {
 	}
 	send(map[string]any{"version": 1, "kind": "command", "requestId": "smoke-3", "sessionId": id, "method": "session.state"})
 	fmt.Println("session.state:", compact(read()))
+	if *dialog {
+		// 触发扩展对话：订阅后发 prompt，让假 Pi 推来 select 请求。
+		send(map[string]any{"version": 1, "kind": "command", "requestId": "smoke-sub", "sessionId": id, "method": "session.subscribe"})
+		if r := read(); r["ok"] != true {
+			fmt.Println("订阅失败:", compact(r))
+			os.Exit(1)
+		}
+		send(map[string]any{"version": 1, "kind": "command", "requestId": "smoke-prompt", "sessionId": id, "method": "session.prompt", "params": map[string]any{"text": "触发对话"}})
+		fmt.Println("session.prompt:", compact(read()))
+		// 打印 sessionId 供外部脚本查询 HTTP 端点。
+		fmt.Println("SESSION_ID=" + id)
+		// 持续读事件，直到上下文结束。
+		for {
+			m := read()
+			if m == nil {
+				break
+			}
+			if ev, _ := m["event"].(string); ev == "pi.event" {
+				fmt.Println("event:", compact(m["data"]))
+			}
+		}
+		return
+	}
 	if *hold {
 		fmt.Println("持有中，不发送提示词，按 Ctrl+C 或超时退出")
 		<-ctx.Done()

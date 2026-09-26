@@ -67,6 +67,7 @@ type Server struct {
 	discovery    management.DiscoveryLimits
 	exportDir    string
 	ui           *presentation.Renderer
+	extState     *extensionState
 	receipts     *storage.Receipts
 	metrics      *observe.Metrics
 	token, host  string
@@ -86,6 +87,7 @@ func New(manager *run.Manager, store *sessions.Store, terminals *terminal.Manage
 		discovery:   discovery,
 		exportDir:   exportDir,
 		ui:          ui,
+		extState:    newExtensionState(64),
 		receipts:    receipts,
 		metrics:     metrics,
 		token:       token,
@@ -137,6 +139,72 @@ func (s *Server) authorized(r *http.Request) bool {
 }
 
 // ServeHTTP 统一做 Host、Origin、鉴权与限额检查，再分发到具体端点。
+// handleUiResponse 处理扩展对话回执。
+//
+// 表单提交（application/x-www-form-urlencoded）或 JSON 都可以。
+// 三种语义互斥，优先级 cancelled > confirmed > value，
+// 与 Pi 的 parseResponse 一致。
+func (s *Server) handleUiResponse(w http.ResponseWriter, r *http.Request) {
+	rest := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/ui/sessions/"), "/ui-response")
+	sessionID := rest
+	if i := strings.IndexByte(rest, '/'); i >= 0 {
+		sessionID = rest[:i]
+	}
+	if !sessions.ValidID(sessionID) {
+		writeError(w, 400, protocol.E("invalid_params", "会话 ID 不合法"))
+		return
+	}
+
+	var p struct {
+		ID        string `json:"id" form:"id"`
+		Value     string `json:"value" form:"value"`
+		Confirmed string `json:"confirmed" form:"confirmed"`
+		Cancelled string `json:"cancelled" form:"cancelled"`
+	}
+	ct := r.Header.Get("Content-Type")
+	if strings.HasPrefix(ct, "application/json") {
+		if err := json.NewDecoder(io.LimitReader(r.Body, 64<<10)).Decode(&p); err != nil {
+			writeError(w, 400, protocol.E("invalid_params", "请求体不是合法 JSON"))
+			return
+		}
+	} else {
+		if err := r.ParseForm(); err != nil {
+			writeError(w, 400, protocol.E("invalid_params", "表单解析失败"))
+			return
+		}
+		p.ID = r.FormValue("id")
+		p.Value = r.FormValue("value")
+		p.Confirmed = r.FormValue("confirmed")
+		p.Cancelled = r.FormValue("cancelled")
+	}
+	if p.ID == "" {
+		writeError(w, 400, protocol.E("invalid_params", "缺少对话 id"))
+		return
+	}
+
+	wkr, err := s.manager.Get(sessionID)
+	if err != nil {
+		writeError(w, 400, protocol.E("worker_not_running", "会话没有活跃的工作进程"))
+		return
+	}
+	var value *string
+	var confirmed *bool
+	cancelled := p.Cancelled == "true"
+	if !cancelled && p.Confirmed == "true" {
+		v := true
+		confirmed = &v
+	} else if !cancelled {
+		v := p.Value
+		value = &v
+	}
+	if err := wkr.UIResponse(r.Context(), p.ID, value, confirmed, cancelled); err != nil {
+		writeError(w, 400, err)
+		return
+	}
+	// htmx 默认会把响应换入目标；回执成功无需换任何内容。
+	w.WriteHeader(204)
+}
+
 // serveUI 处理 UI 层请求：外壳、静态资源与 htmx 片段。
 // 返回 true 表示已处理，调用方应直接返回。
 //
@@ -283,7 +351,57 @@ func (s *Server) serveUI(w http.ResponseWriter, r *http.Request) bool {
 		return true
 
 	case path == "/ui/extensions/status":
-		html, rerr := s.ui.RenderExtensionStatus(nil)
+		html, rerr := s.ui.RenderExtensionStatus(s.extensionStatuses())
+		if rerr != nil {
+			writeError(w, 500, rerr)
+			return true
+		}
+		writeHTML(w, html)
+		return true
+
+	case strings.HasPrefix(path, "/ui/extensions/dialog/"):
+		// GET：渲染某个待回复对话。对话不存在时返回 204，
+		// 让 htmx 移除占位而不是显示错误。
+		id := strings.TrimPrefix(path, "/ui/extensions/dialog/")
+		if id == "" || strings.ContainsAny(id, "/\\") {
+			writeError(w, 400, protocol.E("invalid_params", "对话 ID 不合法"))
+			return true
+		}
+		raw, found := s.pendingDialog(id)
+		if !found {
+			w.WriteHeader(204)
+			return true
+		}
+		d, derr := presentation.DialogFromPi(id, r.URL.Query().Get("sessionId"), raw)
+		if derr != nil {
+			writeError(w, 400, derr)
+			return true
+		}
+		html, rerr := s.ui.RenderExtensionDialog(d)
+		if rerr != nil {
+			writeError(w, 500, rerr)
+			return true
+		}
+		writeHTML(w, html)
+		return true
+
+	case path == "/ui/extensions/dialogs":
+		// 当前会话全部待回复对话，供页面加载时恢复。
+		sessionID := r.URL.Query().Get("sessionId")
+		items, ferr := s.pendingDialogsFor(sessionID)
+		if ferr != nil {
+			writeError(w, 400, ferr)
+			return true
+		}
+		dialogs := make([]presentation.DialogData, 0, len(items))
+		for _, raw := range items {
+			d, derr := presentation.DialogFromPi(dialogID(raw), sessionID, raw)
+			if derr != nil {
+				continue
+			}
+			dialogs = append(dialogs, d)
+		}
+		html, rerr := s.ui.RenderExtensionDialogs(dialogs)
 		if rerr != nil {
 			writeError(w, 500, rerr)
 			return true
@@ -292,6 +410,56 @@ func (s *Server) serveUI(w http.ResponseWriter, r *http.Request) bool {
 		return true
 	}
 	return false
+}
+
+// pendingDialog 在受管 worker 中查找待回复对话。
+func (s *Server) pendingDialog(id string) (json.RawMessage, bool) {
+	for _, info := range s.manager.List() {
+		w, err := s.manager.Get(info.SessionID)
+		if err != nil {
+			continue
+		}
+		if raw, found := w.PendingDialog(id); found {
+			return raw, true
+		}
+	}
+	return nil, false
+}
+
+// pendingDialogsFor 返回某会话的全部待回复对话。
+func (s *Server) pendingDialogsFor(sessionID string) ([]json.RawMessage, error) {
+	if sessionID == "" {
+		return nil, protocol.E("invalid_params", "缺少 sessionId")
+	}
+	w, err := s.manager.Get(sessionID)
+	if err != nil {
+		return nil, nil // 没有活 worker 就没有待回复对话，不是错误。
+	}
+	return w.PendingDialogPayloads(), nil
+}
+
+// extensionStatuses 汇总所有活跃 worker 的扩展状态行。
+//
+// 当前实现：状态来自 WS 推送的 setStatus，由客户端直接更新 DOM；
+// 这里只在页面初次加载时给一份快照。刷新后状态会从空开始，
+// 直到插件再次 setStatus——这是已知限制，不做假持久化。
+func (s *Server) extensionStatuses() []presentation.StatusItem {
+	out := []presentation.StatusItem{}
+	for _, raw := range s.extState.snapshot() {
+		out = append(out, presentation.StatusItem{Key: raw.key, Text: raw.text})
+	}
+	return out
+}
+
+// dialogID 从 extension_ui_request 载荷里取 id。
+func dialogID(raw json.RawMessage) string {
+	var v struct {
+		ID string `json:"id"`
+	}
+	if json.Unmarshal(raw, &v) != nil {
+		return ""
+	}
+	return v.ID
 }
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -329,6 +497,17 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 401, protocol.E("unauthorized", "需要身份验证"))
 		return
 	}
+	// 扩展对话回执是 POST，且要转成 WS 命令 session.ui_response。
+	// 必须在通用的「只接受 GET」之前处理。
+	if r.Method == http.MethodPost && strings.HasPrefix(r.URL.Path, "/ui/sessions/") && strings.HasSuffix(r.URL.Path, "/ui-response") {
+		if s.ui == nil {
+			writeError(w, 404, protocol.E("not_found", "未配置 UI 包"))
+			return
+		}
+		s.handleUiResponse(w, r)
+		return
+	}
+
 	if r.Method != http.MethodGet {
 		writeError(w, 405, protocol.E("invalid_request", "请求方法不被允许"))
 		return
@@ -1170,7 +1349,12 @@ func (s *Server) dispatchCommon(ctx context.Context, r protocol.Request, sink co
 		if err := empty(); err != nil {
 			return nil, err
 		}
-		return map[string]any{"ids": w.PendingDialogs()}, nil
+		// 返回完整载荷而不只是 ID：HTTP 端点要渲染对话框，
+		// 需要 title/options/message 等字段。
+		payloads := w.PendingDialogPayloads()
+		items := make([]json.RawMessage, 0, len(payloads))
+		items = append(items, payloads...)
+		return map[string]any{"dialogs": items, "ids": w.PendingDialogs()}, nil
 	case "terminal.open":
 		var p struct {
 			Cwd   string `json:"cwd"`
@@ -1427,6 +1611,13 @@ func (c *connection) subscribe(ctx context.Context, r protocol.Request) (any, er
 					c.send(protocol.Message{Version: 1, Kind: "control", SessionID: r.SessionID, Event: "bridge.subscription_closed", Data: map[string]bool{"resyncRequired": true}})
 				}
 				return
+			}
+			// 顺手维护扩展状态快照，供页面刷新后立即显示。
+			// 只处理 setStatus，其余扩展方法不进状态表。
+			if raw, isRaw := m.Data.(json.RawMessage); isRaw {
+				if key, text, ok := parseSetStatus(raw); ok {
+					c.server.extState.update(key, text)
+				}
 			}
 			if !c.send(m) {
 				return

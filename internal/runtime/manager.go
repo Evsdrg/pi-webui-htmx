@@ -331,7 +331,7 @@ type Worker struct {
 	done                               chan struct{}
 	active, queued, uncertain, closing bool
 	waitingInput                       bool
-	pendingDialogs                     map[string]struct{}
+	pendingDialogs                     map[string]json.RawMessage
 	pending                            int
 	seq                                uint64
 	lastActivity                       time.Time
@@ -470,7 +470,7 @@ func (w *Worker) event(raw json.RawMessage) {
 				_ = w.client.Notify(map[string]any{"type": "extension_ui_response", "id": ev.ID, "cancelled": true})
 				return
 			}
-			w.pendingDialogs[ev.ID] = struct{}{}
+			w.pendingDialogs[ev.ID] = raw
 			w.waitingInput = true
 			w.status = "waiting_input"
 		}
@@ -629,7 +629,7 @@ func (w *Worker) stop(force, idleOnly bool) error {
 	for id := range w.pendingDialogs {
 		dialogs = append(dialogs, id)
 	}
-	w.pendingDialogs = map[string]struct{}{}
+	w.pendingDialogs = map[string]json.RawMessage{}
 	w.waitingInput = false
 	w.publishLocked("bridge.worker_state", w.infoLocked())
 	w.mu.Unlock()
@@ -720,7 +720,7 @@ func launch(cfg Config, cwd, file string) (*Worker, error) {
 		done:           make(chan struct{}),
 		lastActivity:   time.Now(),
 		subs:           map[*Subscription]struct{}{},
-		pendingDialogs: map[string]struct{}{},
+		pendingDialogs: map[string]json.RawMessage{},
 		replay:         events.NewRing(cfg.ReplayItems, int64(cfg.ReplayBytes)),
 		store:          cfg.Store,
 	}

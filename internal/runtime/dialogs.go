@@ -3,17 +3,46 @@ package runtime
 import (
 	"context"
 	"encoding/json"
+	"sort"
 
 	"pi-bridge-go/internal/protocol"
 )
 
 // PendingDialogs 返回仍在等待人工输入的扩展对话。
+// PendingDialogs 返回待回复对话的 ID 列表。
 func (w *Worker) PendingDialogs() []string {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	out := make([]string, 0, len(w.pendingDialogs))
 	for id := range w.pendingDialogs {
 		out = append(out, id)
+	}
+	return out
+}
+
+// PendingDialog 返回某个待回复对话的原始载荷。
+// HTTP 端点用它渲染对话框；桥不重新解释字段，原样交给呈现层。
+func (w *Worker) PendingDialog(id string) (json.RawMessage, bool) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	raw, ok := w.pendingDialogs[id]
+	return raw, ok
+}
+
+// PendingDialogPayloads 返回全部待回复对话的载荷，按 ID 排序保证稳定。
+func (w *Worker) PendingDialogPayloads() []json.RawMessage {
+	w.mu.Lock()
+	ids := make([]string, 0, len(w.pendingDialogs))
+	for id := range w.pendingDialogs {
+		ids = append(ids, id)
+	}
+	w.mu.Unlock()
+	sort.Strings(ids)
+	out := make([]json.RawMessage, 0, len(ids))
+	for _, id := range ids {
+		if raw, ok := w.PendingDialog(id); ok {
+			out = append(out, raw)
+		}
 	}
 	return out
 }
@@ -71,7 +100,7 @@ func (w *Worker) CancelPendingDialogs() {
 	for id := range w.pendingDialogs {
 		ids = append(ids, id)
 	}
-	w.pendingDialogs = map[string]struct{}{}
+	w.pendingDialogs = map[string]json.RawMessage{}
 	w.waitingInput = false
 	w.mu.Unlock()
 	for _, id := range ids {
