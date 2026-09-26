@@ -150,7 +150,7 @@ func serve() error {
 	}
 	var ui *presentation.Renderer
 	if *uiDir != "" {
-		rendered, err := presentation.LoadFromDir(*uiDir)
+		rendered, err := presentation.LoadFromDir(*uiDir, transport.SupportedMethods...)
 		if err != nil {
 			return fmt.Errorf("加载 UI 包失败：%w", err)
 		}

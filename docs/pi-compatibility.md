@@ -55,6 +55,23 @@
 9. 默认不自动加载用户全局 MC/模型配置做冒烟。真实 Pi 测试使用临时 agent-dir，关闭扩展/技能/上下文发现。
 10. 初版对未知协议/会话版本显式拒绝；新版测试通过前不扩展兼容声明。
 
+## UI 层（pi-webui-htmx）
+
+桥通过 `--ui-dir` 加载 UI 包；为空时只提供 JSON/WS API。
+`internal/presentation` 只渲染模板与提供静态资源，不持有任何会话状态。
+
+已接通：`/`、`/assets/<hash>`、`/ui/sessions`、`/ui/sessions/{id}/history`、
+`/ui/models`、`/ui/packages`、`/ui/files`、`/ui/diff`、
+`/ui/extensions/status`、`/ui/extensions/widgets`、`/ui/extensions/dialogs`。
+
+两条实现约束来自本轮实测：
+
+1. **`setStatus` 等待回执是 Pi RPC 的硬要求。** 不回复会让 worker 永久停在
+   `waiting_input`、空闲回收失效。桥按 method 分两类，fire-and-forget 的
+   绝不进 `pendingDialogs`。
+2. **`pendingDialogs` 必须存完整载荷**，只有 ID 时 HTTP 端点渲染不出
+   title/options。`PendingDialogPayloads()` 与 `PendingDialogs()` 分工。
+
 ## 验收清单
 
 ### 已通过（2026-09-26，本机）
@@ -69,6 +86,9 @@
 - [x] 浏览器断线不取消已启动任务；桥关闭/SIGKILL 后回收自己创建的进程
 - [x] 真实 Pi 隔离配置握手与退出；无模型请求、无生产会话修改
 - [x] 工作态实测：桥 10.2 MiB + Pi 工作进程 145 MiB
+- [x] UI 包经 `--ui-dir` 加载，11 个模板 + Vite 产物解析
+- [x] 浏览器实测：浏览历史不启动 Pi、翻页零重复、扩展 confirm 全闭环、
+      终端关闭后注册表归零、桥重启后自动重连、axe WCAG 2A/2AA 违例 0
 
 ### 未完成
 

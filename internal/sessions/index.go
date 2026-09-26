@@ -58,6 +58,7 @@ type indexEntry struct {
 	path      string // 相对 root 的斜杠路径
 	cwd       string
 	name      string
+	titleRead bool
 	version   int
 	timestamp string
 	modified  time.Time
@@ -154,6 +155,10 @@ func (x *Index) build(ctx context.Context) error {
 		if header.version != 3 {
 			return nil
 		}
+		if cached, ok := x.entries[header.id]; ok && cached.path == path && cached.size == size && cached.modified.Equal(mod) {
+			found = append(found, cached)
+			return nil
+		}
 		found = append(found, indexEntry{
 			id: header.id, path: path, cwd: header.cwd, name: header.name,
 			version: header.version, timestamp: header.timestamp,
@@ -242,7 +247,6 @@ func (x *Index) Page(ctx context.Context, offset, limit int) ([]indexEntry, bool
 		return nil, false, false, err
 	}
 	x.mu.RLock()
-	defer x.mu.RUnlock()
 	if offset < 0 {
 		offset = 0
 	}
@@ -257,7 +261,16 @@ func (x *Index) Page(ctx context.Context, offset, limit int) ([]indexEntry, bool
 	for _, id := range x.order[offset:end] {
 		out = append(out, x.entries[id])
 	}
-	return out, end < len(x.order), truncated, nil
+	hasMore := end < len(x.order)
+	x.mu.RUnlock()
+	for i := range out {
+		var err error
+		out[i], err = x.titleForPage(ctx, out[i])
+		if err != nil {
+			return nil, false, false, err
+		}
+	}
+	return out, hasMore, truncated, nil
 }
 
 // Stats 返回索引规模，用于诊断。

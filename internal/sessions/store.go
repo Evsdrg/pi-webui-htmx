@@ -202,7 +202,7 @@ func (s *Store) List(ctx context.Context, offset, limit int) (Listing, error) {
 	out := make([]Header, 0, len(items))
 	for _, e := range items {
 		out = append(out, Header{
-			Type: "session", Version: e.version, ID: e.id, Cwd: e.cwd,
+			Type: "session", Version: e.version, ID: e.id, Cwd: e.cwd, Name: e.name,
 			Timestamp: e.timestamp, Modified: e.modified, path: e.path,
 		})
 	}
@@ -218,7 +218,7 @@ func (s *Store) Find(ctx context.Context, id string) (Header, error) {
 	if err != nil {
 		return Header{}, err
 	}
-	return Header{Type: "session", Version: e.version, ID: e.id, Cwd: e.cwd, Timestamp: e.timestamp, Modified: e.modified, path: e.path}, nil
+	return Header{Type: "session", Version: e.version, ID: e.id, Cwd: e.cwd, Name: e.name, Timestamp: e.timestamp, Modified: e.modified, path: e.path}, nil
 }
 
 // Path 返回会话文件的绝对路径，仅用于启动受管 Pi 进程。

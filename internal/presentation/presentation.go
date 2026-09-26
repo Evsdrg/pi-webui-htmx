@@ -25,12 +25,14 @@ import (
 type Renderer struct {
 	templates map[string]*template.Template
 	assets    map[string]asset
+	entryJS   []string
+	entryCSS  []string
 	mu        sync.RWMutex
 }
 
 // asset 是一份静态资源。
 type asset struct {
-	body []byte
+	path string
 	mime string
 }
 
@@ -41,7 +43,7 @@ type asset struct {
 //   - 静态资源取 dist/assets（Vite 构建产物，文件名带内容哈希）
 //
 // 拒绝在缺模板或缺构建产物时启动——不带半套 UI 跑。
-func LoadFromDir(dir string) (*Renderer, error) {
+func LoadFromDir(dir string, supported ...string) (*Renderer, error) {
 	if strings.TrimSpace(dir) == "" {
 		return nil, protocol.E("invalid_params", "未指定 UI 包目录")
 	}
@@ -59,6 +61,9 @@ func LoadFromDir(dir string) (*Renderer, error) {
 		return nil, err
 	}
 	if err := r.loadAssets(assetsDir); err != nil {
+		return nil, err
+	}
+	if err := r.loadManifest(dir, supported); err != nil {
 		return nil, err
 	}
 	return r, nil
@@ -123,11 +128,11 @@ func (r *Renderer) loadAssets(dir string) error {
 		if e.IsDir() {
 			continue
 		}
-		b, err := os.ReadFile(filepath.Join(dir, e.Name()))
-		if err != nil {
-			return protocol.E("pi_error", "读取构建产物失败: "+e.Name())
+		info, err := e.Info()
+		if err != nil || !info.Mode().IsRegular() || info.Size() > 16<<20 {
+			return protocol.E("pi_error", "构建产物不是受限普通文件: "+e.Name())
 		}
-		r.assets[e.Name()] = asset{body: b, mime: mimeFor(e.Name())}
+		r.assets[e.Name()] = asset{path: filepath.Join(dir, e.Name()), mime: mimeFor(e.Name())}
 	}
 	if len(r.assets) == 0 {
 		return protocol.E("not_found", "UI 包构建产物为空")
@@ -191,7 +196,12 @@ func (r *Renderer) Asset(name string) (body []byte, mime string, ok bool) {
 	if !exists {
 		return nil, "", false
 	}
-	return a.body, a.mime, true
+	// 资源按请求读取，由操作系统文件缓存复用，桥不常驻全部惰性库。
+	b, err := os.ReadFile(a.path)
+	if err != nil {
+		return nil, "", false
+	}
+	return b, a.mime, true
 }
 
 // EntryAssets 返回入口的 JS 与 CSS 真实文件名。
@@ -199,17 +209,7 @@ func (r *Renderer) Asset(name string) (body []byte, mime string, ok bool) {
 func (r *Renderer) EntryAssets() (js, css []string) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	for name := range r.assets {
-		switch {
-		case strings.HasPrefix(name, "app-") && strings.HasSuffix(name, ".js"):
-			js = append(js, name)
-		case strings.HasPrefix(name, "app-") && strings.HasSuffix(name, ".css"):
-			css = append(css, name)
-		}
-	}
-	sort.Strings(js)
-	sort.Strings(css)
-	return js, css
+	return append([]string(nil), r.entryJS...), append([]string(nil), r.entryCSS...)
 }
 
 // execute 渲染指定模板；失败视为内部错误，不回退部分输出。
@@ -244,6 +244,7 @@ type SessionRow struct {
 	ID       string
 	Title    string
 	Modified string
+	Cwd      string
 }
 
 // SessionsData 驱动侧栏模板。
@@ -256,17 +257,23 @@ type SessionsData struct {
 
 // RenderSessions 渲染侧栏会话列表。
 func (r *Renderer) RenderSessions(list sessions.Listing, selected string) (string, error) {
+	return r.RenderSessionsPage(list, selected, 0)
+}
+
+// RenderSessionsPage 保留翻页偏移，避免第二页之后重复加载同一页。
+func (r *Renderer) RenderSessionsPage(list sessions.Listing, selected string, offset int) (string, error) {
 	items := make([]SessionRow, 0, len(list.Items))
 	for _, h := range list.Items {
 		items = append(items, SessionRow{
 			ID:       h.ID,
+			Cwd:      h.Cwd,
 			Title:    sessionTitle(h),
 			Modified: h.Modified.Local().Format("01-02 15:04"),
 		})
 	}
 	return r.execute("sessions.html", SessionsData{
 		Items: items, Selected: selected, HasMore: list.HasMore,
-		NextOffset: len(list.Items),
+		NextOffset: offset + len(list.Items),
 	})
 }
 
@@ -323,10 +330,13 @@ func GroupTurns(entries []sessions.Entry) []Turn {
 				turns = append(turns, Turn{ID: e.ID, AssistantText: e.Text})
 				continue
 			}
+			if turns[current].AssistantText != "" && e.Text != "" {
+				turns[current].AssistantText += "\n\n"
+			}
 			turns[current].AssistantText += e.Text
 		case sessions.KindTool:
 			if current < 0 {
-				turns = append(turns, Turn{ID: e.ID, Steps: []Step{{Kind: "工具", Detail: e.Text}}})
+				turns = append(turns, Turn{ID: e.ID, HasProcess: true, Steps: []Step{{Kind: "工具", Detail: e.Text}}})
 				continue
 			}
 			turns[current].Steps = append(turns[current].Steps, Step{Kind: "工具", Detail: e.Text})

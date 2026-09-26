@@ -224,7 +224,12 @@ func (s *Server) serveUI(w http.ResponseWriter, r *http.Request) bool {
 	path := r.URL.Path
 	switch {
 	case path == "/":
-		html, err := s.ui.RenderShell("")
+		id := r.URL.Query().Get("session")
+		if id != "" && !sessions.ValidID(id) {
+			writeError(w, 400, protocol.E("invalid_params", "会话 ID 不合法"))
+			return true
+		}
+		html, err := s.ui.RenderShell(id)
 		if err != nil {
 			writeError(w, 500, err)
 			return true
@@ -262,7 +267,7 @@ func (s *Server) serveUI(w http.ResponseWriter, r *http.Request) bool {
 			writeError(w, 400, lerr)
 			return true
 		}
-		html, rerr := s.ui.RenderSessions(list, "")
+		html, rerr := s.ui.RenderSessionsPage(list, r.URL.Query().Get("selected"), offset)
 		if rerr != nil {
 			writeError(w, 500, rerr)
 			return true
@@ -306,11 +311,28 @@ func (s *Server) serveUI(w http.ResponseWriter, r *http.Request) bool {
 			writeError(w, 400, merr)
 			return true
 		}
-		models := toAnyMaps(out["models"])
+		models := presentation.ConfigModels(out)
 		html, rerr := s.ui.RenderModels(models, "")
 		if rerr != nil {
 			writeError(w, 500, rerr)
 			return true
+		}
+		writeHTML(w, html)
+		return true
+
+	case path == "/ui/diff":
+		diff, truncated, err := s.files.GitDiff(r.Context(), r.URL.Query().Get("path"), r.URL.Query().Get("staged") == "true", 512<<10)
+		if err != nil {
+			writeError(w, 400, err)
+			return true
+		}
+		html, err := s.ui.RenderDiff("", presentation.ParseDiff(diff))
+		if err != nil {
+			writeError(w, 500, err)
+			return true
+		}
+		if truncated {
+			html += "<p class=\"empty-note\">差异已达到预览上限。</p>"
 		}
 		writeHTML(w, html)
 		return true
@@ -491,6 +513,12 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.SetCookie(w, &http.Cookie{Name: cookieName, Value: exp + "." + s.signature(exp), HttpOnly: true, Secure: r.TLS != nil, SameSite: http.SameSiteStrictMode, Path: "/", Expires: expires, MaxAge: 8 * 60 * 60})
 		writeJSON(w, 200, map[string]any{"ok": true})
 		return
+	}
+	// 登录外壳和哈希资源不含用户数据；所有片段与 API 仍需认证。
+	if r.Method == http.MethodGet && (r.URL.Path == "/" || strings.HasPrefix(r.URL.Path, "/assets/")) {
+		if s.serveUI(w, r) {
+			return
+		}
 	}
 	if !s.authorized(r) {
 		s.metrics.AuthFailure()
@@ -970,9 +998,15 @@ func (s *Server) dispatchCommon(ctx context.Context, r protocol.Request, sink co
 		}
 		return w.Info(), nil
 	}
-	w, err := s.manager.Get(r.SessionID)
-	if err != nil {
-		return nil, err
+	// 文件、配置、终端和磁盘会话操作独立于 Pi 生命周期。
+	// 只有 session.* 命令要求显式启动过的工作进程。
+	var w *run.Worker
+	if strings.HasPrefix(r.Method, "session.") {
+		var err error
+		w, err = s.manager.Get(r.SessionID)
+		if err != nil {
+			return nil, err
+		}
 	}
 	switch r.Method {
 	case "session.state":
@@ -1367,6 +1401,13 @@ func (s *Server) dispatchCommon(ctx context.Context, r protocol.Request, sink co
 		}
 		if p.Cwd == "" {
 			return nil, protocol.E("invalid_params", "cwd 不能为空")
+		}
+		directory, err := s.files.Stat(p.Cwd)
+		if err != nil {
+			return nil, err
+		}
+		if !directory.IsDir {
+			return nil, protocol.E("invalid_params", "终端工作路径必须是目录")
 		}
 		term, err := s.terminals.Open(p.Cwd, p.Shell, p.Cols, p.Rows)
 		if err != nil {

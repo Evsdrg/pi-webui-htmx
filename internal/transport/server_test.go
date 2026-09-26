@@ -655,6 +655,9 @@ func Test能力清单与实际分发一致(t *testing.T) {
 		switch method {
 		case "session.subscribe", "session.state", "session.stop":
 			params = map[string]any{}
+		case "config.catalog", "config.packages":
+			// 此测试只核对分发，不应访问公网；具体查询另有隔离测试。
+			params = map[string]any{"invalidTestField": true}
 		}
 		send(map[string]any{"version": 1, "kind": "command", "requestId": reqID, "sessionId": id, "method": method, "params": params})
 		m := read(reqID)
@@ -756,12 +759,12 @@ func Test静态资源拒绝路径穿越(t *testing.T) {
 			t.Fatalf("%q 不应返回资源", bad)
 		}
 	}
-	// 未授权同样拿不到资源。
+	// 不存在的静态文件无论是否登录都为 404；真实静态资源用于登录页。
 	req := httptest.NewRequest(http.MethodGet, "/assets/app-abc.js", nil)
 	req.Host = "127.0.0.1:30142"
 	rec := httptest.NewRecorder()
 	s.ServeHTTP(rec, req)
-	if rec.Code != http.StatusUnauthorized {
-		t.Fatalf("未授权应 401，实际 %d", rec.Code)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("缺失资源应 404，实际 %d", rec.Code)
 	}
 }

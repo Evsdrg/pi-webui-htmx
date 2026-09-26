@@ -105,6 +105,7 @@ type Manager struct {
 	ctx       context.Context
 	cancel    context.CancelFunc
 	mu        sync.Mutex
+	startMu   sync.Mutex
 	terminals map[string]*Terminal
 	closed    bool
 }
@@ -130,6 +131,9 @@ func (m *Manager) Close() {
 	}
 	m.mu.Unlock()
 	m.cancel()
+	// 等待启动临界区结束，避免关闭返回后仍有尚未登记的进程。
+	m.startMu.Lock()
+	defer m.startMu.Unlock()
 	var wg sync.WaitGroup
 	for _, t := range terms {
 		wg.Add(1)
@@ -156,6 +160,8 @@ func (m *Manager) List() []Info {
 // Open 在授权目录内启动一个交互式 shell。
 // shell 来自本机配置，不接受网络请求指定可执行文件或参数。
 func (m *Manager) Open(cwd, shell string, cols, rows uint16) (*Terminal, error) {
+	m.startMu.Lock()
+	defer m.startMu.Unlock()
 	m.mu.Lock()
 	if m.closed {
 		m.mu.Unlock()
@@ -180,6 +186,10 @@ func (m *Manager) Open(cwd, shell string, cols, rows uint16) (*Terminal, error) 
 	if err != nil {
 		return nil, err
 	}
+	id := make([]byte, 12)
+	if _, err := rand.Read(id); err != nil {
+		return nil, err
+	}
 	cmd := exec.Command(resolved)
 	cmd.Dir = cwd
 	cmd.Env = append(os.Environ(), "TERM=xterm-256color")
@@ -190,11 +200,6 @@ func (m *Manager) Open(cwd, shell string, cols, rows uint16) (*Terminal, error) 
 	ptmx, err := pty.StartWithAttrs(cmd, &pty.Winsize{Cols: cols, Rows: rows}, attrs)
 	if err != nil {
 		return nil, protocol.E("pi_error", "无法启动终端")
-	}
-	id := make([]byte, 12)
-	if _, err := rand.Read(id); err != nil {
-		_ = ptmx.Close()
-		return nil, err
 	}
 	t := &Terminal{
 		id:      hex.EncodeToString(id),
@@ -207,27 +212,34 @@ func (m *Manager) Open(cwd, shell string, cols, rows uint16) (*Terminal, error) 
 		done:    make(chan struct{}),
 		subs:    map[*Subscription]struct{}{},
 	}
-	m.mu.Lock()
-	if m.closed {
-		m.mu.Unlock()
-		_ = t.Close(true)
-		return nil, protocol.E("worker_exited", "桥正在关闭")
-	}
-	m.terminals[t.id] = t
-	m.mu.Unlock()
-	go t.pump(m.cfg.ReadBuffer)
-	// 等待进程退出后统一收尾：摘除订阅并关闭 done，
-	// 让 close() 的分级停止有明确的完成信号。
+	// 无论自然退出、用户关闭还是启动期间取消，都只有此处负责 Wait。
 	go func() {
 		_ = cmd.Wait()
+		t.closed.Store(true)
+		_ = t.ptmx.Close()
+		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
 		t.mu.Lock()
 		for s := range t.subs {
 			delete(t.subs, s)
 			close(s.ch)
 		}
 		t.mu.Unlock()
+		m.mu.Lock()
+		if m.terminals[t.id] == t {
+			delete(m.terminals, t.id)
+		}
+		m.mu.Unlock()
 		close(t.done)
 	}()
+	m.mu.Lock()
+	if m.closed || t.closed.Load() {
+		m.mu.Unlock()
+		_ = t.Close(true)
+		return nil, protocol.E("worker_exited", "桥或终端已退出")
+	}
+	m.terminals[t.id] = t
+	m.mu.Unlock()
+	go t.pump(m.cfg.ReadBuffer)
 	return t, nil
 }
 
@@ -455,8 +467,15 @@ func (t *Terminal) Done() <-chan struct{} { return t.done }
 // Close 分级关闭终端：关 PTY → SIGTERM 进程组 → SIGKILL。
 func (t *Terminal) Close(force bool) error {
 	if t.closed.Swap(true) {
-		<-t.done
-		return nil
+		if force && t.cmd.Process != nil {
+			_ = syscall.Kill(-t.cmd.Process.Pid, syscall.SIGKILL)
+		}
+		select {
+		case <-t.done:
+			return nil
+		case <-time.After(2 * time.Second):
+			return protocol.E("timeout", "等待终端退出超时")
+		}
 	}
 	_ = t.ptmx.Close()
 	grace := 500 * time.Millisecond
