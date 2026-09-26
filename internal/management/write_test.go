@@ -24,7 +24,8 @@ func TestWriteModels原子写入(t *testing.T) {
 	dir := t.TempDir()
 	c := NewConfig(dir, DefaultLimits())
 	doc := map[string]any{"providers": map[string]any{
-		"p1": map[string]any{"api": "https://example.com/v1", "models": map[string]any{"m1": map[string]any{"name": "模型一"}}},
+		// models 是数组，与 Pi 的 ProviderConfigSchema 一致。
+		"p1": map[string]any{"api": "https://example.com/v1", "models": []any{map[string]any{"id": "m1", "name": "模型一"}}},
 	}}
 	if err := c.WriteModels(doc); err != nil {
 		t.Fatal(err)
@@ -54,9 +55,11 @@ func TestWriteModels拒绝损坏配置(t *testing.T) {
 		"缺少 providers":  {"nope": 1},
 		"providers 非对象": {"providers": []any{1, 2}},
 		"provider 非对象":  {"providers": map[string]any{"p": "字符串"}},
-		"api 非 http":    {"providers": map[string]any{"p": map[string]any{"api": "ftp://x"}}},
-		"模型 ID 为空":      {"providers": map[string]any{"p": map[string]any{"models": map[string]any{"": map[string]any{}}}}},
-		"models 非对象":    {"providers": map[string]any{"p": map[string]any{"models": []any{}}}},
+		// Pi 的 api 只是非空字符串，不要求 http(s)；桥不额外收紧。
+		"api 为空":     {"providers": map[string]any{"p": map[string]any{"api": ""}}},
+		"模型缺 id":     {"providers": map[string]any{"p": map[string]any{"models": []any{map[string]any{"name": "无 id"}}}}},
+		"models 非数组": {"providers": map[string]any{"p": map[string]any{"models": map[string]any{"m": map[string]any{}}}}},
+		"模型条目非对象":    {"providers": map[string]any{"p": map[string]any{"models": []any{"字符串"}}}},
 	}
 	for name, doc := range cases {
 		if err := c.WriteModels(doc); err == nil {

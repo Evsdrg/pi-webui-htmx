@@ -693,8 +693,10 @@ func Test配置写入拒绝损坏文档(t *testing.T) {
 	cfg := management.NewConfig(dir, management.DefaultLimits())
 	for name, doc := range map[string]map[string]any{
 		"缺 providers": {"x": 1},
-		"api 非法":      {"providers": map[string]any{"p": map[string]any{"api": "ftp://x"}}},
-		"模型 ID 为空":    {"providers": map[string]any{"p": map[string]any{"models": map[string]any{"": nil}}}},
+		// Pi 的 api 只是非空字符串，"openai-completions" 合法；只拦空串。
+		"api 为空":     {"providers": map[string]any{"p": map[string]any{"api": ""}}},
+		"模型缺 id":     {"providers": map[string]any{"p": map[string]any{"models": []any{map[string]any{"name": "无 id"}}}}},
+		"models 非数组": {"providers": map[string]any{"p": map[string]any{"models": map[string]any{"m": nil}}}},
 	} {
 		if err := cfg.WriteModels(doc); err == nil {
 			t.Fatalf("%s 应被拒绝", name)
