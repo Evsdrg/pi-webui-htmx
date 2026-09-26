@@ -1,0 +1,85 @@
+{
+  "$comment": "UI 包契约。桥在启动时读取本文件；字段缺失或版本不兼容时拒绝加载该 UI 包，而不是带着不确定的模板跑。",
+  "uiVersion": "0.1.0",
+  "protocolVersion": 1,
+  "piBaseline": "0.85.1",
+  "templates": {
+    "shell": "templates/shell.html",
+    "sessions": "templates/sessions.html",
+    "history": "templates/history.html",
+    "models": "templates/models.html",
+    "packages": "templates/packages.html",
+    "files": "templates/files.html",
+    "extStatus": "templates/extensions/status.html",
+    "extWidgets": "templates/extensions/widgets.html",
+    "extDialog": "templates/extensions/dialog.html",
+    "_comment": "所有相对路径均相对于 src/ 目录；下划线开头的键是说明，不是模板",
+    "diff": "templates/diff.html"
+  },
+  "assets": {
+    "app.css": "assets/app.css",
+    "app.js": "assets/app.js",
+    "htmx": "assets/vendor/htmx.min.js",
+    "markdown": "assets/lib/markdown.js",
+    "highlight": "assets/lib/highlight.js",
+    "katex": "assets/lib/katex.js",
+    "mermaid": "assets/lib/mermaid.js",
+    "terminal": "assets/lib/terminal.js"
+  },
+  "routes": {
+    "shell": "/",
+    "assets": "/assets/",
+    "sessions": "/ui/sessions",
+    "history": "/ui/sessions/{id}/history",
+    "models": "/ui/models",
+    "packages": "/ui/packages",
+    "files": "/ui/files",
+    "extStatus": "/ui/extensions/status",
+    "extWidgets": "/ui/extensions/widgets",
+    "extDialog": "/ui/extensions/dialog/{id}",
+    "diff": "/ui/diff"
+  },
+  "requiredMethods": [
+    "worker.list",
+    "session.start",
+    "session.state",
+    "session.prompt",
+    "session.abort",
+    "session.subscribe",
+    "session.unsubscribe",
+    "sessions.search",
+    "config.models",
+    "config.models.write",
+    "config.packages",
+    "session.ui_response"
+  ],
+  "extensionChannel": {
+    "fireAndForget": [
+      "setStatus",
+      "setWidget",
+      "notify",
+      "setTitle",
+      "set_editor_text"
+    ],
+    "needsResponse": [
+      "select",
+      "confirm",
+      "input",
+      "editor"
+    ],
+    "unsupportedByRpc": [
+      "setFooter",
+      "setHeader",
+      "setWorkingMessage",
+      "setWorkingVisible",
+      "setWorkingIndicator",
+      "setHiddenThinkingLabel",
+      "custom",
+      "onTerminalInput",
+      "addAutocompleteProvider",
+      "setEditorComponent",
+      "getEditorComponent",
+      "pasteToEditor"
+    ]
+  }
+}

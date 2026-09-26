@@ -1,0 +1,30 @@
+{{/* Git diff 与工具编辑结果：由桥服务端解析 unified diff 渲染。
+     不引 diff2html——它只发 CJS/ESM，而我们不引入构建步骤；
+     服务端渲染也更符合「htmx 换入片段」的模型。 */}}
+<div class="diff" data-session-id="{{.SessionID}}">
+  {{range .Files}}
+  <section class="diff-file">
+    <header class="diff-file-head">
+      <span class="diff-path">{{.Path}}</span>
+      {{if .IsNew}}<span class="tag tag-add">新增</span>{{end}}
+      {{if .IsDeleted}}<span class="tag tag-del">删除</span>{{end}}
+      {{if .IsBinary}}<span class="tag">二进制</span>{{end}}
+    </header>
+    {{if .IsBinary}}
+    <p class="muted">二进制文件，无文本差异</p>
+    {{else}}
+    <table class="diff-table">
+      {{range .Lines}}
+      <tr class="diff-line diff-{{.Kind}}">
+        <td class="diff-no diff-no-old">{{.OldNo}}</td>
+        <td class="diff-no diff-no-new">{{.NewNo}}</td>
+        <td class="diff-text">{{.Text}}</td>
+      </tr>
+      {{end}}
+    </table>
+    {{end}}
+  </section>
+  {{else}}
+  <p class="muted">没有差异</p>
+  {{end}}
+</div>

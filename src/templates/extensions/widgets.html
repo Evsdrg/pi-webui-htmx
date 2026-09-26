@@ -1,0 +1,12 @@
+{{/* 通用扩展小组件：setWidget 的字符串行。
+     Pi 的 RPC 模式只收字符串数组，工厂函数会被丢弃，所以这里只有行。 */}}
+{{if .Widgets}}
+<div class="ext-widgets">
+  {{range .Widgets}}
+  <section class="ext-widget" data-key="{{.Key}}" data-placement="{{.Placement}}">
+    {{if .Title}}<h4>{{.Title}}</h4>{{end}}
+    {{range .Lines}}<div class="ext-widget-line">{{.}}</div>{{end}}
+  </section>
+  {{end}}
+</div>
+{{end}}

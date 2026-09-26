@@ -1,0 +1,36 @@
+{{/* 通用扩展对话框：select/confirm/input/editor 四合一。
+     必须带 data-dialog-id，提交时调 session.ui_response。
+     三者语义互斥：cancelled 优先，其次 confirmed，其余用 value。 */}}
+<dialog class="ext-dialog" id="ext-dialog" data-dialog-id="{{.ID}}" data-method="{{.Method}}" open>
+  <form method="dialog" hx-post="/ui/sessions/{{.SessionID}}/ui-response" hx-swap="none"
+        hx-on::after-request="document.getElementById('ext-dialog')?.close()">
+    <input type="hidden" name="id" value="{{.ID}}">
+    <h3>{{.Title}}</h3>
+    {{if .Message}}<p class="ext-dialog-message">{{.Message}}</p>{{end}}
+
+    {{if eq .Method "select"}}
+    <ul class="ext-dialog-options">
+      {{range .Options}}
+      <li><label><input type="radio" name="value" value="{{.}}" required> {{.}}</label></li>
+      {{end}}
+    </ul>
+    {{else if eq .Method "confirm"}}
+    <div class="ext-dialog-actions">
+      <button type="submit" name="confirmed" value="true">确定</button>
+      <button type="submit" name="cancelled" value="true">取消</button>
+    </div>
+    {{else if eq .Method "editor"}}
+    <textarea name="value" rows="10" required>{{.Prefill}}</textarea>
+    <div class="ext-dialog-actions">
+      <button type="submit">提交</button>
+      <button type="submit" name="cancelled" value="true">取消</button>
+    </div>
+    {{else}}
+    <input type="text" name="value" value="{{.Prefill}}" placeholder="{{.Placeholder}}" required>
+    <div class="ext-dialog-actions">
+      <button type="submit">提交</button>
+      <button type="submit" name="cancelled" value="true">取消</button>
+    </div>
+    {{end}}
+  </form>
+</dialog>

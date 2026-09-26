@@ -1,0 +1,9 @@
+{{/* 回合过程：可折叠。调用方必须已确认 HasProcess，避免空折叠组占位。 */}}
+<details class="turn-process">
+  <summary>过程（{{len .Steps}} 步）</summary>
+  <ol>
+    {{range .Steps}}
+    <li><span class="step-kind">{{.Kind}}</span> <span class="step-detail">{{.Detail}}</span></li>
+    {{end}}
+  </ol>
+</details>
