@@ -38,6 +38,9 @@ type Files struct {
 
 	mu    sync.Mutex
 	roots map[string]*os.Root
+
+	indexMu    sync.Mutex
+	indexCache map[string]*indexEntry
 }
 
 // NewFiles 构造文件访问器。

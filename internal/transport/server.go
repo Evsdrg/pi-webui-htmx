@@ -55,7 +55,7 @@ var SupportedMethods = []string{
 	"config.models.discover", "config.models.test", "config.catalog",
 	"config.packages", "config.settings", "config.trust",
 	"terminal.open", "terminal.input", "terminal.resize", "terminal.close", "terminal.list",
-	"files.list", "files.stat", "files.read", "files.roots",
+	"files.list", "files.index", "files.stat", "files.read", "files.roots",
 	"git.status", "git.diff",
 }
 
@@ -1578,6 +1578,19 @@ func (s *Server) dispatchCommon(ctx context.Context, r protocol.Request, sink co
 			return nil, err
 		}
 		return map[string]any{"text": text, "truncated": truncated, "size": size}, nil
+	case "files.index":
+		var p struct {
+			Path  string `json:"path"`
+			Query string `json:"query"`
+		}
+		if err := protocol.Decode(r.Params, &p); err != nil {
+			return nil, err
+		}
+		result, err := s.files.Index(ctx, p.Path, p.Query)
+		if err != nil {
+			return nil, err
+		}
+		return result, nil
 	case "files.roots":
 		if err := empty(); err != nil {
 			return nil, err
