@@ -42,9 +42,96 @@ type Header struct {
 	Version   int       `json:"version"`
 	ID        string    `json:"id"`
 	Cwd       string    `json:"cwd"`
+	Name      string    `json:"name,omitempty"`
 	Timestamp string    `json:"timestamp"`
 	Modified  time.Time `json:"modified"`
 	path      string
+}
+
+// EntryKind 是投影后的条目类别。
+type EntryKind string
+
+const (
+	KindUser       EntryKind = "user"
+	KindAssistant  EntryKind = "assistant"
+	KindTool       EntryKind = "tool"
+	KindCompaction EntryKind = "compaction"
+	KindOther      EntryKind = "other"
+)
+
+// Entry 是一条历史条目的投影，只含渲染所需字段。
+// 原始 JSONL 记录保留在 Page.Entries 中，需要完整结构时用它。
+type Entry struct {
+	ID     string          `json:"id"`
+	Kind   EntryKind       `json:"kind"`
+	Text   string          `json:"text"`
+	Detail json.RawMessage `json:"detail,omitempty"`
+}
+
+// ProjectEntries 把原始条目投影成渲染友好的结构。
+// 解析失败的单条记录被跳过，不让一个坏条目毁掉整页。
+func ProjectEntries(raw []json.RawMessage) []Entry {
+	out := make([]Entry, 0, len(raw))
+	for _, r := range raw {
+		var item struct {
+			Type    string          `json:"type"`
+			ID      string          `json:"id"`
+			Summary string          `json:"summary"`
+			Message json.RawMessage `json:"message"`
+		}
+		if json.Unmarshal(r, &item) != nil || item.ID == "" {
+			continue
+		}
+		e := Entry{ID: item.ID, Detail: r}
+		switch item.Type {
+		case "message":
+			role, text := messageRoleAndText(item.Message)
+			switch role {
+			case "user":
+				e.Kind, e.Text = KindUser, text
+			case "assistant":
+				e.Kind, e.Text = KindAssistant, text
+			case "toolResult":
+				e.Kind, e.Text = KindTool, text
+			default:
+				e.Kind, e.Text = KindOther, text
+			}
+		case "compaction":
+			e.Kind, e.Text = KindCompaction, item.Summary
+		default:
+			e.Kind, e.Text = KindOther, item.Summary
+		}
+		out = append(out, e)
+	}
+	return out
+}
+
+// messageRoleAndText 取出消息的角色与纯文本。
+func messageRoleAndText(raw json.RawMessage) (string, string) {
+	if len(raw) == 0 {
+		return "", ""
+	}
+	var msg struct {
+		Role    string          `json:"role"`
+		Content json.RawMessage `json:"content"`
+		Command string          `json:"command"`
+		Output  string          `json:"output"`
+	}
+	if json.Unmarshal(raw, &msg) != nil {
+		return "", ""
+	}
+	role := msg.Role
+	if role == "toolResult" || (role == "" && msg.Command != "") {
+		role = "toolResult"
+	}
+	text := flattenContent(msg.Content)
+	if text == "" {
+		text = msg.Command
+	}
+	if text == "" {
+		text = msg.Output
+	}
+	return role, text
 }
 
 // Page 是一页按祖先到后代排序的历史记录。

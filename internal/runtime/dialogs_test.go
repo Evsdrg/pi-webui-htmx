@@ -215,3 +215,73 @@ func (r *recordingSink) WorkerStarted()  { r.started.Add(1) }
 func (r *recordingSink) WorkerReaped()   { r.reaped.Add(1) }
 func (r *recordingSink) WorkerExited()   { r.exited.Add(1) }
 func (r *recordingSink) EventDropped()   { r.dropped.Add(1) }
+
+func Test无需回执的扩展方法不登记为对话(t *testing.T) {
+	// setStatus/setWidget/notify/setTitle/set_editor_text 在 Pi RPC 模式是
+	// fire-and-forget，一旦被当成待回复对话，worker 会永久停在 waiting_input
+	// 并挡住空闲回收。
+	for _, method := range []string{"setStatus", "setWidget", "notify", "setTitle", "set_editor_text"} {
+		t.Run(method, func(t *testing.T) {
+			m, cwd := newTestManager(t)
+			ctx := context.Background()
+			w, err := m.Start(ctx, "", cwd)
+			if err != nil {
+				t.Fatal(err)
+			}
+			sub, _, err := w.Subscribe()
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer sub.Close()
+			// 直接走事件入口，模拟 Pi 推来的帧。
+			w.EventForTest(json.RawMessage(`{"type":"extension_ui_request","id":"x-` + method +
+				`","method":"` + method + `","statusKey":"k","statusText":"t"}`))
+			if len(w.PendingDialogs()) != 0 {
+				t.Fatalf("%s 不应登记为待回复对话", method)
+			}
+			if w.Info().Status == "waiting_input" {
+				t.Fatalf("%s 不应让 worker 进入 waiting_input", method)
+			}
+			if w.Info().Busy {
+				t.Fatalf("%s 不应让 worker 判定为忙", method)
+			}
+		})
+	}
+}
+
+func Test需要回执的扩展方法仍登记为对话(t *testing.T) {
+	for _, method := range []string{"select", "confirm", "input", "editor"} {
+		t.Run(method, func(t *testing.T) {
+			m, cwd := newTestManager(t)
+			ctx := context.Background()
+			w, err := m.Start(ctx, "", cwd)
+			if err != nil {
+				t.Fatal(err)
+			}
+			sub, _, err := w.Subscribe()
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer sub.Close()
+			w.EventForTest(json.RawMessage(`{"type":"extension_ui_request","id":"d-` + method +
+				`","method":"` + method + `","title":"确认？"}`))
+			ids := w.PendingDialogs()
+			if len(ids) != 1 || ids[0] != "d-"+method {
+				t.Fatalf("%s 应登记为待回复对话: %v", method, ids)
+			}
+			if !w.Info().Busy {
+				t.Fatalf("%s 应让 worker 判定为忙", method)
+			}
+			if w.Info().Status != "waiting_input" {
+				t.Fatalf("%s 应进入 waiting_input，实际 %s", method, w.Info().Status)
+			}
+			// 回复后立即可用。
+			if err := w.UIResponse(ctx, ids[0], nil, nil, true); err != nil {
+				t.Fatal(err)
+			}
+			if len(w.PendingDialogs()) != 0 {
+				t.Fatal("回复后不应残留")
+			}
+		})
+	}
+}

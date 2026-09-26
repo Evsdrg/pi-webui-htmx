@@ -1,0 +1,39 @@
+{{/* 历史片段：一次返回若干个完整回合。
+     整轮渲染是刻意设计—— Pi Web 按单条消息切片，往回翻页时
+     会把已在屏幕上的 assistant 重新折进 ProcessDetailsGroup，
+     导致视口内容被顶走。这里一个片段就是若干完整回合，
+     插入位置永远在整轮边界上。 */}}
+{{range .Turns}}
+<article class="turn" data-turn-id="{{.ID}}">
+  <div class="turn-user">
+    <span class="role">你</span>
+    <div class="bubble">{{.UserText}}</div>
+  </div>
+  {{if .HasProcess}}
+  <details class="turn-process">
+    <summary>过程（{{len .Steps}} 步）</summary>
+    <ol>
+      {{range .Steps}}
+      <li><span class="step-kind">{{.Kind}}</span> <span class="step-detail">{{.Detail}}</span></li>
+      {{end}}
+    </ol>
+  </details>
+  {{end}}
+  {{if .AssistantText}}
+  <div class="turn-assistant">
+    <span class="role">Pi</span>
+    <div class="bubble markdown">{{.AssistantText}}</div>
+  </div>
+  {{end}}
+</article>
+{{else}}
+<p class="muted">这一页没有更早的会话</p>
+{{end}}
+{{if .HasMore}}
+<div class="older"
+     hx-get="/ui/sessions/{{.SessionID}}/history?before={{.OldestEntryID}}&leafId={{.LeafID}}"
+     hx-trigger="revealed"
+     hx-swap="afterend">
+  <p class="muted">加载更早的会话…</p>
+</div>
+{{end}}

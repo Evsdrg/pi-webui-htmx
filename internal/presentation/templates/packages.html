@@ -1,0 +1,21 @@
+{{/* 已安装资源清单：只读，不含安装/更新操作 */}}
+<table class="packages">
+  <thead><tr><th>名称</th><th>来源</th><th>已安装</th><th>最新</th><th>状态</th></tr></thead>
+  <tbody>
+  {{range .Packages}}
+  <tr>
+    <td>{{.Name}}</td>
+    <td class="muted">{{.Source}}</td>
+    <td>{{.Version}}</td>
+    <td>{{.Latest}}</td>
+    <td>
+      {{if .Disabled}}<span class="tag">已禁用</span>{{end}}
+      {{if .HasUpdate}}<span class="tag tag-warn">有新版本</span>{{end}}
+      {{if .Error}}<span class="tag tag-err">{{.Error}}</span>{{end}}
+    </td>
+  </tr>
+  {{else}}
+  <tr><td colspan="5" class="muted">没有已安装的插件或技能</td></tr>
+  {{end}}
+  </tbody>
+</table>

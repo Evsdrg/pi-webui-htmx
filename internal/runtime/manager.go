@@ -457,8 +457,11 @@ func (w *Worker) event(raw json.RawMessage) {
 		w.mu.Unlock()
 		return
 	}
-	// 扩展对话需要人工输入，登记为等待中；worker 不得因此被判定为空闲回收。
-	if ev.Type == "extension_ui_request" {
+	// 扩展 UI 分两类：需要人工输入的才登记为等待中，
+	// 无需回执的（setStatus/setWidget/notify/setTitle/set_editor_text）
+	// 必须直接转发，否则它们会被当成待回复对话，
+	// 让 worker 永久停在 waiting_input 并挡住空闲回收。
+	if ev.Type == "extension_ui_request" && needsDialogResponse(ev.Method) {
 		if _, tracked := w.pendingDialogs[ev.ID]; !tracked {
 			if len(w.pendingDialogs) >= w.cfg.MaxDialogs {
 				w.publishLocked("pi.event", raw)
@@ -474,6 +477,19 @@ func (w *Worker) event(raw json.RawMessage) {
 	}
 	w.publishLocked("pi.event", raw)
 	w.mu.Unlock()
+}
+
+// dialogMethods 是需要客户端回复的扩展 UI 方法。
+// 与 Pi RPC 模式的 createExtensionUIContext 一致：
+// select/confirm/input/editor 会阻塞等结果，其余都是 fire-and-forget。
+var dialogMethods = map[string]struct{}{
+	"select": {}, "confirm": {}, "input": {}, "editor": {},
+}
+
+// needsDialogResponse 判断某个扩展 UI 方法是否期待回执。
+func needsDialogResponse(method string) bool {
+	_, ok := dialogMethods[method]
+	return ok
 }
 
 // call 向 Pi 发送命令。mutation 标记有副作用的命令，结果不明时置为待确认。
@@ -759,3 +775,6 @@ func launch(cfg Config, cwd, file string) (*Worker, error) {
 
 // nowUTC 返回当前 UTC 时间，集中一处便于测试替换。
 func nowUTC() time.Time { return time.Now().UTC() }
+
+// EventForTest 供测试直接注入一条 Pi 事件，验证扩展 UI 分类逻辑。
+func (w *Worker) EventForTest(raw json.RawMessage) { w.event(raw) }
