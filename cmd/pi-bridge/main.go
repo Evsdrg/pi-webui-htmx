@@ -18,6 +18,7 @@ import (
 
 	"pi-bridge-go/internal/management"
 	"pi-bridge-go/internal/observe"
+	"pi-bridge-go/internal/presentation"
 	run "pi-bridge-go/internal/runtime"
 	"pi-bridge-go/internal/sessions"
 	"pi-bridge-go/internal/storage"
@@ -48,6 +49,7 @@ func serve() error {
 	stateDir := flag.String("state-dir", filepath.Join(cache, "pi-bridge-go"), "桥自有的运行目录")
 	agentDir := flag.String("agent-dir", "", "Pi 配置目录，缺省使用隔离的 state-dir/agent")
 	extensions := flag.Bool("extensions", false, "加载 Pi 已配置资源；项目信任仍保持拒绝")
+	uiDir := flag.String("ui-dir", "", "pi-webui-htmx 检出目录；为空则禁用 UI 层，只提供 JSON/WS API")
 	idle := flag.Duration("idle-timeout", 2*time.Minute, "空闲工作进程的回收时间")
 	maxWorkers := flag.Int("max-workers", 4, "活跃工作进程上限")
 	maxTerminals := flag.Int("max-terminals", 4, "并发终端上限")
@@ -146,8 +148,20 @@ func serve() error {
 	if err != nil {
 		return err
 	}
+	var ui *presentation.Renderer
+	if *uiDir != "" {
+		rendered, err := presentation.LoadFromDir(*uiDir)
+		if err != nil {
+			return fmt.Errorf("加载 UI 包失败：%w", err)
+		}
+		ui = rendered
+		slog.Info("已加载 UI 包", "目录", *uiDir, "模板数", len(ui.TemplateNames()))
+	} else {
+		slog.Info("未指定 --ui-dir，UI 层禁用")
+	}
+
 	piConfig := management.NewConfig(*agentDir, management.DefaultLimits())
-	handler := transport.New(manager, store, terminals, files, piConfig, management.DefaultDiscoveryLimits(), exportDir, receipts, metrics, token, ln.Addr().String())
+	handler := transport.New(manager, store, terminals, files, piConfig, management.DefaultDiscoveryLimits(), exportDir, receipts, metrics, token, ln.Addr().String(), ui)
 
 	// 云端隧道：本地主动外连，relay 只搬运字节。
 	var tunnelClient *tunnel.Client

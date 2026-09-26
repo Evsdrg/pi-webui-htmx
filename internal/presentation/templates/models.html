@@ -1,8 +1,0 @@
-{{/* 模型选择器 */}}
-{{range .Models}}
-<option value="{{.Provider}}/{{.ID}}" {{if eq $.Current (printf "%s/%s" .Provider .ID)}}selected{{end}}>
-  {{.Name}}（{{.Provider}}）
-</option>
-{{else}}
-<option value="">没有可用模型</option>
-{{end}}

@@ -4,9 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -17,6 +19,7 @@ import (
 type fakePipe struct {
 	mu      sync.Mutex
 	written []byte
+	order   []string
 	pending []byte
 	closed  bool
 	ready   chan struct{}
@@ -25,6 +28,17 @@ type fakePipe struct {
 }
 
 func newFakePipe() *fakePipe { return &fakePipe{ready: make(chan struct{}, 1)} }
+
+// firstLine 返回已写入的第一行，用于验证写入顺序。
+// 记录发生在 gate 放行之后、追加到 written 之前，因此能反映真实落盘顺序。
+func (f *fakePipe) firstLine() string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(f.order) == 0 {
+		return ""
+	}
+	return f.order[0]
+}
 
 // blockWrites 让后续写入阻塞，直到 releaseWrites 被调用。
 func (f *fakePipe) blockWrites() {
@@ -59,6 +73,7 @@ func (f *fakePipe) Write(p []byte) (int, error) {
 		return 0, io.ErrClosedPipe
 	}
 	f.mu.Lock()
+	f.order = append(f.order, string(p))
 	f.written = append(f.written, p...)
 	f.mu.Unlock()
 	return len(p), nil
@@ -226,30 +241,35 @@ func TestCall连接关闭时结果未知(t *testing.T) {
 	}
 }
 
-func TestNotify在背压下不阻塞读取(t *testing.T) {
+func TestNotify在背压下不挂起调用方(t *testing.T) {
+	// 控制帧队列有界（256）。写盘被卡住时，前 256 条入队，
+	// 之后的调用必须立即返回 ErrLimit 而不是无限阻塞。
 	c, in, _ := newPair(t, nil)
 	in.blockWrites()
 	t.Cleanup(in.releaseWrites)
 	returned := make(chan struct{})
+	var limitErrs atomic.Int64
 	go func() {
 		defer close(returned)
-		for i := 0; i < 200; i++ {
-			c.Notify(map[string]any{"type": "extension_ui_response", "id": "x", "cancelled": true})
+		for i := 0; i < 400; i++ {
+			if err := c.Notify(map[string]any{"type": "extension_ui_response", "id": "x", "cancelled": true}); err != nil {
+				limitErrs.Add(1)
+			}
 		}
 	}()
 	select {
 	case <-returned:
 	case <-time.After(3 * time.Second):
-		t.Fatal("Notify 在写入背压下仍然返回，不能挂起调用方")
+		t.Fatal("Notify 在写入背压下仍返回，不能挂起调用方")
 	}
-	// 队列溢出必须让连接失败并唤醒等待者，而不是无界堆积。
+	if limitErrs.Load() == 0 {
+		t.Fatal("队列满时应返回错误，让调用方知道没送达")
+	}
+	// 关键：控制帧队列溢出不得杀死连接，会话还要继续。
 	select {
 	case <-c.Done():
-	case <-time.After(3 * time.Second):
-		t.Fatal("Notify 队列溢出后应关闭连接")
-	}
-	if _, err := c.Call(context.Background(), "get_state", nil); !errors.Is(err, ErrClosed) {
-		t.Fatalf("连接失败后调用应报 ErrClosed，实际 %v", err)
+		t.Fatal("控制帧队列溢出不应关闭连接")
+	case <-time.After(200 * time.Millisecond):
 	}
 }
 
@@ -330,4 +350,78 @@ func (c *Client) pendingCount() int {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return len(c.pending)
+}
+
+func TestNotify在写缓冲满时不杀死连接(t *testing.T) {
+	// Notify 用于取消待回复对话，必须送达。曾经的 default 分支会在
+	// 写缓冲满（64）时调 fail() 关闭 stdin/stdout，把整个 worker 连接杀掉。
+	fp := newFakePipe()
+	fp.blockWrites() // 写协程取走后也卡在真正写盘上
+	c := New(fp, fp, 1<<20, nil)
+	defer c.Close()
+
+	// 控制帧队列容量 256，填满它。
+	for i := 0; i < 256; i++ {
+		if err := c.Notify(map[string]any{"type": "extension_ui_response", "id": fmt.Sprintf("d-%d", i)}); err != nil {
+			t.Fatalf("第 %d 条 Notify 应成功入队: %v", i, err)
+		}
+	}
+	// 连接必须仍然存活：pending 未被清空、done 未关闭。
+	if c.pendingCount() != 0 {
+		t.Fatal("Notify 不应占用 pending")
+	}
+	select {
+	case <-c.done:
+		t.Fatal("写缓冲满不应关闭连接")
+	default:
+	}
+	// 溢出时返回明确错误，但不关闭连接。
+	if err := c.Notify(map[string]any{"type": "extension_ui_response", "id": "overflow"}); !errors.Is(err, ErrLimit) {
+		t.Fatalf("队列满应返回 ErrLimit，实际 %v", err)
+	}
+	select {
+	case <-c.Done():
+		t.Fatal("控制帧队列溢出不得关闭连接")
+	default:
+	}
+	// 关闭后必须返回 ErrClosed，不能无限阻塞。
+	c.Close()
+	if err := c.Notify(map[string]any{"type": "extension_ui_response", "id": "after-close"}); !errors.Is(err, ErrClosed) {
+		t.Fatalf("关闭后应返回 ErrClosed，实际 %v", err)
+	}
+}
+
+func Test控制帧队列独立于命令队列(t *testing.T) {
+	// 命令写缓冲 64、控制帧缓冲 256，两者必须独立。
+	// 命令缓冲满时控制帧仍要能入队——否则卡住的长命令会让
+	// 取消对话、abort 全部失效，Pi 侧继续等待人工输入。
+	c, in, _ := newPair(t, nil)
+	in.blockWrites()
+	t.Cleanup(in.releaseWrites)
+
+	// 用一条已入队的命令占住写协程，再把命令缓冲填满。
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+	go func() { _, _ = c.Call(ctx, "get_state", nil) }()
+	time.Sleep(50 * time.Millisecond)
+	for i := 0; i < 64; i++ {
+		go func() { _, _ = c.Call(ctx, "get_state", nil) }()
+	}
+	time.Sleep(100 * time.Millisecond)
+
+	// 命令通道已满，控制帧必须仍可入队。
+	for i := 0; i < 256; i++ {
+		if err := c.Notify(map[string]any{"type": "extension_ui_response", "id": fmt.Sprintf("d-%d", i), "cancelled": true}); err != nil {
+			t.Fatalf("第 %d 条控制帧应入队: %v", i, err)
+		}
+	}
+	// 超过控制帧容量才报错，且不杀连接。
+	if err := c.Notify(map[string]any{"type": "extension_ui_response", "id": "overflow"}); !errors.Is(err, ErrLimit) {
+		t.Fatalf("超出容量应返回 ErrLimit，实际 %v", err)
+	}
+	select {
+	case <-c.Done():
+		t.Fatal("队列满不得关闭连接")
+	default:
+	}
 }

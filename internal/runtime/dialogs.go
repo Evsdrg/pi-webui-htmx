@@ -53,7 +53,10 @@ func (w *Worker) UIResponse(ctx context.Context, id string, value *string, confi
 	default:
 		return protocol.E("invalid_params", "必须提供 value、confirmed 或 cancelled 之一")
 	}
-	w.client.Notify(payload)
+	// 回执必须送达：Notify 现在返回错误，连接已断时不再静默丢弃。
+	if err := w.client.Notify(payload); err != nil {
+		return protocol.E("worker_exited", "无法送达扩展回执：工作进程连接已断开")
+	}
 	w.mu.Lock()
 	w.lastActivity = nowUTC()
 	w.mu.Unlock()
@@ -72,7 +75,8 @@ func (w *Worker) CancelPendingDialogs() {
 	w.waitingInput = false
 	w.mu.Unlock()
 	for _, id := range ids {
-		w.client.Notify(map[string]any{"type": "extension_ui_response", "id": id, "cancelled": true})
+		// 连接已断时无需也无法回执，忽略错误即可。
+		_ = w.client.Notify(map[string]any{"type": "extension_ui_response", "id": id, "cancelled": true})
 	}
 }
 

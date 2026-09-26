@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"path/filepath"
 	"strconv"
@@ -19,6 +20,7 @@ import (
 	"github.com/coder/websocket"
 	"pi-bridge-go/internal/management"
 	"pi-bridge-go/internal/observe"
+	"pi-bridge-go/internal/presentation"
 	"pi-bridge-go/internal/protocol"
 	run "pi-bridge-go/internal/runtime"
 	"pi-bridge-go/internal/sessions"
@@ -64,6 +66,7 @@ type Server struct {
 	piConfig     *management.Config
 	discovery    management.DiscoveryLimits
 	exportDir    string
+	ui           *presentation.Renderer
 	receipts     *storage.Receipts
 	metrics      *observe.Metrics
 	token, host  string
@@ -73,7 +76,7 @@ type Server struct {
 }
 
 // New 构造入口；token 至少 32 字符，host 为监听地址上的主机名。
-func New(manager *run.Manager, store *sessions.Store, terminals *terminal.Manager, files *workspace.Files, piConfig *management.Config, discovery management.DiscoveryLimits, exportDir string, receipts *storage.Receipts, metrics *observe.Metrics, token, host string) *Server {
+func New(manager *run.Manager, store *sessions.Store, terminals *terminal.Manager, files *workspace.Files, piConfig *management.Config, discovery management.DiscoveryLimits, exportDir string, receipts *storage.Receipts, metrics *observe.Metrics, token, host string, ui *presentation.Renderer) *Server {
 	return &Server{
 		manager:     manager,
 		store:       store,
@@ -82,6 +85,7 @@ func New(manager *run.Manager, store *sessions.Store, terminals *terminal.Manage
 		piConfig:    piConfig,
 		discovery:   discovery,
 		exportDir:   exportDir,
+		ui:          ui,
 		receipts:    receipts,
 		metrics:     metrics,
 		token:       token,
@@ -133,6 +137,163 @@ func (s *Server) authorized(r *http.Request) bool {
 }
 
 // ServeHTTP 统一做 Host、Origin、鉴权与限额检查，再分发到具体端点。
+// serveUI 处理 UI 层请求：外壳、静态资源与 htmx 片段。
+// 返回 true 表示已处理，调用方应直接返回。
+//
+// 与 JSON API 的分工：
+//   - 这里返回 HTML 片段，htmx 直接换入 DOM
+//   - 流式对话不走这里，走 WS（见 wsHandler）
+func (s *Server) serveUI(w http.ResponseWriter, r *http.Request) bool {
+	if s.ui == nil {
+		// 未配置 UI 包时 UI 路由整体不存在，回 404 让调用方继续。
+		if r.URL.Path == "/" || strings.HasPrefix(r.URL.Path, "/assets/") || strings.HasPrefix(r.URL.Path, "/ui/") {
+			writeError(w, 404, protocol.E("not_found", "未配置 UI 包，使用 --ui-dir 指定 pi-webui-htmx 目录"))
+			return true
+		}
+		return false
+	}
+
+	path := r.URL.Path
+	switch {
+	case path == "/":
+		html, err := s.ui.RenderShell("")
+		if err != nil {
+			writeError(w, 500, err)
+			return true
+		}
+		writeHTML(w, html)
+		return true
+
+	case strings.HasPrefix(path, "/assets/"):
+		name := strings.TrimPrefix(path, "/assets/")
+		body, mime, ok := s.ui.Asset(name)
+		if !ok {
+			writeError(w, 404, protocol.E("not_found", "资源不存在"))
+			return true
+		}
+		// 文件名带内容哈希，可长期不可变缓存。
+		w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+		w.Header().Set("Content-Type", mime)
+		w.WriteHeader(200)
+		_, _ = w.Write(body)
+		return true
+
+	case path == "/ui/sessions":
+		offset, err := number(r, "offset", 0)
+		if err != nil {
+			writeError(w, 400, err)
+			return true
+		}
+		limit, err := number(r, "limit", 50)
+		if err != nil {
+			writeError(w, 400, err)
+			return true
+		}
+		list, lerr := s.store.List(r.Context(), offset, limit)
+		if lerr != nil {
+			writeError(w, 400, lerr)
+			return true
+		}
+		html, rerr := s.ui.RenderSessions(list, "")
+		if rerr != nil {
+			writeError(w, 500, rerr)
+			return true
+		}
+		writeHTML(w, html)
+		return true
+
+	case strings.HasPrefix(path, "/ui/sessions/") && strings.HasSuffix(path, "/history"):
+		id := strings.TrimSuffix(strings.TrimPrefix(path, "/ui/sessions/"), "/history")
+		if !sessions.ValidID(id) {
+			writeError(w, 400, protocol.E("invalid_params", "会话 ID 不合法"))
+			return true
+		}
+		before := r.URL.Query().Get("before")
+		leaf := r.URL.Query().Get("leafId")
+		// 滚动模式由桥下发，模板不写滚动逻辑。
+		// prepend：内容加在视口上方，保持离底部距离；
+		// append：首屏或翻到底，滚到新片段。
+		// 先设响应头再处理，失败时前端也能看到模式。
+		if before != "" || leaf != "" {
+			w.Header().Set("X-Scroll-Mode", "prepend")
+		} else {
+			w.Header().Set("X-Scroll-Mode", "append")
+		}
+		page, perr := s.store.History(r.Context(), id, leaf, before, 50)
+		if perr != nil {
+			writeError(w, 400, perr)
+			return true
+		}
+		html, herr := s.ui.RenderHistory(id, page)
+		if herr != nil {
+			writeError(w, 500, herr)
+			return true
+		}
+		writeHTML(w, html)
+		return true
+
+	case path == "/ui/models":
+		out, merr := s.piConfig.Models()
+		if merr != nil {
+			writeError(w, 400, merr)
+			return true
+		}
+		models := toAnyMaps(out["models"])
+		html, rerr := s.ui.RenderModels(models, "")
+		if rerr != nil {
+			writeError(w, 500, rerr)
+			return true
+		}
+		writeHTML(w, html)
+		return true
+
+	case path == "/ui/packages":
+		pkgs, perr := s.piConfig.Packages(r.Context(), s.discovery)
+		if perr != nil {
+			writeError(w, 400, perr)
+			return true
+		}
+		html, rerr := s.ui.RenderPackages(toAnyMaps(pkgs))
+		if rerr != nil {
+			writeError(w, 500, rerr)
+			return true
+		}
+		writeHTML(w, html)
+		return true
+
+	case path == "/ui/files":
+		root := r.URL.Query().Get("path")
+		if root == "" {
+			roots := s.files.Roots()
+			if len(roots) > 0 {
+				root = roots[0]
+			}
+		}
+		entries, truncated, ferr := s.files.List(root)
+		if ferr != nil {
+			writeError(w, 400, ferr)
+			return true
+		}
+		html, rerr := s.ui.RenderFiles(root, toAnyMaps(entries), truncated)
+		if rerr != nil {
+			writeError(w, 500, rerr)
+			return true
+		}
+		writeHTML(w, html)
+		return true
+
+	case path == "/ui/extensions/status":
+		html, rerr := s.ui.RenderExtensionStatus(nil)
+		if rerr != nil {
+			writeError(w, 500, rerr)
+			return true
+		}
+		writeHTML(w, html)
+		return true
+	}
+	return false
+}
+
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("X-Content-Type-Options", "nosniff")
@@ -170,6 +331,10 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	if r.Method != http.MethodGet {
 		writeError(w, 405, protocol.E("invalid_request", "请求方法不被允许"))
+		return
+	}
+	// ---- UI 层：htmx 片段由桥渲染，静态资源来自 UI 包构建产物 ----
+	if s.serveUI(w, r) {
 		return
 	}
 	switch r.URL.Path {
@@ -275,6 +440,27 @@ func number(r *http.Request, key string, fallback int) (int, error) {
 }
 
 // writeJSON 输出 JSON 响应。
+// toAnyMaps 把任意结构体切片转成 []map[string]any，
+// 让呈现层用统一的字段读取方式，不必为每种返回类型写转换。
+func toAnyMaps(v any) []map[string]any {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return nil
+	}
+	var out []map[string]any
+	if json.Unmarshal(b, &out) != nil {
+		return nil
+	}
+	return out
+}
+
+// writeHTML 输出 HTML 片段。htmx 靠 Content-Type 决定如何处理响应。
+func writeHTML(w http.ResponseWriter, html string) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.WriteHeader(200)
+	_, _ = io.WriteString(w, html)
+}
+
 func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)

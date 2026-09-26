@@ -467,7 +467,7 @@ func (w *Worker) event(raw json.RawMessage) {
 				w.publishLocked("pi.event", raw)
 				w.mu.Unlock()
 				// 超出上限时明确取消，避免 Pi 永久挂起。
-				w.client.Notify(map[string]any{"type": "extension_ui_response", "id": ev.ID, "cancelled": true})
+				_ = w.client.Notify(map[string]any{"type": "extension_ui_response", "id": ev.ID, "cancelled": true})
 				return
 			}
 			w.pendingDialogs[ev.ID] = struct{}{}
@@ -634,7 +634,7 @@ func (w *Worker) stop(force, idleOnly bool) error {
 	w.publishLocked("bridge.worker_state", w.infoLocked())
 	w.mu.Unlock()
 	for _, id := range dialogs {
-		w.client.Notify(map[string]any{"type": "extension_ui_response", "id": id, "cancelled": true})
+		_ = w.client.Notify(map[string]any{"type": "extension_ui_response", "id": id, "cancelled": true})
 	}
 	w.client.CloseInput()
 	select {

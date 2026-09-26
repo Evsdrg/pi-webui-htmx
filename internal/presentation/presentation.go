@@ -1,11 +1,17 @@
 // Package presentation 把桥的数据渲染成 HTML 片段，供 htmx 直接换入 DOM。
+//
 // 分工：请求-响应类界面走这里（服务器渲染片段），
 // 流式对话走 WS + JSON + 少量客户端脚本。
+//
+// 模板与静态资源的唯一归属是 pi-webui-htmx 仓；桥不内嵌副本，
+// 从 --ui-dir 加载。UI 改样子不需要动桥。
 package presentation
 
 import (
-	"embed"
 	"html/template"
+	"os"
+	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -14,60 +20,139 @@ import (
 	"pi-bridge-go/internal/sessions"
 )
 
-//go:embed templates/*.html assets/*
-var files embed.FS
-
-// Renderer 持有解析后的模板与静态资源。
-// 模板在启动时解析一次，运行期只执行，避免每次请求重新解析。
+// Renderer 持有解析后的模板与构建产物。
+// 模板在启动时解析一次，运行期只执行。
 type Renderer struct {
 	templates map[string]*template.Template
-	assets    map[string][]byte
+	assets    map[string]asset
 	mu        sync.RWMutex
 }
 
-// New 解析全部模板并加载静态资源。
-func New() (*Renderer, error) {
-	entries, err := files.ReadDir("templates")
-	if err != nil {
+// asset 是一份静态资源。
+type asset struct {
+	body []byte
+	mime string
+}
+
+// LoadFromDir 从 UI 包目录加载。
+//
+// dir 指向 pi-webui-htmx 检出：
+//   - 模板取 src/templates（htmx 片段，Go html/template 语法）
+//   - 静态资源取 dist/assets（Vite 构建产物，文件名带内容哈希）
+//
+// 拒绝在缺模板或缺构建产物时启动——不带半套 UI 跑。
+func LoadFromDir(dir string) (*Renderer, error) {
+	if strings.TrimSpace(dir) == "" {
+		return nil, protocol.E("invalid_params", "未指定 UI 包目录")
+	}
+	templatesDir := filepath.Join(dir, "src", "templates")
+	assetsDir := filepath.Join(dir, "dist", "assets")
+	if _, err := os.Stat(templatesDir); err != nil {
+		return nil, protocol.E("not_found", "UI 包缺少 src/templates")
+	}
+	if _, err := os.Stat(assetsDir); err != nil {
+		return nil, protocol.E("not_found", "UI 包缺少 dist/assets，请先执行 pnpm build")
+	}
+
+	r := &Renderer{templates: map[string]*template.Template{}, assets: map[string]asset{}}
+	if err := r.loadTemplates(templatesDir); err != nil {
 		return nil, err
 	}
-	r := &Renderer{templates: map[string]*template.Template{}, assets: map[string][]byte{}}
-	for _, e := range entries {
-		if e.IsDir() || !strings.HasSuffix(e.Name(), ".html") {
-			continue
-		}
-		b, err := files.ReadFile("templates/" + e.Name())
-		if err != nil {
-			return nil, err
-		}
-		// FuncMap 提供少量格式化助手；全部输出仍走 html/template 的上下文转义。
-		tpl, err := template.New(e.Name()).Funcs(funcMap()).Parse(string(b))
-		if err != nil {
-			return nil, err
-		}
-		r.templates[e.Name()] = tpl
-	}
-	assets, err := files.ReadDir("assets")
-	if err != nil {
+	if err := r.loadAssets(assetsDir); err != nil {
 		return nil, err
-	}
-	for _, a := range assets {
-		if a.IsDir() {
-			continue
-		}
-		b, err := files.ReadFile("assets/" + a.Name())
-		if err != nil {
-			return nil, err
-		}
-		r.assets[a.Name()] = b
 	}
 	return r, nil
+}
+
+// loadTemplates 解析目录下全部 .html，子目录展平为「目录/文件名」。
+func (r *Renderer) loadTemplates(root string) error {
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		return protocol.E("pi_error", "读取模板目录失败")
+	}
+	for _, e := range entries {
+		if e.IsDir() {
+			sub, err := os.ReadDir(filepath.Join(root, e.Name()))
+			if err != nil {
+				continue
+			}
+			for _, f := range sub {
+				if f.IsDir() || !strings.HasSuffix(f.Name(), ".html") {
+					continue
+				}
+				name := e.Name() + "/" + f.Name()
+				if err := r.parseTemplate(filepath.Join(root, name), name); err != nil {
+					return err
+				}
+			}
+			continue
+		}
+		if !strings.HasSuffix(e.Name(), ".html") {
+			continue
+		}
+		if err := r.parseTemplate(filepath.Join(root, e.Name()), e.Name()); err != nil {
+			return err
+		}
+	}
+	if len(r.templates) == 0 {
+		return protocol.E("not_found", "UI 包没有任何模板")
+	}
+	return nil
+}
+
+func (r *Renderer) parseTemplate(path, name string) error {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return protocol.E("pi_error", "读取模板失败: "+name)
+	}
+	tpl, err := template.New(name).Funcs(funcMap()).Parse(string(b))
+	if err != nil {
+		return protocol.E("pi_error", "解析模板失败: "+name)
+	}
+	r.templates[name] = tpl
+	return nil
+}
+
+// loadAssets 加载 Vite 构建产物。
+func (r *Renderer) loadAssets(dir string) error {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return protocol.E("pi_error", "读取构建产物失败")
+	}
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		b, err := os.ReadFile(filepath.Join(dir, e.Name()))
+		if err != nil {
+			return protocol.E("pi_error", "读取构建产物失败: "+e.Name())
+		}
+		r.assets[e.Name()] = asset{body: b, mime: mimeFor(e.Name())}
+	}
+	if len(r.assets) == 0 {
+		return protocol.E("not_found", "UI 包构建产物为空")
+	}
+	return nil
+}
+
+// mimeFor 按扩展名返回 MIME。
+func mimeFor(name string) string {
+	switch {
+	case strings.HasSuffix(name, ".css"):
+		return "text/css; charset=utf-8"
+	case strings.HasSuffix(name, ".js"):
+		return "text/javascript; charset=utf-8"
+	case strings.HasSuffix(name, ".html"):
+		return "text/html; charset=utf-8"
+	case strings.HasSuffix(name, ".woff2"):
+		return "font/woff2"
+	}
+	return "application/octet-stream"
 }
 
 func funcMap() template.FuncMap {
 	return template.FuncMap{
 		"printf": func(format string, args ...any) string {
-			// 只用于生成 option 的 value，输出仍会被属性转义。
 			var b strings.Builder
 			for i := 0; i < len(format); i++ {
 				if format[i] == '%' && i+1 < len(format) {
@@ -94,38 +179,64 @@ func funcMap() template.FuncMap {
 	}
 }
 
-// Asset 返回静态资源内容与 MIME 类型。
-func (r *Renderer) Asset(name string) ([]byte, string, bool) {
+// Asset 按真实文件名返回静态资源。缓存一天：文件名带内容哈希，内容不会变。
+func (r *Renderer) Asset(name string) (body []byte, mime string, ok bool) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	b, ok := r.assets[name]
-	if !ok {
+	// 只接受单层文件名，拒绝路径穿越。
+	if name == "" || strings.ContainsAny(name, "/\\") || strings.Contains(name, "..") {
 		return nil, "", false
 	}
-	switch {
-	case strings.HasSuffix(name, ".css"):
-		return b, "text/css; charset=utf-8", true
-	case strings.HasSuffix(name, ".js"):
-		return b, "text/javascript; charset=utf-8", true
-	case strings.HasSuffix(name, ".html"):
-		return b, "text/html; charset=utf-8", true
+	a, exists := r.assets[name]
+	if !exists {
+		return nil, "", false
 	}
-	return b, "application/octet-stream", true
+	return a.body, a.mime, true
 }
 
-// execute 渲染指定模板；渲染失败视为内部错误，不回退部分输出。
+// EntryAssets 返回入口的 JS 与 CSS 真实文件名。
+// shell 模板用它注入带内容哈希的路径，从而支持长期不可变缓存。
+func (r *Renderer) EntryAssets() (js, css []string) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	for name := range r.assets {
+		switch {
+		case strings.HasPrefix(name, "app-") && strings.HasSuffix(name, ".js"):
+			js = append(js, name)
+		case strings.HasPrefix(name, "app-") && strings.HasSuffix(name, ".css"):
+			css = append(css, name)
+		}
+	}
+	sort.Strings(js)
+	sort.Strings(css)
+	return js, css
+}
+
+// execute 渲染指定模板；失败视为内部错误，不回退部分输出。
 func (r *Renderer) execute(name string, data any) (string, error) {
 	r.mu.RLock()
 	tpl := r.templates[name]
 	r.mu.RUnlock()
 	if tpl == nil {
-		return "", protocol.E("not_found", "模板不存在")
+		return "", protocol.E("not_found", "模板不存在: "+name)
 	}
 	var b strings.Builder
 	if err := tpl.Execute(&b, data); err != nil {
-		return "", protocol.E("pi_error", "渲染失败")
+		return "", protocol.E("pi_error", "渲染失败: "+name)
 	}
 	return b.String(), nil
+}
+
+// TemplateNames 返回已加载的模板名，供启动日志与测试使用。
+func (r *Renderer) TemplateNames() []string {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	out := make([]string, 0, len(r.templates))
+	for name := range r.templates {
+		out = append(out, name)
+	}
+	sort.Strings(out)
+	return out
 }
 
 // SessionRow 是侧栏的一行。
@@ -159,7 +270,6 @@ func (r *Renderer) RenderSessions(list sessions.Listing, selected string) (strin
 	})
 }
 
-// sessionTitle 取会话显示名，缺失时退回 ID 前缀。
 func sessionTitle(h sessions.Header) string {
 	if h.Name != "" {
 		return h.Name
@@ -198,7 +308,6 @@ type HistoryData struct {
 }
 
 // GroupTurns 把分支条目聚合成完整回合。
-// 规则：一条 user 消息开启新回合；工具调用归入当前回合的 Steps；
 // 没有 user 锚点的孤儿 assistant 单独成轮，不并入上一轮，
 // 否则往上翻页时它会被重新折叠，造成视口跳动。
 func GroupTurns(entries []sessions.Entry) []Turn {
@@ -233,11 +342,10 @@ func GroupTurns(entries []sessions.Entry) []Turn {
 
 // RenderHistory 渲染一页历史片段。
 func (r *Renderer) RenderHistory(sessionID string, page sessions.Page) (string, error) {
-	turns := GroupTurns(sessions.ProjectEntries(page.Entries))
 	return r.execute("history.html", HistoryData{
 		SessionID:     sessionID,
 		LeafID:        page.LeafID,
-		Turns:         turns,
+		Turns:         GroupTurns(sessions.ProjectEntries(page.Entries)),
 		HasMore:       page.HasMore,
 		OldestEntryID: page.OldestEntryID,
 	})
@@ -342,9 +450,45 @@ func (r *Renderer) RenderFiles(root string, entries []map[string]any, truncated 
 	return r.execute("files.html", FilesData{Root: root, Entries: rows, Truncated: truncated})
 }
 
-// RenderShell 渲染应用外壳。
+// DiffLine 是 diff 的一行。
+type DiffLine struct {
+	Kind  string
+	OldNo int
+	NewNo int
+	Text  string
+}
+
+// DiffFile 是一个文件的 diff。
+type DiffFile struct {
+	Path      string
+	IsNew     bool
+	IsDeleted bool
+	IsBinary  bool
+	Lines     []DiffLine
+}
+
+// DiffData 驱动 diff 模板。diff 由服务端渲染，不引 diff2html。
+type DiffData struct {
+	SessionID string
+	Files     []DiffFile
+}
+
+// RenderDiff 渲染 diff 片段。
+func (r *Renderer) RenderDiff(sessionID string, files []DiffFile) (string, error) {
+	return r.execute("diff.html", DiffData{SessionID: sessionID, Files: files})
+}
+
+// ShellData 驱动应用外壳。
+type ShellData struct {
+	SessionID string
+	JS        []string
+	CSS       []string
+}
+
+// RenderShell 渲染应用外壳，注入带内容哈希的资源路径。
 func (r *Renderer) RenderShell(sessionID string) (string, error) {
-	return r.execute("shell.html", map[string]string{"SessionID": sessionID})
+	js, css := r.EntryAssets()
+	return r.execute("shell.html", ShellData{SessionID: sessionID, JS: js, CSS: css})
 }
 
 func stringField(m map[string]any, key string) string {
@@ -375,12 +519,12 @@ func formatSize(n int) string {
 	if n < unit {
 		return itoa(n) + " B"
 	}
-	div, exp := int64(unit), 0
+	div, exp := 1024, 0
 	for m := n / unit; m >= unit; m /= unit {
 		div *= unit
 		exp++
 	}
-	return itoa(n/int(div)) + " " + string("KMGTPE"[exp]) + "iB"
+	return itoa(n/div) + " " + string("KMGTPE"[exp]) + "iB"
 }
 
 func itoa(n int) string {

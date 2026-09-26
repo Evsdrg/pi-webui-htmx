@@ -46,6 +46,11 @@ type writeItem struct {
 }
 
 // Client 持有与单个 Pi 进程的 stdin/stdout 连接。
+// notifyQueueLen 是控制帧的独立队列长度。
+// 与 writes 分开的原因：控制帧（扩展回执、取消对话）必须送达，
+// 但不能占用命令的写通道，也不能因命令写缓冲满而被丢弃。
+const notifyQueueLen = 256
+
 type Client struct {
 	in       io.WriteCloser
 	out      io.ReadCloser
@@ -55,12 +60,19 @@ type Client struct {
 	pending  map[string]chan result
 	next     atomic.Uint64
 	writes   chan writeItem
+	notifies chan writeItem
 	done     chan struct{}
 	once     sync.Once
 }
 
 func New(in io.WriteCloser, out io.ReadCloser, maxFrame int, onEvent func(json.RawMessage)) *Client {
-	return &Client{in: in, out: out, maxFrame: maxFrame, onEvent: onEvent, pending: make(map[string]chan result), writes: make(chan writeItem, 64), done: make(chan struct{})}
+	return &Client{
+		in: in, out: out, maxFrame: maxFrame, onEvent: onEvent,
+		pending:  make(map[string]chan result),
+		writes:   make(chan writeItem, 64),
+		notifies: make(chan writeItem, notifyQueueLen),
+		done:     make(chan struct{}),
+	}
 }
 
 func (c *Client) Start()                { go c.read(); go c.write() }
@@ -157,55 +169,94 @@ func (c *Client) Call(ctx context.Context, typ string, fields map[string]any) (j
 	}
 }
 
-// Notify 只用于无需响应的扩展 UI 回执，不用于命令，且永不阻塞 stdout 读取。
-// 队列已满时判定连接异常并关闭，避免无界堆积。
-func (c *Client) Notify(v any) {
+// Notify 发送无需响应的控制帧：扩展 UI 回执、取消待回复对话等。
+//
+// 这类帧「必须送达」——丢了会让 Pi 侧永久挂起等待。因此走独立的有界队列，
+// 不与命令争用写通道；队列满时返回 ErrLimit 让调用方知道没送达，
+// 但绝不关闭连接（杀连接会让整个会话一起死）。
+func (c *Client) Notify(v any) error {
 	b, err := json.Marshal(v)
 	if err != nil {
-		c.fail(err)
-		return
+		return err
 	}
 	b = append(b, '\n')
 	if len(b) > c.maxFrame {
-		c.fail(jsonl.ErrTooLarge)
-		return
+		return jsonl.ErrTooLarge
 	}
 	select {
-	case c.writes <- writeItem{ctx: context.Background(), data: b, ack: make(chan error, 1)}:
+	case c.notifies <- writeItem{ctx: context.Background(), data: b, ack: make(chan error, 1)}:
+		return nil
 	case <-c.done:
+		return ErrClosed
 	default:
-		c.fail(ErrLimit)
+		return ErrLimit
 	}
 }
 
 // write 串行化所有 stdin 写入；发送下一条命令不等待上一条完成，否则长命令会挡住取消。
+// 控制帧优先于命令帧：取消对话、abort 必须能插到长命令前面。
 func (c *Client) write() {
 	for {
+		// 先尽量取干控制帧，再考虑命令帧。
 		select {
 		case <-c.done:
 			return
+		case w := <-c.notifies:
+			c.doWrite(w)
+			if c.failed() {
+				return
+			}
+			continue
+		default:
+		}
+		select {
+		case <-c.done:
+			return
+		case w := <-c.notifies:
+			c.doWrite(w)
+			if c.failed() {
+				return
+			}
+			continue
 		case w := <-c.writes:
-			if err := w.ctx.Err(); err != nil {
-				w.ack <- err
-				continue
-			}
-			deadline := time.Now().Add(5 * time.Second)
-			if d, ok := w.ctx.Deadline(); ok && d.Before(deadline) {
-				deadline = d
-			}
-			if p, ok := c.in.(interface{ SetWriteDeadline(time.Time) error }); ok {
-				_ = p.SetWriteDeadline(deadline)
-			}
-			n, err := c.in.Write(w.data)
-			if err == nil && n != len(w.data) {
-				err = io.ErrShortWrite
-			}
-			w.ack <- err
-			if err != nil {
-				c.fail(err)
+			c.doWrite(w)
+			if c.failed() {
 				return
 			}
 		}
+	}
+}
+
+// doWrite 把一帧写入 stdin 并回 ack。写失败时终止连接。
+func (c *Client) doWrite(w writeItem) {
+	if err := w.ctx.Err(); err != nil {
+		w.ack <- err
+		return
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	if d, ok := w.ctx.Deadline(); ok && d.Before(deadline) {
+		deadline = d
+	}
+	if p, ok := c.in.(interface{ SetWriteDeadline(time.Time) error }); ok {
+		_ = p.SetWriteDeadline(deadline)
+	}
+	n, err := c.in.Write(w.data)
+	if err == nil && n != len(w.data) {
+		err = io.ErrShortWrite
+	}
+	w.ack <- err
+	if err != nil {
+		c.fail(err)
+	}
+}
+
+// failed 报告连接是否已因写失败而终止。
+func (c *Client) failed() bool {
+	select {
+	case <-c.done:
+		return true
+	default:
+		return false
 	}
 }
 

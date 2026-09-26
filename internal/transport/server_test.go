@@ -14,6 +14,7 @@ import (
 	"github.com/coder/websocket"
 	"pi-bridge-go/internal/management"
 	"pi-bridge-go/internal/observe"
+	"pi-bridge-go/internal/presentation"
 	run "pi-bridge-go/internal/runtime"
 	"pi-bridge-go/internal/sessions"
 	"pi-bridge-go/internal/storage"
@@ -82,7 +83,16 @@ func newTestServer(t *testing.T) (*Server, *run.Manager, string) {
 	if err := os.MkdirAll(exportDir, 0700); err != nil {
 		t.Fatal(err)
 	}
-	return New(m, store, terminals, files, piConfig, management.DefaultDiscoveryLimits(), exportDir, receipts, metrics, testToken, "127.0.0.1:30142"), m, cwd
+	// 有 UI 包目录时才加载；没有则 UI 层禁用（nil）。
+	var ui *presentation.Renderer
+	if dir := os.Getenv("PI_WEBUI_DIR"); dir != "" {
+		rendered, err := presentation.LoadFromDir(dir)
+		if err != nil {
+			t.Fatalf("加载 UI 包失败: %v", err)
+		}
+		ui = rendered
+	}
+	return New(m, store, terminals, files, piConfig, management.DefaultDiscoveryLimits(), exportDir, receipts, metrics, testToken, "127.0.0.1:30142", ui), m, cwd
 }
 
 func writeSessionFile(t *testing.T, dir, id, cwd string) {
@@ -695,5 +705,59 @@ func Test发现接口拒绝非法URL与头部(t *testing.T) {
 	if _, err := cfg.Discover(context.Background(), "https://x.example", "openai-completions", "",
 		map[string]string{"X-Bad": "a\r\nX-Injected: 1"}, management.DefaultDiscoveryLimits()); err == nil {
 		t.Fatal("头部注入必须被拒绝")
+	}
+}
+
+func TestUI端点返回滚动模式(t *testing.T) {
+	s, _, cwd := newTestServer(t)
+	// 造一个会话文件。历史读取不应启动 worker。
+	writeSessionFile(t, s.store.Dir(), "sc1", cwd)
+
+	// 首屏（无 before/leaf）应为 append。
+	req := httptest.NewRequest(http.MethodGet, "/ui/sessions/sc1/history", nil)
+	req.Host = "127.0.0.1:30142"
+	req.Header.Set("Authorization", "Bearer "+testToken)
+	rec := httptest.NewRecorder()
+	s.ServeHTTP(rec, req)
+	if rec.Code != 200 {
+		t.Fatalf("首屏历史应 200，实际 %d: %s", rec.Code, rec.Body.String())
+	}
+	if got := rec.Header().Get("X-Scroll-Mode"); got != "append" {
+		t.Fatalf("首屏应为 append，实际 %q", got)
+	}
+	if ct := rec.Header().Get("Content-Type"); !strings.HasPrefix(ct, "text/html") {
+		t.Fatalf("应返回 text/html，实际 %q", ct)
+	}
+
+	// 带 before 的翻页应为 prepend。
+	req2 := httptest.NewRequest(http.MethodGet, "/ui/sessions/sc1/history?before=some-entry-id", nil)
+	req2.Host = "127.0.0.1:30142"
+	req2.Header.Set("Authorization", "Bearer "+testToken)
+	rec2 := httptest.NewRecorder()
+	s.ServeHTTP(rec2, req2)
+	if got := rec2.Header().Get("X-Scroll-Mode"); got != "prepend" {
+		t.Fatalf("翻页应为 prepend，实际 %q", got)
+	}
+}
+
+func Test静态资源拒绝路径穿越(t *testing.T) {
+	s, _, _ := newTestServer(t)
+	for _, bad := range []string{"/assets/", "/assets/a/b.js", "/assets/app.js%00.css"} {
+		req := httptest.NewRequest(http.MethodGet, bad, nil)
+		req.Host = "127.0.0.1:30142"
+		req.Header.Set("Authorization", "Bearer "+testToken)
+		rec := httptest.NewRecorder()
+		s.ServeHTTP(rec, req)
+		if rec.Code == 200 {
+			t.Fatalf("%q 不应返回资源", bad)
+		}
+	}
+	// 未授权同样拿不到资源。
+	req := httptest.NewRequest(http.MethodGet, "/assets/app-abc.js", nil)
+	req.Host = "127.0.0.1:30142"
+	rec := httptest.NewRecorder()
+	s.ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("未授权应 401，实际 %d", rec.Code)
 	}
 }
