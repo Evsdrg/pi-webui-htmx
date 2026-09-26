@@ -28,6 +28,11 @@ type Renderer struct {
 	entryJS   []string
 	entryCSS  []string
 	mu        sync.RWMutex
+	// compressed 缓存静态资源的预压缩变体。键是 "name|enc"。
+	// 文件名带内容哈希，内容不会变，因此缓存永不失效；上限只为防止
+	// 有人把 --ui-dir 指向巨型目录时无界增长。
+	compressed   map[string][]byte
+	compressedAt int
 }
 
 // asset 是一份静态资源。
@@ -35,6 +40,13 @@ type asset struct {
 	path string
 	mime string
 }
+
+// 压缩缓存的硬上限。dist/ 通常约 2.4 MB 原文、压缩后约 600 KB，
+// 这个上限足够装下全部产物又不会无限增长。
+const (
+	maxCompressedEntries = 1024
+	maxCompressedBytes   = 64 << 20
+)
 
 // LoadFromDir 从 UI 包目录加载。
 //
@@ -56,7 +68,7 @@ func LoadFromDir(dir string, supported ...string) (*Renderer, error) {
 		return nil, protocol.E("not_found", "UI 包缺少 dist/assets，请先执行 pnpm build")
 	}
 
-	r := &Renderer{templates: map[string]*template.Template{}, assets: map[string]asset{}}
+	r := &Renderer{templates: map[string]*template.Template{}, assets: map[string]asset{}, compressed: map[string][]byte{}}
 	if err := r.loadTemplates(templatesDir); err != nil {
 		return nil, err
 	}
@@ -184,24 +196,92 @@ func funcMap() template.FuncMap {
 	}
 }
 
-// Asset 按真实文件名返回静态资源。缓存一天：文件名带内容哈希，内容不会变。
-func (r *Renderer) Asset(name string) (body []byte, mime string, ok bool) {
+// Encodings 是桥支持的响应编码，按客户端偏好从高到低排列。
+// gzip 用标准库；brotli 压缩率再高约 11%，静态资产值得多这一个依赖。
+var Encodings = []string{"br", "gzip"}
+
+// PickEncoding 按 Accept-Encoding 选编码；客户端不支持时返回空字符串。
+// 只认完整 token，不解析 qvalue——浏览器的默认头部就够用，
+// 手写 qvalue 解析容易在边界上出错，收益却接近零。
+func PickEncoding(accept string) string {
+	if accept == "" {
+		return ""
+	}
+	fields := strings.Split(accept, ",")
+	has := func(name string) bool {
+		for _, field := range fields {
+			// 形如 "br;q=1.0" 或 " gzip"，取分号前的一段并去空白。
+			token := strings.TrimSpace(strings.SplitN(field, ";", 2)[0])
+			if strings.EqualFold(token, name) {
+				return true
+			}
+		}
+		return false
+	}
+	for _, name := range Encodings {
+		if has(name) {
+			return name
+		}
+	}
+	return ""
+}
+
+// Asset 按真实文件名返回静态资源，并按 encoding 返回预压缩变体。
+// encoding 为空时返回原文。
+func (r *Renderer) Asset(name, encoding string) (body []byte, mime string, ok bool) {
 	r.mu.RLock()
-	defer r.mu.RUnlock()
-	// 只接受单层文件名，拒绝路径穿越。
-	if name == "" || strings.ContainsAny(name, "/\\") || strings.Contains(name, "..") {
-		return nil, "", false
-	}
 	a, exists := r.assets[name]
-	if !exists {
+	r.mu.RUnlock()
+	// 只接受单层文件名，拒绝路径穿越。
+	if !exists || name == "" || strings.ContainsAny(name, "/\\") || strings.Contains(name, "..") {
 		return nil, "", false
 	}
-	// 资源按请求读取，由操作系统文件缓存复用，桥不常驻全部惰性库。
-	b, err := os.ReadFile(a.path)
+	// 资源按请求读取，由操作系统文件缓存复用，桥不常驻全部原文。
+	raw, err := os.ReadFile(a.path)
 	if err != nil {
 		return nil, "", false
 	}
-	return b, a.mime, true
+	if encoding == "" {
+		return raw, a.mime, true
+	}
+	if cached, found := r.cachedAsset(name, encoding); found {
+		return cached, a.mime, true
+	}
+	compressed, err := compressBytes(raw, encoding)
+	if err != nil {
+		// 压缩失败不该让资源不可用：退回原文，客户端照常能解析。
+		return raw, a.mime, true
+	}
+	r.storeAsset(name, encoding, compressed)
+	return compressed, a.mime, true
+}
+
+// cachedAsset 取预压缩变体。
+func (r *Renderer) cachedAsset(name, encoding string) ([]byte, bool) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	b, ok := r.compressed[name+"|"+encoding]
+	return b, ok
+}
+
+// storeAsset 写入预压缩变体；超过上限时整体清空重来，
+// 而不是逐条淘汰——逐条淘汰需要 LRU 簿记，成本高于收益。
+func (r *Renderer) storeAsset(name, encoding string, body []byte) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.compressedAt+len(body) > maxCompressedBytes || len(r.compressed) >= maxCompressedEntries {
+		r.compressed = map[string][]byte{}
+		r.compressedAt = 0
+	}
+	r.compressed[name+"|"+encoding] = body
+	r.compressedAt += len(body)
+}
+
+// CompressedStats 返回压缩缓存规模，用于诊断。
+func (r *Renderer) CompressedStats() map[string]any {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return map[string]any{"entries": len(r.compressed), "bytes": r.compressedAt}
 }
 
 // EntryAssets 返回入口的 JS 与 CSS 真实文件名。

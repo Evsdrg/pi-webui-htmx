@@ -1,8 +1,11 @@
 package transport
 
 import (
+	"bytes"
+	"compress/gzip"
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -11,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/andybalholm/brotli"
 	"github.com/coder/websocket"
 	"pi-bridge-go/internal/management"
 	"pi-bridge-go/internal/observe"
@@ -767,4 +771,118 @@ func Test静态资源拒绝路径穿越(t *testing.T) {
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("缺失资源应 404，实际 %d", rec.Code)
 	}
+}
+
+// Test协商编码与实际压缩器一致 是端到端回归。
+// 曾把 gzip 流标成 Content-Encoding: br 发出，浏览器全部解不开，
+// 而单测只覆盖 gzip 所以漏掉了。这里按响应头选解析器，
+// 解不开或解出来不对都算失败。
+func Test协商编码与实际压缩器一致(t *testing.T) {
+	dir := t.TempDir()
+	write := func(rel, body string) {
+		path := filepath.Join(dir, filepath.FromSlash(rel))
+		if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(body), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// 一个最小但合法的 UI 包：只用到 sessions 模板。
+	write("src/templates/sessions.html", `{{range .Items}}<a class="session-item" href="/?session={{.ID}}" data-session="{{.ID}}"><span class="session-title">{{.Title}}</span><span class="session-meta">{{.Modified}} {{.Cwd}}</span></a>{{end}}`)
+	write("ui-manifest.json", `{"protocolVersion":1,"requiredMethods":[],"templates":{"sessions":"templates/sessions.html"},"build":{"entry":"src/entry/app.ts"}}`)
+	write("dist/.vite/manifest.json", `{"src/entry/app.ts":{"file":"assets/app-abc123.js","isEntry":true,"css":[]}}`)
+	write("dist/assets/app-abc123.js", "console.log(1)")
+	t.Setenv("PI_WEBUI_DIR", dir)
+	s, _, cwd := newTestServer(t)
+
+	// 造足够多的会话，让列表片段超过压缩阈值。
+	// cwd 必须用服务器自己那一个：策略只允许它，别处的会话会被过滤掉。
+	for i := 0; i < 60; i++ {
+		writeSessionFile(t, s.store.Dir(), "sess-"+itoaForTest(i), cwd)
+	}
+	for _, accept := range []string{"br", "gzip", "br, gzip", "gzip, br", ""} {
+		name := accept
+		if name == "" {
+			name = "empty"
+		}
+		t.Run(name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, "/ui/sessions", nil)
+			req.Host = "127.0.0.1:30142"
+			req.Header.Set("Authorization", "Bearer "+testToken)
+			if accept != "" {
+				req.Header.Set("Accept-Encoding", accept)
+			}
+			rec := httptest.NewRecorder()
+			s.ServeHTTP(rec, req)
+			if rec.Code != http.StatusOK {
+				t.Fatalf("状态码 %d", rec.Code)
+			}
+			if rec.Header().Get("Vary") != "Accept-Encoding" {
+				t.Fatal("缺少 Vary: Accept-Encoding")
+			}
+			declared := rec.Header().Get("Content-Encoding")
+			body := rec.Body.Bytes()
+			// 先按 identity 取一份原文，确认样本真的超过压缩阈值，
+			// 否则后面的编码断言可能一条都没跑到。
+			if raw := plainBody(t, s, "/ui/sessions"); len(raw) < 1024 {
+				t.Fatalf("样本仅 %d 字节，不足以验证压缩路径", len(raw))
+			}
+			switch declared {
+			case "":
+				if !bytes.Contains(body, []byte("session-item")) {
+					t.Fatal("未压缩响应不是预期 HTML")
+				}
+			case "gzip":
+				zr, err := gzip.NewReader(bytes.NewReader(body))
+				if err != nil {
+					t.Fatalf("gzip 流无法解析: %v", err)
+				}
+				plain, err := io.ReadAll(zr)
+				if err != nil {
+					t.Fatalf("gzip 解压失败: %v", err)
+				}
+				if !bytes.Contains(plain, []byte("session-item")) {
+					t.Fatal("解压后不是预期 HTML")
+				}
+			case "br":
+				plain, err := io.ReadAll(brotli.NewReader(bytes.NewReader(body)))
+				if err != nil {
+					t.Fatalf("brotli 解压失败: %v", err)
+				}
+				if !bytes.Contains(plain, []byte("session-item")) {
+					t.Fatal("解压后不是预期 HTML")
+				}
+				// 用 gzip 解析必须失败，否则说明选错了压缩器。
+				if _, err := gzip.NewReader(bytes.NewReader(body)); err == nil {
+					t.Fatal("br 流被 gzip 解析成功，压缩器选择错误")
+				}
+			default:
+				t.Fatalf("未知编码 %q", declared)
+			}
+		})
+	}
+}
+
+// plainBody 取一次不协商编码的响应原文，用于确认样本规模。
+func plainBody(t *testing.T, s *Server, path string) []byte {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodGet, path, nil)
+	req.Host = "127.0.0.1:30142"
+	req.Header.Set("Authorization", "Bearer "+testToken)
+	rec := httptest.NewRecorder()
+	s.ServeHTTP(rec, req)
+	return rec.Body.Bytes()
+}
+
+func itoaForTest(v int) string {
+	if v == 0 {
+		return "0"
+	}
+	var out []byte
+	for v > 0 {
+		out = append([]byte{byte('0' + v%10)}, out...)
+		v /= 10
+	}
+	return string(out)
 }

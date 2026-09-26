@@ -239,7 +239,8 @@ func (s *Server) serveUI(w http.ResponseWriter, r *http.Request) bool {
 
 	case strings.HasPrefix(path, "/assets/"):
 		name := strings.TrimPrefix(path, "/assets/")
-		body, mime, ok := s.ui.Asset(name)
+		encoding := presentation.PickEncoding(r.Header.Get("Accept-Encoding"))
+		body, mime, ok := s.ui.Asset(name, encoding)
 		if !ok {
 			writeError(w, 404, protocol.E("not_found", "资源不存在"))
 			return true
@@ -247,6 +248,11 @@ func (s *Server) serveUI(w http.ResponseWriter, r *http.Request) bool {
 		// 文件名带内容哈希，可长期不可变缓存。
 		w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
 		w.Header().Set("Content-Type", mime)
+		if encoding != "" {
+			// Vary 必须声明，否则共享缓存会把压缩版发给不接受编码的客户端。
+			w.Header().Set("Content-Encoding", encoding)
+			w.Header().Set("Vary", "Accept-Encoding")
+		}
 		w.WriteHeader(200)
 		_, _ = w.Write(body)
 		return true
@@ -487,6 +493,11 @@ func dialogID(raw json.RawMessage) string {
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("X-Content-Type-Options", "nosniff")
+	// 一次性协商编码，写响应的辅助函数从内部键读取后即删。
+	// 走内部键而不是改十几个调用点的签名：那些函数拿不到 *http.Request。
+	if encoding := presentation.PickEncoding(r.Header.Get("Accept-Encoding")); encoding != "" {
+		w.Header().Set(encodingKey, encoding)
+	}
 	if r.Host != s.host {
 		writeError(w, http.StatusForbidden, protocol.E("host_denied", "Host 不在预期范围内"))
 		return
@@ -664,14 +675,40 @@ func toAnyMaps(v any) []map[string]any {
 // writeHTML 输出 HTML 片段。htmx 靠 Content-Type 决定如何处理响应。
 func writeHTML(w http.ResponseWriter, html string) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Vary", "Accept-Encoding")
+	encoding := takeEncoding(w)
+	if encoding != "" {
+		w.Header().Set("Content-Encoding", encoding)
+	}
 	w.WriteHeader(200)
-	_, _ = io.WriteString(w, html)
+	_, _ = presentation.Compress(w, []byte(html), encoding)
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {
+	body, err := json.Marshal(v)
+	if err != nil {
+		body = []byte(`{"error":"encode_failed"}`)
+		status = 500
+	}
 	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Vary", "Accept-Encoding")
+	encoding := takeEncoding(w)
+	if presentation.ShouldCompress(body, encoding) {
+		w.Header().Set("Content-Encoding", encoding)
+	}
 	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(v)
+	_, _ = presentation.Compress(w, body, encoding)
+}
+
+// encodingKey 是 ServeHTTP 与写响应辅助函数之间传递协商结果的内部键。
+// 用 Header 承载只为省去改十几个调用点签名；读取后立即删除，不会外泄。
+const encodingKey = "X-Pi-Bridge-Encoding"
+
+// takeEncoding 取出协商到的编码并清除内部键。
+func takeEncoding(w http.ResponseWriter) string {
+	encoding := w.Header().Get(encodingKey)
+	w.Header().Del(encodingKey)
+	return encoding
 }
 
 // writeError 把内部错误转成协议错误响应。
