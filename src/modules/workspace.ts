@@ -3,7 +3,7 @@ import type { BridgeClient } from './bridge';
 import type { Message } from '@/types/protocol';
 import { mountHighlight, languageFor } from './highlight';
 import { record } from './stream';
-const el = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
+import { el } from './dom';
 
 export class Workspace {
   private cwd = '';

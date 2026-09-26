@@ -4,8 +4,8 @@ import { closeMobileSidebar, readDraft, saveDraft } from './layout';
 import { addFiles, toWire, formatSize } from './attachments';
 import type { Attachment } from './attachments';
 import type { Capabilities, EventMessage, Message, Method, WorkerInfo } from '@/types/protocol';
+import { closeDialog, el, openDialog } from './dom';
 
-const el = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 const DIALOGS = new Set(['select','confirm','input','editor']);
 interface State { sessionId: string; sessionName?: string; isStreaming: boolean; isCompacting: boolean; thinkingLevel?: string; model?: { id: string; provider: string; name: string }; pendingMessageCount?: number; steeringMode?: string; followUpMode?: string; autoCompactionEnabled?: boolean }
 
@@ -68,7 +68,7 @@ export class Workbench {
     }, { signal });
     el('new-form').addEventListener('submit', (event) => {
       event.preventDefault(); const cwd = el<HTMLInputElement>('cwd-input').value.trim();
-      if (!cwd) return; this.selectSession('', cwd, '新会话'); el<HTMLDialogElement>('new-dialog').close(); el('prompt').focus();
+      if (!cwd) return; this.selectSession('', cwd, '新会话'); closeDialog('new-dialog'); el('prompt').focus();
     }, { signal });
     el('session-search').addEventListener('input', () => {
       clearTimeout(this.searchTimer); const query = el<HTMLInputElement>('session-search').value.trim();
@@ -136,13 +136,13 @@ export class Workbench {
       const caps = await response.json() as Capabilities;
       if (caps.version !== 1 || !Array.isArray(caps.methods) || !['session.start','session.prompt','session.subscribe'].every((method) => caps.methods.includes(method as Method))) throw new Error('桥的协议或核心能力不兼容');
       this.capabilities = new Set(caps.methods);
-      el<HTMLDialogElement>('auth-dialog').close();
+      closeDialog('auth-dialog');
       this.refreshSessions(); window.htmx.trigger(document.body, 'models-refresh');
       if (this.sessionId) { el('welcome').hidden = true; el('chat-scroll').dataset.resetScroll = 'true'; void this.refreshHistory(); }
       this.bridge.connect();
     } catch (error) { this.fail(error); this.setConnection(false); }
   }
-  private showLogin(): void { const dialog = el<HTMLDialogElement>('auth-dialog'); if (!dialog.open) dialog.showModal(); }
+  private showLogin(): void { openDialog('auth-dialog'); }
   private async login(): Promise<void> {
     const input = el<HTMLInputElement>('bridge-token');
     const button = el<HTMLButtonElement>('auth-form').querySelector('button')!;
@@ -237,7 +237,7 @@ export class Workbench {
     const response = await this.request<{ roots: string[] }>('files.roots', undefined, '');
     el('workspace-roots').replaceChildren(...response.roots.map((path) => new Option(path, path)));
     el<HTMLInputElement>('cwd-input').value = this.cwd || response.roots[0] || '';
-    if (!el<HTMLDialogElement>('new-dialog').open) el<HTMLDialogElement>('new-dialog').showModal();
+    openDialog('new-dialog');
   }
   private async send(): Promise<void> {
     const input = el<HTMLTextAreaElement>('prompt'); const message = input.value.trim();
@@ -310,14 +310,17 @@ export class Workbench {
       .then(() => { if (leafId) this.notify(`已切换到分支 ${leafId.slice(0, 8)} 的视图`); })
       .catch((error) => this.fail(error));
   }
-  // forkFrom 与回合上的「从此处分支」同一条路径：创建新会话并切过去。
+  // forkFrom 是「从此处分支」的唯一实现：回合上的按钮与分支导航面板
+  // 都走这里。曾经两处各写一遍，后写的那份还少了对话框关闭，
+  // 于是从面板 fork 成功后弹窗不消失。
   private async forkFrom(entryId: string): Promise<void> {
+    if (!entryId) { this.notify('缺少要分支的条目 ID', 'warning'); return; }
     try {
       const result = record(await this.command('session.fork', { entryId }));
       const id = text(result.sessionId);
       if (!id) { this.notify('Pi 没有返回新会话 ID', 'warning'); return; }
       this.selectSession(id, this.cwd, '分支会话');
-      el<HTMLDialogElement>('branch-dialog').close();
+      closeDialog('branch-dialog');
     } catch (error) { this.fail(error); }
   }
   private async refreshHistory(): Promise<void> {
@@ -443,13 +446,13 @@ export class Workbench {
       case 'latest': this.bottom(); break;
       case 'refresh-sessions': this.refreshSessions(); break;
       case 'models-refresh': window.htmx.trigger(document.body, 'models-refresh'); break;
-      case 'settings': el<HTMLDialogElement>('settings-dialog').showModal(); window.htmx.trigger(document.body, 'packages-refresh'); break;
+      case 'settings': openDialog('settings-dialog'); window.htmx.trigger(document.body, 'packages-refresh'); break;
       case 'branch': {
         if (!this.branch) {
           const { BranchNavigator } = await import('./branch');
           this.branch = new BranchNavigator(this.bridge, (err) => this.fail(err), (leafId) => this.gotoLeaf(leafId), (entryId) => void this.forkFrom(entryId), () => this.sessionId);
         }
-        el<HTMLDialogElement>('branch-dialog').showModal();
+        openDialog('branch-dialog');
         await this.branch.open();
         break;
       }
@@ -457,7 +460,7 @@ export class Workbench {
       case 'branch-current': this.gotoLeaf(''); break;
       case 'models-edit': {
         if (!this.models) { const { ModelsEditor } = await import('./models'); this.models = new ModelsEditor(this.bridge, (err) => this.fail(err)); }
-        el<HTMLDialogElement>('models-dialog').showModal();
+        openDialog('models-dialog');
         await this.models.open();
         break;
       }
@@ -467,7 +470,7 @@ export class Workbench {
       case 'models-test': await this.models?.test(); break;
       case 'session-menu': {
         el<HTMLInputElement>('session-name').value = el('session-title').textContent ?? '';
-        el<HTMLDialogElement>('session-dialog').showModal();
+        openDialog('session-dialog');
         if (this.sessionId) await this.refreshState();
         break;
       }
@@ -475,9 +478,9 @@ export class Workbench {
       case 'rename': await this.command('session.set_name', { name: el<HTMLInputElement>('session-name').value }); el('session-title').textContent = el<HTMLInputElement>('session-name').value; this.refreshSessions(); break;
       case 'compact': this.setRun('compacting'); try { await this.command('session.compact'); await this.refreshHistory(); } finally { await this.reconcile(); } break;
       case 'clone': { const result = await this.command<{sessionId:string}>('session.clone'); this.selectSession(result.sessionId, this.cwd, '克隆会话'); this.refreshSessions(); break; }
-      case 'fork': { const result = record(await this.command('session.fork', { entryId: button.dataset.entryId })); if (text(result.sessionId)) this.selectSession(text(result.sessionId), this.cwd, '分支会话'); break; }
+      case 'fork': await this.forkFrom(button.dataset.entryId ?? ''); break;
       case 'stop': await this.request('session.stop', { force: false }); this.setRun('idle'); this.notice('工作进程已释放，历史保留在磁盘。'); break;
-      case 'delete': if (this.sessionId && confirm('删除此会话的磁盘记录？此操作无法撤销。')) { await this.request('sessions.delete', { sessionId: this.sessionId }, ''); this.selectSession('', this.cwd, '新会话'); this.refreshSessions(); el<HTMLDialogElement>('session-dialog').close(); } break;
+      case 'delete': if (this.sessionId && confirm('删除此会话的磁盘记录？此操作无法撤销。')) { await this.request('sessions.delete', { sessionId: this.sessionId }, ''); this.selectSession('', this.cwd, '新会话'); this.refreshSessions(); closeDialog('session-dialog'); } break;
       case 'copy-turn': await navigator.clipboard.writeText(button.closest('.turn')?.querySelector('.turn-assistant .bubble')?.textContent ?? ''); this.notify('已复制'); break;
       case 'commands': this.commands = (await this.command<Record<string,unknown>[]>('session.commands')).map((c) => ({name: text(c.name), description: text(c.description)})); el<HTMLTextAreaElement>('prompt').value = '/'; this.showCommands(); el('prompt').focus(); break;
       case 'export': {

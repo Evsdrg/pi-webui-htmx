@@ -2,8 +2,8 @@
 // 读回来时已被桥打码成 "***"，保存时由桥按磁盘真值还原。
 import type { BridgeClient } from './bridge';
 import { record, text } from './stream';
+import { el } from './dom';
 
-const el = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 
 // parseHeaders 把「每行 name: value」转成对象。
 // 拒绝空名与含控制字符的名/值——否则能注入请求头。

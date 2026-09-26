@@ -7,7 +7,6 @@
 // 用事件委托而不是给每个按钮绑监听：历史是整块替换的，
 // 逐按钮绑定在每次翻页后都要重做一遍。
 
-const el = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 
 function notice(message: string): void {
   document.body.dispatchEvent(new CustomEvent('pi-notify', { detail: { message, kind: 'warning' } }));
@@ -69,5 +68,3 @@ async function errorText(response: Response): Promise<string> {
     return `请求失败（${response.status}）`;
   }
 }
-
-export { el as lazyEl };

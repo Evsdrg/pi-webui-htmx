@@ -8,8 +8,8 @@
 //      不新增协议面。跳转只是「查看该分支」，不改变 Pi 的当前叶子。
 import type { BridgeClient } from './bridge';
 import { record, text } from './stream';
+import { el } from './dom';
 
-const el = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 
 // TreeNode 对应 Pi 的 SessionTreeNode。
 interface TreeNode {
