@@ -32,6 +32,9 @@
   },
   "requiredMethods": [
     "config.models",
+    "config.models.discover",
+    "config.models.raw",
+    "config.models.test",
     "config.packages",
     "files.roots",
     "session.abort",

@@ -29,6 +29,7 @@ export class Workbench {
   private dialogsLoading = false;
   private dialogsDirty = false;
   private workspace: import('./workspace').Workspace | undefined;
+  private models: import('./models').ModelsEditor | undefined;
   private currentModel: { provider: string; id: string; name: string } | undefined;
 
   constructor(private readonly bottom: () => void) {}
@@ -396,6 +397,16 @@ export class Workbench {
       case 'refresh-sessions': this.refreshSessions(); break;
       case 'models-refresh': window.htmx.trigger(document.body, 'models-refresh'); break;
       case 'settings': el<HTMLDialogElement>('settings-dialog').showModal(); window.htmx.trigger(document.body, 'packages-refresh'); break;
+      case 'models-edit': {
+        if (!this.models) { const { ModelsEditor } = await import('./models'); this.models = new ModelsEditor(this.bridge, (err) => this.fail(err)); }
+        el<HTMLDialogElement>('models-dialog').showModal();
+        await this.models.open();
+        break;
+      }
+      case 'models-reload': await this.models?.reload(); break;
+      case 'models-save': await this.models?.save(); break;
+      case 'models-discover': await this.models?.discover(); break;
+      case 'models-test': await this.models?.test(); break;
       case 'session-menu': {
         el<HTMLInputElement>('session-name').value = el('session-title').textContent ?? '';
         el<HTMLDialogElement>('session-dialog').showModal();

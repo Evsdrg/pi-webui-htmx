@@ -17,7 +17,7 @@ let workbench: Workbench;
 let pending: string[];
 let busy: boolean;
 let sequence: number;
-const methods = ['session.start','session.prompt','session.subscribe','worker.list','session.state','session.thinking_levels','session.pending_dialogs','session.ui_response','session.stats','session.set_queue_mode','session.set_auto_compaction','session.set_auto_retry','session.abort_retry','session.export_html'];
+const methods = ['session.start','session.prompt','session.subscribe','worker.list','session.state','session.thinking_levels','session.pending_dialogs','session.ui_response','session.stats','session.set_queue_mode','session.set_auto_compaction','session.set_auto_retry','session.abort_retry','session.export_html','config.models.raw','config.models.write','config.models.discover','config.models.test'];
 function emit(type: string, extra: Record<string, unknown> = {}) {
  fake.instance!.dispatchEvent(new CustomEvent('message', { detail: { version:1,kind:'event',event:'pi.event',sessionId:'s1',epoch:'test',seq:++sequence,data:{type,...extra} } }));
 }
@@ -29,7 +29,8 @@ function mount() {
  <label class=switch><input type=checkbox id=auto-compaction><span>自动压缩</span></label><label class=switch><input type=checkbox id=auto-retry><span>自动重试</span></label>
  <button data-action=abort-retry>中止重试</button>
  <fieldset class=queue-modes><label class=switch><input type=radio name=queue-kind value=steer checked><span>插入指令</span></label><label class=switch><input type=radio name=queue-kind value=followUp><span>完成后追加</span></label></fieldset></dialog>
- <div class=queue-hint id=queue-hint hidden></div>`;
+ <div class=queue-hint id=queue-hint hidden></div>
+ <dialog id=models-dialog><p id=models-status></p><textarea id=models-editor></textarea><input id=discover-url><input id=discover-api><input id=discover-key><textarea id=discover-headers></textarea><div id=discover-result></div><button data-action=models-edit>编辑</button><button data-action=models-reload>重读</button><button data-action=models-save>保存</button><button data-action=models-discover>发现</button><button data-action=models-test>测试</button></dialog>`;
  for(const id of ['live','conn-state','connection-notice','session-state','session-title','session-cwd','session-list','session-count','turns','older-slot','chat-scroll','welcome','command-menu','ext-status-slot','ext-widgets-before','ext-widgets-after','ext-dialog-slot','usage','toast-root']) {const node=document.createElement('div');node.id=id;document.body.append(node);}
  document.body.dataset.sessionId='s1';
  Object.defineProperty(HTMLDialogElement.prototype,'showModal',{configurable:true,value:function(this:HTMLDialogElement){this.open=true;this.dataset.modal='true';}});
@@ -52,6 +53,10 @@ beforeEach(async () => {
   if(method==='worker.list')return[{sessionId:'s1',cwd:'/fixture',busy}];
   if(method==='session.state')return{sessionId:'s1',sessionName:'隔离会话',isStreaming:busy,isCompacting:false,steeringMode:'all',followUpMode:'all',autoCompactionEnabled:true};
   if(method==='session.thinking_levels')return['off','high'];
+  if(method==='config.models.raw')return{providers:{cpa:{api:'https://example.com/v1',apiKey:'***',models:{m1:{name:'旧名字'}}}}};
+  if(method==='config.models.write')return{written:true};
+  if(method==='config.models.discover')return{models:[{id:'gpt-x',name:'GPT X'}]};
+  if(method==='config.models.test')return{ok:true,message:'连通正常'};
   if(method==='session.pending_dialogs')return{ids:[...pending]};
   if(method==='session.ui_response'){pending=[];busy=false;emit('agent_settled');return{answered:true};}
   return{};
@@ -134,5 +139,51 @@ describe('排队与压缩设置', () => {
     document.querySelector<HTMLInputElement>('input[name="queue-kind"][value="followUp"]')!.click();
     document.getElementById('prompt')!.dispatchEvent(new Event('input'));
     expect(hint.textContent).toContain('排到队列末尾');
+  });
+});
+
+describe('模型配置编辑器', () => {
+  it('打开时读取原始配置并格式化进编辑器', async () => {
+    await (workbench as unknown as { action(a: string, b: HTMLElement): Promise<void> }).action('models-edit', document.createElement('button'));
+    await vi.waitFor(() => expect(document.getElementById('models-editor').value).toContain('example.com'));
+    // 密钥必须已经是打码值，页面拿不到真值。
+    expect(document.getElementById('models-editor').value).toContain('"***"');
+  });
+
+  it('保存非法 JSON 时拒绝并不发请求', async () => {
+    await (workbench as unknown as { action(a: string, b: HTMLElement): Promise<void> }).action('models-edit', document.createElement('button'));
+    await vi.waitFor(() => expect(document.getElementById('models-editor').value).toContain('example.com'));
+    const before = vi.mocked(fake.request).mock.calls.length;
+    (document.getElementById('models-editor') as HTMLTextAreaElement).value = '{ 这不是 JSON';
+    await (workbench as unknown as { action(a: string, b: HTMLElement): Promise<void> }).action('models-save', document.createElement('button'));
+    expect(vi.mocked(fake.request).mock.calls.length).toBe(before);
+    expect(document.getElementById('models-status').textContent).toContain('不是合法 JSON');
+  });
+
+  it('保存成功后重新读取，避免用户接着编辑旧快照', async () => {
+    await (workbench as unknown as { action(a: string, b: HTMLElement): Promise<void> }).action('models-edit', document.createElement('button'));
+    await vi.waitFor(() => expect(document.getElementById('models-editor').value).toContain('example.com'));
+    const readsBefore = vi.mocked(fake.request).mock.calls.filter((c) => c[0] === 'config.models.raw').length;
+    (document.getElementById('models-editor') as HTMLTextAreaElement).value = '{"providers":{}}';
+    await (workbench as unknown as { action(a: string, b: HTMLElement): Promise<void> }).action('models-save', document.createElement('button'));
+    await vi.waitFor(() => expect(vi.mocked(fake.request).mock.calls.filter((c) => c[0] === 'config.models.raw').length).toBeGreaterThan(readsBefore));
+    expect(document.getElementById('models-status').textContent).toBe('');
+  });
+
+  it('自定义头部按行解析，非法格式被拒绝', async () => {
+    await (workbench as unknown as { action(a: string, b: HTMLElement): Promise<void> }).action('models-edit', document.createElement('button'));
+    (document.getElementById('discover-url') as HTMLInputElement).value = 'https://api.example.com/v1';
+    (document.getElementById('discover-headers') as HTMLTextAreaElement).value = 'X-A: 1\n坏行\nX-B: 2';
+    await (workbench as unknown as { action(a: string, b: HTMLElement): Promise<void> }).action('models-discover', document.createElement('button'));
+    await vi.waitFor(() => expect(document.getElementById('discover-result').textContent).toContain('名称: 值'));
+    expect(vi.mocked(fake.request).mock.calls.some((c) => c[0] === 'config.models.discover')).toBe(false);
+  });
+
+  it('发现结果按纯文本渲染，不插入 HTML', async () => {
+    await (workbench as unknown as { action(a: string, b: HTMLElement): Promise<void> }).action('models-edit', document.createElement('button'));
+    (document.getElementById('discover-url') as HTMLInputElement).value = 'https://api.example.com/v1';
+    await (workbench as unknown as { action(a: string, b: HTMLElement): Promise<void> }).action('models-discover', document.createElement('button'));
+    await vi.waitFor(() => expect(document.getElementById('discover-result').textContent).toContain('GPT X'));
+    expect(document.getElementById('discover-result').querySelector('script')).toBeNull();
   });
 });
