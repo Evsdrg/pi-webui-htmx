@@ -117,16 +117,36 @@ WS 命令：
 ```bash
 go vet ./...
 go test -race ./...
+
+# 需要 UI 包的测试（未设置时自动跳过）
+PI_WEBUI_DIR=../pi-webui-htmx go test -race ./internal/transport/
 ```
 
 - 单元测试使用 `testdata/fake-pi` 这个可控的假 Pi，**不调用真实模型、不产生费用**
 - 真实 Pi 只做隔离配置下的握手与退出验证，见下方「真实 Pi 冒烟」
 - 测试覆盖 JSONL 分帧（含 U+2028 不被切分、末尾半行、超限）、分支分页、断链/重复 ID/自环、越界 cwd、符号链接逃逸、鉴权、Host/Origin、requestId 防重、未实现方法拒绝、并发写入、背压、空闲回收、进程退出
 
+### 测试代码的布局
+
+| 位置 | 内容 | 说明 |
+|---|---|---|
+| `internal/**/*_test.go` | 单元与集成测试（31 个文件，约 5.6k 行） | 与生产代码同包，Go 惯例，可直接访问内部符号 |
+| `internal/testutil/` | 跨包测试辅助 | 目前只有假 Pi 的按需构建 |
+| `testdata/fake-pi/` | 假 Pi 源码（测试夹具） | 由 `testutil.FakePi()` 按需编译，**不提交编译产物** |
+| `tools/smoke-client/` | 手工冒烟客户端 | 需要真实 Pi，**不**参与 `go test` |
+
+假 Pi 的编译产物不进仓库：`go test` 首次运行时会自动构建到系统临时目录，
+多个包共用同一份。因此新克隆的仓库无需任何准备步骤即可跑测试。
+若构建失败，测试直接失败而不是静默跳过——避免「测试通过」变成假象。
+
 ## 真实 Pi 冒烟
 
+冒烟客户端在 `tools/smoke-client`，与自动化测试分开——
+它需要真实 Pi，只用于手工验证，不参与 `go test`。
+
 ```bash
-go build -o /tmp/pi-bridge ./cmd/pi-bridge
+go build -o /tmp/pi-bridge   ./cmd/pi-bridge
+go build -o /tmp/smoke       ./tools/smoke-client
 export PI_BRIDGE_TOKEN="0123456789abcdef0123456789abcdef"
 /tmp/pi-bridge --workspace /srv/projects/pi \
   --pi "$(command -v pi)" \
@@ -134,13 +154,14 @@ export PI_BRIDGE_TOKEN="0123456789abcdef0123456789abcdef"
   --idle-timeout 30s --max-workers 1 &
 BRIDGE=$!
 sleep 1
-# 握手：只查询状态，不发送任何提示词
-printf '%s\n' '{"version":1,"kind":"command","requestId":"smoke-1","method":"worker.list"}' | \
-  websocat -H "Authorization: Bearer $PI_BRIDGE_TOKEN" ws://127.0.0.1:30142/api/v1/ws
+# --hold：启动后不停止，用于测量工作态内存
+# --dialog：触发扩展对话并持续读事件
+/tmp/smoke --token "$PI_BRIDGE_TOKEN" --cwd /srv/projects/pi/pi-web
 kill -TERM $BRIDGE; wait $BRIDGE 2>/dev/null
 ```
 
-冒烟标准：握手成功、`worker.list` 返回空表、桥退出后没有残留的 `pi` 进程。**不要在这个阶段发送真实提示词。**
+冒烟标准：握手成功、`worker.list` 返回空表、桥退出后没有残留的 `pi` 进程。
+默认不发送提示词；需要时显式加 `--dialog`。
 
 ## 刻意不做的能力
 

@@ -12,6 +12,7 @@ import (
 
 	"pi-bridge-go/internal/protocol"
 	"pi-bridge-go/internal/sessions"
+	"pi-bridge-go/internal/testutil"
 	"pi-bridge-go/internal/workspace"
 )
 
@@ -37,7 +38,7 @@ func newTestManager(t *testing.T, opts ...func(*Config)) (*Manager, string) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = store.Close() })
-	fakePi, err := filepath.Abs(filepath.Join("..", "..", "testdata", "bin", "fake-pi"))
+	fakePi, err := testutil.FakePi()
 	if err != nil {
 		t.Fatal(err)
 	}
