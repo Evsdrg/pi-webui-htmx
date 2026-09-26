@@ -33,6 +33,7 @@ export class Workbench {
   private dialogsDirty = false;
   private workspace: import('./workspace').Workspace | undefined;
   private models: import('./models').ModelsEditor | undefined;
+  private branch: import('./branch').BranchNavigator | undefined;
   private currentModel: { provider: string; id: string; name: string } | undefined;
 
   constructor(private readonly bottom: () => void) {}
@@ -280,6 +281,25 @@ export class Workbench {
     if (id !== this.sessionId) return;
     el('usage').textContent = [typeof stats.totalMessages === 'number' ? `${stats.totalMessages} 条消息` : '', typeof stats.cost === 'number' ? `$${stats.cost.toFixed(4)}` : ''].filter(Boolean).join(' · ');
   }
+  // gotoLeaf 查看指定分支。leafId 为空表示回到磁盘上可恢复的当前分支。
+  // 这只是查看，不改 Pi 的状态；要真正确认一个分支仍然走「从此处分支」。
+  private gotoLeaf(leafId: string): void {
+    if (!this.sessionId || !this.diskSession) return;
+    const query = leafId ? `?leafId=${encodeURIComponent(leafId)}` : '';
+    void window.htmx.ajax('get', `/ui/sessions/${encodeURIComponent(this.sessionId)}/history${query}`, { target: '#turns', swap: 'innerHTML' })
+      .then(() => { if (leafId) this.notify(`已切换到分支 ${leafId.slice(0, 8)} 的视图`); })
+      .catch((error) => this.fail(error));
+  }
+  // forkFrom 与回合上的「从此处分支」同一条路径：创建新会话并切过去。
+  private async forkFrom(entryId: string): Promise<void> {
+    try {
+      const result = record(await this.command('session.fork', { entryId }));
+      const id = text(result.sessionId);
+      if (!id) { this.notify('Pi 没有返回新会话 ID', 'warning'); return; }
+      this.selectSession(id, this.cwd, '分支会话');
+      el<HTMLDialogElement>('branch-dialog').close();
+    } catch (error) { this.fail(error); }
+  }
   private async refreshHistory(): Promise<void> {
     if (!this.sessionId || !this.diskSession || this.historyLoading === this.sessionId) return;
     const id = this.sessionId; this.historyLoading = id;
@@ -404,6 +424,17 @@ export class Workbench {
       case 'refresh-sessions': this.refreshSessions(); break;
       case 'models-refresh': window.htmx.trigger(document.body, 'models-refresh'); break;
       case 'settings': el<HTMLDialogElement>('settings-dialog').showModal(); window.htmx.trigger(document.body, 'packages-refresh'); break;
+      case 'branch': {
+        if (!this.branch) {
+          const { BranchNavigator } = await import('./branch');
+          this.branch = new BranchNavigator(this.bridge, (err) => this.fail(err), (leafId) => this.gotoLeaf(leafId), (entryId) => void this.forkFrom(entryId), () => this.sessionId);
+        }
+        el<HTMLDialogElement>('branch-dialog').showModal();
+        await this.branch.open();
+        break;
+      }
+      case 'branch-refresh': await this.branch?.refresh(); break;
+      case 'branch-current': this.gotoLeaf(''); break;
       case 'models-edit': {
         if (!this.models) { const { ModelsEditor } = await import('./models'); this.models = new ModelsEditor(this.bridge, (err) => this.fail(err)); }
         el<HTMLDialogElement>('models-dialog').showModal();

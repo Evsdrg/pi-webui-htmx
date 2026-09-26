@@ -83,7 +83,47 @@ lines.on('line',line=>{let cmd;try{cmd=JSON.parse(line);}catch{return;}
  case 'get_session_stats':reply(cmd,{sessionId:id,totalMessages:entries.length,cost:0});break;
  case 'set_session_name':name=cmd.name;append({type:'session_info',name});reply(cmd);break;
  case 'compact':reply(cmd,{summary:'已完成隔离压缩',firstKeptEntryId:parent,tokensBefore:100});break;
+ // fork：按 entryId 截断历史，写成一份新会话文件，然后把当前会话切过去。
+ // 真实 Pi 会改 sessionId 并保留 parentSession 指针；夹具至少要做到
+ // 「返回的 ID 与原来不同」，否则 UI 的切换路径根本验不到。
+ case 'fork':{
+  const cut=entries.findIndex(v=>v.id===cmd.entryId);
+  if(cut<0){replyErr(cmd,'找不到条目 '+cmd.entryId);break;}
+  // 必须剔掉原会话头：entries[0] 就是它，复制过来会让新文件出现两个
+  // type:"session" 行，桥的历史读取器只认第一行，会直接报格式错误。
+  const keep=entries.slice(0,cut+1).filter(v=>v.type!=='session');
+  const newId='fork-'+Math.random().toString(16).slice(2,10);
+  const header={type:'session',version:3,id:newId,parentSession:file,cwd:process.cwd(),timestamp:new Date().toISOString()};
+  const rows=[header,...keep.map(v=>({...v,parentSession:file}))];
+  const target=path.join(path.dirname(file),newId+'.jsonl');
+  fs.mkdirSync(path.dirname(target),{recursive:true});
+  fs.writeFileSync(target,rows.map(v=>JSON.stringify(v)).join('\n')+'\n');
+  file=target;id=newId;entries=rows;
+  reply(cmd,{sessionId:newId});
+  break;
+ }
  case 'get_last_assistant_text':reply(cmd,{text:'测试完成'});break;
+ // 会话树：按 entries 的 parentId 现搭一棵，叶子取最后一条。
+ // 树结构与磁盘一致，浏览器看到的分叉点是真的。
+ case 'get_tree':{
+  const nodes=new Map();
+  for(const row of entries){ if(row.type==='session')continue; nodes.set(row.id,{entry:row,children:[]}); }
+  const roots=[];
+  for(const row of entries){
+   if(row.type==='session')continue;
+   const node=nodes.get(row.id);
+   if(row.parentId&&nodes.has(row.parentId))nodes.get(row.parentId).children.push(node);
+   else roots.push(node);
+  }
+  const leaf=entries.filter(v=>v.type!=='session').at(-1)?.id??null;
+  reply(cmd,{tree:roots,leafId:leaf});
+  break;
+ }
+ case 'get_fork_messages':{
+  const messages=entries.filter(v=>v.type==='message'&&v.message?.role==='user').map(v=>({entryId:v.id,text:v.message.content}));
+  reply(cmd,{messages});
+  break;
+ }
  default:reply(cmd);
  }
 });

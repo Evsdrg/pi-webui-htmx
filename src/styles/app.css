@@ -213,3 +213,16 @@ input,select,textarea { background:var(--bg); border:1px solid var(--border); bo
 .attachment .attachment-meta { position:absolute; left:0; right:0; bottom:0; font-size:9px; text-align:center; background:rgba(0,0,0,.55); color:#fff; padding:1px 0; }
 #composer.dragging { outline:2px dashed var(--accent); outline-offset:2px; }
 .composer-drop { margin:0 0 8px; font-size:11px; color:var(--accent); }
+
+/* 分支导航。树用缩进表达层级，叶子可点；当前叶子高亮。 */
+.branch-dialog { max-width:680px; width:calc(100vw - 48px); }
+.branch-tree { max-height:280px; overflow:auto; border:1px solid var(--border); border-radius:8px; padding:8px 10px; font-size:12px; }
+.branch-node { display:flex; align-items:center; gap:6px; padding:2px 0; }
+.branch-node .branch-kind { color:var(--text-muted); font-size:11px; min-width:52px; }
+.branch-node .branch-text { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.branch-leaf { margin-left:auto; font-size:11px; color:var(--accent); background:transparent; border:1px solid var(--border); border-radius:6px; padding:1px 6px; cursor:pointer; }
+.branch-leaf[aria-current="true"] { border-color:var(--accent); color:var(--accent); font-weight:600; }
+.branch-forks { max-height:200px; overflow:auto; border:1px solid var(--border); border-radius:8px; padding:8px 10px; display:grid; gap:4px; }
+.branch-fork-row { display:flex; gap:8px; align-items:center; font-size:12px; }
+.branch-fork-row span { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; flex:1; }
+.branch-empty { color:var(--text-muted); font-size:12px; }
