@@ -709,6 +709,9 @@ func Test发现接口拒绝非法URL与头部(t *testing.T) {
 }
 
 func TestUI端点返回滚动模式(t *testing.T) {
+	if os.Getenv("PI_WEBUI_DIR") == "" {
+		t.Skip("需要 PI_WEBUI_DIR 加载 UI 包")
+	}
 	s, _, cwd := newTestServer(t)
 	// 造一个会话文件。历史读取不应启动 worker。
 	writeSessionFile(t, s.store.Dir(), "sc1", cwd)

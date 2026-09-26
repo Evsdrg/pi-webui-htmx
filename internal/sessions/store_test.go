@@ -3,6 +3,7 @@ package sessions
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -28,6 +29,11 @@ func writeSession(t *testing.T, dir, id, cwd string, lines ...string) string {
 
 func entry(id, parent string) string {
 	return `{"type":"message","id":"` + id + `","parentId":` + jsonQuote(parent) + `,"timestamp":"2026-01-01T00:00:01.000Z","message":{"role":"user","content":"` + id + `"}}`
+}
+
+// entryRole 造一条指定角色的消息记录，用于测试混合回合。
+func entryRole(id, parent, role string) string {
+	return `{"type":"message","id":"` + id + `","parentId":` + jsonQuote(parent) + `,"timestamp":"2026-01-01T00:00:01.000Z","message":{"role":"` + role + `","content":"` + id + `"}}`
 }
 
 func jsonQuote(v string) string {
@@ -210,4 +216,103 @@ func entryIDs(entries []json.RawMessage) []string {
 		out = append(out, e.ID)
 	}
 	return out
+}
+
+func TestHistory分页对齐到完整轮(t *testing.T) {
+	// 直接按原始条目数切片会把一轮切成两半，翻页回来的第一屏边界上
+	// 会出现没有 user 锚点的孤儿工具/助手条目，与上一屏末尾重复。
+	// 这里验证：每页的最旧一条必须是 user 消息（或已到会话开头）。
+	cwd := t.TempDir()
+	dir := t.TempDir()
+	store, err := New(dir, mustPolicy(t, cwd), DefaultLimits())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	lines := []string{}
+	parent := ""
+	for turn := 0; turn < 10; turn++ {
+		u := fmt.Sprintf("u%d", turn)
+		lines = append(lines, entryRole(u, parent, "user"))
+		parent = u
+		for k := 0; k < 2; k++ {
+			tk := fmt.Sprintf("t%d_%d", turn, k)
+			lines = append(lines, entryRole(tk, parent, "toolResult"))
+			parent = tk
+		}
+		a := fmt.Sprintf("a%d", turn)
+		lines = append(lines, entryRole(a, parent, "assistant"))
+		parent = a
+	}
+	id := writeSession(t, dir, "align", cwd, lines...)
+	ctx := context.Background()
+
+	// limit=6 会把第二轮切成两半（6 条 = 1.5 轮）。
+	page, err := store.History(ctx, id, "", "", 6)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(page.Entries) == 0 {
+		t.Fatal("空页")
+	}
+	if role := oldestRole(t, page); role != "user" {
+		t.Fatalf("最旧一条应为 user，实际 %q（半轮）", role)
+	}
+
+	next, err := store.History(ctx, id, "", page.OldestEntryID, 6)
+	if err != nil {
+		t.Fatal(err)
+	}
+	seen := map[string]bool{}
+	for _, e := range entryIDs(page.Entries) {
+		seen[e] = true
+	}
+	for _, e := range entryIDs(next.Entries) {
+		if seen[e] {
+			t.Fatalf("翻页出现重复条目 %q", e)
+		}
+	}
+	if len(next.Entries) > 0 {
+		if role := oldestRole(t, next); role != "user" {
+			t.Fatalf("翻页后最旧一条应为 user，实际 %q", role)
+		}
+	}
+}
+
+func TestHistory轮对齐不跨会话开头无限扩大(t *testing.T) {
+	// 一路取到会话开头都没遇到 user 时，保留原切片而不是无限扩大。
+	cwd := t.TempDir()
+	dir := t.TempDir()
+	store, err := New(dir, mustPolicy(t, cwd), DefaultLimits())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	id := writeSession(t, dir, "nouser", cwd,
+		entryRole("t1", "", "toolResult"), entryRole("t2", "t1", "toolResult"),
+		entryRole("t3", "t2", "toolResult"), entryRole("t4", "t3", "toolResult"))
+	page, err := store.History(context.Background(), id, "", "", 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(page.Entries) == 0 || len(page.Entries) > 4 {
+		t.Fatalf("条目数异常: %d", len(page.Entries))
+	}
+}
+
+// oldestRole 取一页最旧一条的角色。
+// 注意 Page.Entries 按祖先到后代（旧→新）排序，首位才是最旧。
+func oldestRole(t *testing.T, page Page) string {
+	t.Helper()
+	raw := page.Entries[0]
+	var v struct {
+		Message struct {
+			Role string `json:"role"`
+		} `json:"message"`
+	}
+	if json.Unmarshal(raw, &v) != nil {
+		t.Fatal(string(raw))
+	}
+	return v.Message.Role
 }

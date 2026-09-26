@@ -488,7 +488,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		expires := time.Now().Add(8 * time.Hour)
 		exp := strconv.FormatInt(expires.Unix(), 10)
-		http.SetCookie(w, &http.Cookie{Name: cookieName, Value: exp + "." + s.signature(exp), HttpOnly: true, Secure: r.TLS != nil, SameSite: http.SameSiteStrictMode, Path: "/api/v1/", Expires: expires, MaxAge: 8 * 60 * 60})
+		http.SetCookie(w, &http.Cookie{Name: cookieName, Value: exp + "." + s.signature(exp), HttpOnly: true, Secure: r.TLS != nil, SameSite: http.SameSiteStrictMode, Path: "/", Expires: expires, MaxAge: 8 * 60 * 60})
 		writeJSON(w, 200, map[string]any{"ok": true})
 		return
 	}

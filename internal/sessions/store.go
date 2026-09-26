@@ -344,6 +344,10 @@ func (s *Store) History(ctx context.Context, id, leaf, before string, limit int)
 		selected = append(selected, cursor)
 		cursor = node.parent
 	}
+
+	// 轮边界对齐：见 alignToTurn 的说明。它会向前多取条目，
+	// 因此返回更新后的游标，HasMore 必须用它而不是原 cursor。
+	selected, total, cursor = s.alignToTurn(f, nodes, selected, total, cursor)
 	page := Page{SessionID: id, LeafID: leaf, LeafSource: "disk", Entries: []json.RawMessage{}, HasMore: cursor != ""}
 	for i := len(selected) - 1; i >= 0; i-- {
 		node := nodes[selected[i]]
@@ -361,4 +365,77 @@ func (s *Store) History(ctx context.Context, id, leaf, before string, limit int)
 		page.OldestEntryID = selected[len(selected)-1]
 	}
 	return page, nil
+}
+
+// alignToTurn 把分页边界对齐到「完整的一轮」。
+//
+// 为什么需要：直接按原始条目数切片会把一轮对话切成两半。翻页回来的
+// 第一屏边界上会出现没有 user 锚点的孤儿工具/助手条目，而上一屏的末尾
+// 正是这些条目——它们会被重复显示，视口也被顶走。
+//
+// 做法：从本页最旧一端（selected 的最后一个）向前多取，直到遇到一条
+// user 消息，使本页以「某个完整轮的结尾」收尾。向前多取的部分不计入
+// limit（那是 UI 层面的预算），但仍受单页体积与条目数硬上限约束。
+//
+// 边界情况：
+//   - 一直取到会话开头都没遇到 user 消息：保留原切片，不强行扩大
+//   - 体积超限：停在超限前，宁可留孤儿也不返回错误
+//   - 读取失败：保留原切片
+//
+// 这一层是切片策略，不是正确性要求——前端本就能渲染孤儿条目。
+func (s *Store) alignToTurn(f *os.File, nodes map[string]node, selected []string, total int, cursor string) ([]string, int, string) {
+	if len(selected) == 0 {
+		return selected, total, cursor
+	}
+	// 先看本页最旧一条是否已经是 user——是则无需对齐。
+	// 注意 selected 是从新到旧排列的，末位是最旧。
+	if kind := entryKind(s.readEntry(f, nodes, selected[len(selected)-1])); kind == KindUser {
+		return selected, total, cursor
+	}
+	// 否则向前多取，直到把某个完整轮的 user 锚点包含进来。
+	// 从 selected 末位的父亲继续向前——调用方传进来的 cursor 正是它。
+	for cursor != "" {
+		node := nodes[cursor]
+		if total+node.size > s.limits.PageBytes {
+			break
+		}
+		if len(selected) >= s.limits.Entries {
+			break
+		}
+		b := s.readEntry(f, nodes, cursor)
+		if !json.Valid(b) {
+			break
+		}
+		selected = append(selected, cursor)
+		total += node.size
+		isUser := entryKind(b) == KindUser
+		cursor = node.parent
+		// 遇到 user 锚点说明已覆盖完整一轮，停止。
+		if isUser {
+			break
+		}
+	}
+	return selected, total, cursor
+}
+
+// readEntry 读取某条原始记录；失败返回 nil。
+func (s *Store) readEntry(f *os.File, nodes map[string]node, id string) []byte {
+	node, ok := nodes[id]
+	if !ok {
+		return nil
+	}
+	b := make([]byte, node.size)
+	if _, err := f.ReadAt(b, node.offset); err != nil {
+		return nil
+	}
+	return bytes.TrimSpace(b)
+}
+
+// entryKind 判断一条原始记录的角色类别，用于轮边界对齐。
+func entryKind(b []byte) EntryKind {
+	entries := ProjectEntries([]json.RawMessage{json.RawMessage(b)})
+	if len(entries) == 0 {
+		return KindOther
+	}
+	return entries[0].Kind
 }
