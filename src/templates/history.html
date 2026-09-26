@@ -4,13 +4,16 @@
  hx-get="/ui/sessions/{{.SessionID}}/history?before={{.OldestEntryID}}&amp;leafId={{.LeafID}}"
  hx-target="#turns" hx-swap="afterbegin" hx-sync="this:drop" hx-disabled-elt="this">↑ 加载更早的消息</button></div>{{end}}
 </div>
-{{range .Turns}}
-<article class="turn" data-turn-id="{{.ID}}">
-  {{if .UserText}}<div class="turn-user"><div class="bubble">{{.UserText}}</div></div>{{end}}
-  {{if .HasProcess}}<details class="turn-process"><summary>查看过程 · {{len .Steps}} 步</summary><ol>
-    {{range .Steps}}<li><span class="step-kind">{{.Kind}}</span><pre class="step-detail">{{.Detail}}</pre></li>{{end}}
+{{/* 用显式变量而不是 $：$ 在 Go 模板里始终指向最外层数据（HistoryData），
+     range 内层取不到 Turn 的字段，会直接渲染失败。 */}}
+{{range $turn := .Turns}}
+<article class="turn" data-turn-id="{{$turn.ID}}">
+  {{if $turn.UserText}}<div class="turn-user"><div class="bubble">{{$turn.UserText}}</div></div>{{end}}
+  {{if $turn.HasProcess}}<details class="turn-process"><summary>查看过程 · {{len $turn.Steps}} 步</summary><ol>
+    {{range $step := $turn.Steps}}<li><span class="step-kind">{{$step.Kind}}</span><pre class="step-detail">{{$step.Detail}}</pre>{{if and $step.EntryID $step.Images}}{{range $step.Images}}<button class="lazy-block" data-lazy="tool-image" data-entry-id="{{$step.EntryID}}" data-block-index="{{.}}">查看工具图片</button>{{end}}{{end}}</li>{{end}}
   </ol></details>{{end}}
-  {{if .AssistantText}}<div class="turn-assistant"><span class="role" role="img" aria-label="Pi 助手">π</span><div class="bubble markdown">{{.AssistantText}}</div></div>{{end}}
-  <div class="turn-actions"><button class="icon-btn" data-action="copy-turn" aria-label="复制此回合内容">复制</button>{{if .UserText}}<button class="icon-btn" data-action="fork" data-entry-id="{{.ID}}">从此处分支</button>{{end}}</div>
+  {{if and $turn.AssistantEntryID $turn.Thinking}}{{range $turn.Thinking}}<button class="lazy-block" data-lazy="thinking" data-entry-id="{{$turn.AssistantEntryID}}" data-block-index="{{.}}">查看思考过程</button>{{end}}{{end}}
+  {{if $turn.AssistantText}}<div class="turn-assistant"><span class="role" role="img" aria-label="Pi 助手">π</span><div class="bubble markdown">{{$turn.AssistantText}}</div></div>{{end}}
+  <div class="turn-actions"><button class="icon-btn" data-action="copy-turn" aria-label="复制此回合内容">复制</button>{{if $turn.UserText}}<button class="icon-btn" data-action="fork" data-entry-id="{{$turn.ID}}">从此处分支</button>{{end}}</div>
 </article>
 {{end}}

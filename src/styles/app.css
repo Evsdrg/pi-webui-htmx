@@ -232,3 +232,10 @@ input,select,textarea { background:var(--bg); border:1px solid var(--border); bo
 .mention-item { display:flex; gap:8px; align-items:baseline; width:100%; text-align:left; }
 .mention-item[aria-selected="true"] { background:var(--accent-soft); }
 .mention-path { font-family:var(--font-mono); font-size:11px; }
+
+/* 惰性内容占位符。点开后才向桥取正文，未展开时不占版面。 */
+.lazy-block { display:inline-block; margin:2px 0; padding:1px 8px; font-size:11px; color:var(--text-muted); background:var(--bg-subtle); border:1px dashed var(--border); border-radius:6px; cursor:pointer; }
+.lazy-block:hover { color:var(--accent); border-color:var(--accent); }
+.lazy-block[data-loaded="1"] { display:none; }
+.lazy-thinking { margin:0 0 6px; padding:6px 10px; font-size:12px; color:var(--text-muted); background:var(--bg-subtle); border-left:2px solid var(--border); border-radius:0 6px 6px 0; white-space:pre-wrap; }
+.lazy-image { max-width:100%; border:1px solid var(--border); border-radius:8px; display:block; margin:4px 0; }

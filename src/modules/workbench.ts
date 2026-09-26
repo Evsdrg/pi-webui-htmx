@@ -85,6 +85,7 @@ export class Workbench {
     }, { signal });
     this.wireAttachments();
     void this.wireMention();
+    void this.wireLazy();
     el('auto-retry').addEventListener('change', () => {
       const enabled = el<HTMLInputElement>('auto-retry').checked;
       // Pi 没有自动重试的读回字段，失败时把勾选还原，避免界面停在假状态。
@@ -533,6 +534,15 @@ export class Workbench {
       event.preventDefault(); depth = 0; composer.classList.remove('dragging'); dropHint.hidden = true;
       if (event.dataTransfer?.files.length) void this.attach(event.dataTransfer.files);
     }, { signal });
+  }
+
+  // wireLazy 接线惰性内容占位符。事件委托只绑一次，
+  // 历史整块替换后无需重新绑定；模块加载失败不影响其余功能。
+  private async wireLazy(): Promise<void> {
+    try {
+      const { wireLazy } = await import('./lazy');
+      wireLazy(() => this.sessionId);
+    } catch (error) { console.warn('惰性内容接线失败', error); }
   }
 
   // wireMention 动态加载 @ 补全。它只在用户真的打 @ 时才有用，
