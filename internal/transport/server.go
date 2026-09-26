@@ -21,6 +21,7 @@ import (
 	"github.com/coder/websocket"
 	"pi-bridge-go/internal/management"
 	"pi-bridge-go/internal/observe"
+	"pi-bridge-go/internal/pi"
 	"pi-bridge-go/internal/presentation"
 	"pi-bridge-go/internal/protocol"
 	run "pi-bridge-go/internal/runtime"
@@ -1115,23 +1116,33 @@ func (s *Server) dispatchCommon(ctx context.Context, r protocol.Request, sink co
 		return map[string]any{"kind": p.Kind, "mode": p.Mode}, nil
 	case "session.steer":
 		var p struct {
-			Text string `json:"text"`
+			Text   string     `json:"text"`
+			Images []pi.Image `json:"images"`
 		}
 		if err := protocol.Decode(r.Params, &p); err != nil {
 			return nil, err
 		}
-		if err := w.Steer(ctx, p.Text); err != nil {
+		images, err := pi.DecodeImages(p.Images)
+		if err != nil {
+			return nil, err
+		}
+		if err := w.Steer(ctx, p.Text, images); err != nil {
 			return nil, err
 		}
 		return map[string]bool{"queued": true}, nil
 	case "session.follow_up":
 		var p struct {
-			Text string `json:"text"`
+			Text   string     `json:"text"`
+			Images []pi.Image `json:"images"`
 		}
 		if err := protocol.Decode(r.Params, &p); err != nil {
 			return nil, err
 		}
-		if err := w.FollowUp(ctx, p.Text); err != nil {
+		images, err := pi.DecodeImages(p.Images)
+		if err != nil {
+			return nil, err
+		}
+		if err := w.FollowUp(ctx, p.Text, images); err != nil {
 			return nil, err
 		}
 		return map[string]bool{"queued": true}, nil
@@ -1607,13 +1618,18 @@ func (s *Server) dispatchCommon(ctx context.Context, r protocol.Request, sink co
 		return map[string]any{"text": text, "truncated": truncated}, nil
 	case "session.prompt":
 		var p struct {
-			Text     string `json:"text"`
-			Behavior string `json:"streamingBehavior"`
+			Text     string     `json:"text"`
+			Behavior string     `json:"streamingBehavior"`
+			Images   []pi.Image `json:"images"`
 		}
 		if err := protocol.Decode(r.Params, &p); err != nil {
 			return nil, err
 		}
-		if err := w.Prompt(ctx, p.Text, p.Behavior); err != nil {
+		images, err := pi.DecodeImages(p.Images)
+		if err != nil {
+			return nil, err
+		}
+		if err := w.Prompt(ctx, p.Text, p.Behavior, images); err != nil {
 			return nil, err
 		}
 		return map[string]bool{"accepted": true}, nil

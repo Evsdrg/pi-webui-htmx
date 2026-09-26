@@ -147,20 +147,20 @@ func (w *Worker) SetQueueMode(ctx context.Context, kind, mode string) error {
 }
 
 // Steer 在当前回合结束后插入一条引导消息。
-func (w *Worker) Steer(ctx context.Context, text string) error {
+func (w *Worker) Steer(ctx context.Context, text string, images []map[string]any) error {
 	if text == "" {
 		return protocol.E("invalid_params", "消息不能为空")
 	}
-	_, err := w.call(ctx, "steer", map[string]any{"message": text}, true)
+	_, err := w.call(ctx, "steer", messageFields(text, images), true)
 	return err
 }
 
 // FollowUp 排队一条后续消息，等 agent 完全结束后再投递。
-func (w *Worker) FollowUp(ctx context.Context, text string) error {
+func (w *Worker) FollowUp(ctx context.Context, text string, images []map[string]any) error {
 	if text == "" {
 		return protocol.E("invalid_params", "消息不能为空")
 	}
-	_, err := w.call(ctx, "follow_up", map[string]any{"message": text}, true)
+	_, err := w.call(ctx, "follow_up", messageFields(text, images), true)
 	return err
 }
 

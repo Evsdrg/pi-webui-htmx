@@ -223,7 +223,7 @@ func TestReplay环在身份变更后失效(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer sub.Close()
-	_ = w.Prompt(ctx, "hi", "")
+	_ = w.Prompt(ctx, "hi", "", nil)
 	// 等到至少一条事件入环。
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {

@@ -20,7 +20,7 @@ func Test扩展对话登记与回复(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer sub.Close()
-	go func() { _ = w.Prompt(ctx, "触发对话", "") }()
+	go func() { _ = w.Prompt(ctx, "触发对话", "", nil) }()
 
 	// 等对话请求出现，并确认 worker 进入等待输入状态。
 	deadline := time.Now().Add(3 * time.Second)
@@ -105,7 +105,7 @@ func Test停止时取消未回复对话(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer sub.Close()
-	go func() { _ = w.Prompt(ctx, "触发对话", "") }()
+	go func() { _ = w.Prompt(ctx, "触发对话", "", nil) }()
 	deadline := time.Now().Add(3 * time.Second)
 	for time.Now().Before(deadline) {
 		if len(w.PendingDialogs()) > 0 {
@@ -137,7 +137,7 @@ func Test停止时取消待回复对话且不永久挂起(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer sub.Close()
-	go func() { _ = w.Prompt(ctx, "触发对话", "") }()
+	go func() { _ = w.Prompt(ctx, "触发对话", "", nil) }()
 	deadline := time.Now().Add(3 * time.Second)
 	for time.Now().Before(deadline) {
 		if len(w.PendingDialogs()) > 0 {
@@ -180,7 +180,7 @@ func Test事件计数接入指标(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer sub.Close()
-	if err := w.Prompt(ctx, "hi", ""); err != nil {
+	if err := w.Prompt(ctx, "hi", "", nil); err != nil {
 		t.Fatal(err)
 	}
 	deadline := time.Now().Add(3 * time.Second)

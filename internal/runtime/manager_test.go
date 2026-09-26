@@ -98,7 +98,7 @@ func TestPrompt返回接受并推送事件(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	if err := w.Prompt(ctx, "你好", ""); err != nil {
+	if err := w.Prompt(ctx, "你好", "", nil); err != nil {
 		t.Fatalf("发送提示词失败: %v", err)
 	}
 	seen := map[string]bool{}
@@ -190,7 +190,7 @@ func Test扩展对话被显式取消(t *testing.T) {
 	defer sub.Close()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	go func() { _ = w.Prompt(ctx, "触发对话", "") }()
+	go func() { _ = w.Prompt(ctx, "触发对话", "", nil) }()
 	deadline := time.Now().Add(3 * time.Second)
 	for time.Now().Before(deadline) {
 		msg, err := sub.Next(ctx)
@@ -245,7 +245,7 @@ func Test并发订阅不阻塞事件(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	for i := 0; i < 5; i++ {
-		if err := w.Prompt(ctx, "压测", ""); err != nil {
+		if err := w.Prompt(ctx, "压测", "", nil); err != nil {
 			t.Fatalf("慢订阅者不应阻塞发送: %v", err)
 		}
 	}

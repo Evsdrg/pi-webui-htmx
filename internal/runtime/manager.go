@@ -574,19 +574,29 @@ func (w *Worker) stateAfterRebind(ctx context.Context) (State, error) {
 }
 
 // Prompt 发送提示词；返回只代表 Pi 已接受，不代表任务完成。
-func (w *Worker) Prompt(ctx context.Context, text, behavior string) error {
+func (w *Worker) Prompt(ctx context.Context, text, behavior string, images []map[string]any) error {
 	if text == "" {
 		return protocol.E("invalid_params", "提示词不能为空")
 	}
 	if behavior != "" && behavior != "steer" && behavior != "followUp" {
 		return protocol.E("invalid_params", "streamingBehavior 无效")
 	}
-	fields := map[string]any{"message": text}
+	fields := messageFields(text, images)
 	if behavior != "" {
 		fields["streamingBehavior"] = behavior
 	}
 	_, err := w.call(ctx, "prompt", fields, true)
 	return err
+}
+
+// messageFields 组装 prompt/steer/follow_up 的公共字段。
+// 图片为空时不带 images 键，避免给 Pi 发空数组。
+func messageFields(text string, images []map[string]any) map[string]any {
+	fields := map[string]any{"message": text}
+	if len(images) > 0 {
+		fields["images"] = images
+	}
+	return fields
 }
 
 // Abort 先清空队列再中止，否则 abort 之后队列里的消息会继续执行。
