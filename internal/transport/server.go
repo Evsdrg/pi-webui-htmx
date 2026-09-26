@@ -283,6 +283,13 @@ func (s *Server) serveUI(w http.ResponseWriter, r *http.Request) bool {
 		writeHTML(w, html)
 		return true
 
+	// 惰性内容：思考文本与工具结果图片。
+	// 历史页只带占位符，base64 图片和大段思考等用户点了才取——
+	// 否则每一页翻迁都要为当时并没看的内容付带宽。
+	case strings.HasPrefix(path, "/ui/sessions/") && strings.HasSuffix(path, "/lazy"):
+		s.serveLazy(w, r, path)
+		return true
+
 	case strings.HasPrefix(path, "/ui/sessions/") && strings.HasSuffix(path, "/history"):
 		id := strings.TrimSuffix(strings.TrimPrefix(path, "/ui/sessions/"), "/history")
 		if !sessions.ValidID(id) {
@@ -1810,4 +1817,51 @@ func (s *Server) serveExport(w http.ResponseWriter, r *http.Request) {
 	}
 	w.WriteHeader(200)
 	_, _ = presentation.Compress(w, body, encoding)
+}
+
+// serveLazy 处理 /ui/sessions/{id}/lazy?entryId=..&kind=thinking|tool-image&blockIndex=N。
+//
+// kind 决定取文本还是图片字节。两者都从磁盘上的 JSONL 现读，
+// 桥不做任何缓存：内容可能被后续 fork/compact 改变，缓存只会提供陈旧数据。
+func (s *Server) serveLazy(w http.ResponseWriter, r *http.Request, path string) {
+	id := strings.TrimSuffix(strings.TrimPrefix(path, "/ui/sessions/"), "/lazy")
+	if !sessions.ValidID(id) {
+		writeError(w, 400, protocol.E("invalid_params", "会话 ID 不合法"))
+		return
+	}
+	entryID := r.URL.Query().Get("entryId")
+	if !sessions.ValidID(entryID) {
+		writeError(w, 400, protocol.E("invalid_params", "条目 ID 不合法"))
+		return
+	}
+	raw := r.URL.Query().Get("blockIndex")
+	blockIndex, err := strconv.Atoi(raw)
+	if raw == "" || err != nil || blockIndex < 0 {
+		writeError(w, 400, protocol.E("invalid_params", "blockIndex 必须是非负整数"))
+		return
+	}
+	switch r.URL.Query().Get("kind") {
+	case "thinking":
+		text, err := s.store.Thinking(r.Context(), id, entryID, blockIndex)
+		if err != nil {
+			writeError(w, 400, err)
+			return
+		}
+		writeJSON(w, 200, map[string]string{"thinking": text})
+	case "tool-image":
+		body, mime, err := s.store.ToolImage(r.Context(), id, entryID, blockIndex)
+		if err != nil {
+			writeError(w, 400, err)
+			return
+		}
+		// 图片带内容哈希可长期缓存；文件名与 entryId 相关但不含哈希，
+		// 所以只用 no-store，避免会话内容变化后浏览器还给旧图。
+		w.Header().Set("Content-Type", mime)
+		w.Header().Set("Cache-Control", "no-store")
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		w.WriteHeader(200)
+		_, _ = w.Write(body)
+	default:
+		writeError(w, 400, protocol.E("invalid_params", "kind 必须是 thinking 或 tool-image"))
+	}
 }

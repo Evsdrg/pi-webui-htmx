@@ -66,6 +66,9 @@ type Entry struct {
 	Kind   EntryKind       `json:"kind"`
 	Text   string          `json:"text"`
 	Detail json.RawMessage `json:"detail,omitempty"`
+	// Lazy 列出可延后加载的内容块（思考、工具图片）。
+	// 只带索引不带内容：历史页因此能渲染占位符，而不把大块数据传出去。
+	Lazy []LazyBlock `json:"lazy,omitempty"`
 }
 
 // ProjectEntries 把原始条目投影成渲染友好的结构。
@@ -82,7 +85,7 @@ func ProjectEntries(raw []json.RawMessage) []Entry {
 		if json.Unmarshal(r, &item) != nil || item.ID == "" {
 			continue
 		}
-		e := Entry{ID: item.ID, Detail: r}
+		e := Entry{ID: item.ID, Detail: r, Lazy: scanLazyBlocks(item.Message)}
 		switch item.Type {
 		case "message":
 			role, text := messageRoleAndText(item.Message)

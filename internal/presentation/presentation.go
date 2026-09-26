@@ -371,6 +371,12 @@ func sessionTitle(h sessions.Header) string {
 type Step struct {
 	Kind   string
 	Detail string
+	// EntryID 与 Images 配对：前者是承载图片块的条目 ID，
+	// 后者是块下标。缺任一条件就不渲染占位符。
+	EntryID string
+	// Images 是这一步里可延后加载的图片块下标；
+	// 详情只放文字，base64 图片等用户点了才取。
+	Images []int
 }
 
 // Turn 是一个完整回合：用户消息 + 过程 + 助手回复。
@@ -383,6 +389,10 @@ type Turn struct {
 	AssistantText string
 	Steps         []Step
 	HasProcess    bool
+	// AssistantEntryID 与 Thinking 配对：前者是承载思考块的条目 ID，
+	// 后者是块下标。缺任一条件就不渲染占位符。
+	AssistantEntryID string
+	Thinking         []int
 }
 
 // HistoryData 驱动历史模板。
@@ -392,6 +402,17 @@ type HistoryData struct {
 	Turns         []Turn
 	HasMore       bool
 	OldestEntryID string
+}
+
+// lazyIndexes 从惰性块列表里挑出某一类的块下标。
+func lazyIndexes(blocks []sessions.LazyBlock, kind string) []int {
+	var out []int
+	for _, b := range blocks {
+		if b.Kind == kind {
+			out = append(out, b.BlockIndex)
+		}
+	}
+	return out
 }
 
 // GroupTurns 把分支条目聚合成完整回合。
@@ -406,20 +427,26 @@ func GroupTurns(entries []sessions.Entry) []Turn {
 			turns = append(turns, Turn{ID: e.ID, UserText: e.Text})
 			current = len(turns) - 1
 		case sessions.KindAssistant:
+			thinking := lazyIndexes(e.Lazy, "thinking")
 			if current < 0 {
-				turns = append(turns, Turn{ID: e.ID, AssistantText: e.Text})
+				turns = append(turns, Turn{ID: e.ID, AssistantText: e.Text, AssistantEntryID: e.ID, Thinking: thinking})
 				continue
+			}
+			if len(thinking) > 0 {
+				turns[current].AssistantEntryID = e.ID
+				turns[current].Thinking = append(turns[current].Thinking, thinking...)
 			}
 			if turns[current].AssistantText != "" && e.Text != "" {
 				turns[current].AssistantText += "\n\n"
 			}
 			turns[current].AssistantText += e.Text
 		case sessions.KindTool:
+			images := lazyIndexes(e.Lazy, "image")
 			if current < 0 {
-				turns = append(turns, Turn{ID: e.ID, HasProcess: true, Steps: []Step{{Kind: "工具", Detail: e.Text}}})
+				turns = append(turns, Turn{ID: e.ID, HasProcess: true, Steps: []Step{{Kind: "工具", Detail: e.Text, EntryID: e.ID, Images: images}}})
 				continue
 			}
-			turns[current].Steps = append(turns[current].Steps, Step{Kind: "工具", Detail: e.Text})
+			turns[current].Steps = append(turns[current].Steps, Step{Kind: "工具", Detail: e.Text, EntryID: e.ID, Images: images})
 			turns[current].HasProcess = true
 		case sessions.KindCompaction:
 			// 压缩边界单独成轮，避免把摘要并进相邻回合。
