@@ -282,33 +282,65 @@ func (s *Store) History(ctx context.Context, id, leaf, before string, limit int)
 			offset += int64(n)
 			continue
 		}
-		var item struct {
-			Type   string          `json:"type"`
-			ID     string          `json:"id"`
-			Parent json.RawMessage `json:"parentId"`
+		// 快路径：只读行首三个字段。绝大多数记录在这里就结束，
+		// 不必把整行（可能上百 KB）解析一遍。
+		head, fast := parseEntryHead(b)
+		if !fast {
+			// 慢路径：完整解析。这里刻意自己校验并返回错误，
+			// 而不是把结果塞进 entryHead——原来用 json.RawMessage
+			// 承载 parentId，能区分「解析失败」和「解出来是空」；
+			// 硬塞进 entryHead 会把「parentId 是数字」这类错误
+			// 从「父条目 ID 无效」悄悄变成「父链断裂」。
+			var item struct {
+				Type   string          `json:"type"`
+				ID     string          `json:"id"`
+				Parent json.RawMessage `json:"parentId"`
+			}
+			if json.Unmarshal(b, &item) != nil || item.Type == "" || item.Type == "session" || !ValidID(item.ID) || len(item.Parent) == 0 {
+				return Page{}, protocol.E("invalid_history", "完整的历史记录格式错误")
+			}
+			if _, ok := nodes[item.ID]; ok {
+				return Page{}, protocol.E("invalid_history", "历史条目 ID 重复")
+			}
+			parent := ""
+			if !bytes.Equal(item.Parent, []byte("null")) {
+				if json.Unmarshal(item.Parent, &parent) != nil || !ValidID(parent) {
+					return Page{}, protocol.E("invalid_history", "父条目 ID 无效")
+				}
+			}
+			if parent != "" {
+				if _, ok := nodes[parent]; !ok || parent == item.ID {
+					return Page{}, protocol.E("invalid_history", "父链断裂或存在环")
+				}
+			}
+			if len(nodes) >= s.limits.Entries {
+				return Page{}, protocol.E("limit_exceeded", "历史索引条目数超过上限")
+			}
+			nodes[item.ID] = node{parent, offset, n}
+			last = item.ID
+			offset += int64(n)
+			continue
 		}
-		if json.Unmarshal(b, &item) != nil || item.Type == "" || item.Type == "session" || !ValidID(item.ID) || len(item.Parent) == 0 {
+		if head.Type == "" || head.Type == "session" || !ValidID(head.ID) || !head.HasParent {
 			return Page{}, protocol.E("invalid_history", "完整的历史记录格式错误")
 		}
-		if _, ok := nodes[item.ID]; ok {
+		if _, ok := nodes[head.ID]; ok {
 			return Page{}, protocol.E("invalid_history", "历史条目 ID 重复")
 		}
-		parent := ""
-		if !bytes.Equal(item.Parent, []byte("null")) {
-			if json.Unmarshal(item.Parent, &parent) != nil || !ValidID(parent) {
-				return Page{}, protocol.E("invalid_history", "父条目 ID 无效")
-			}
+		parent := head.Parent // parentId 为 null 时天然是空串
+		if !head.ParentNull && !ValidID(parent) {
+			return Page{}, protocol.E("invalid_history", "父条目 ID 无效")
 		}
 		if parent != "" {
-			if _, ok := nodes[parent]; !ok || parent == item.ID {
+			if _, ok := nodes[parent]; !ok || parent == head.ID {
 				return Page{}, protocol.E("invalid_history", "父链断裂或存在环")
 			}
 		}
 		if len(nodes) >= s.limits.Entries {
 			return Page{}, protocol.E("limit_exceeded", "历史索引条目数超过上限")
 		}
-		nodes[item.ID] = node{parent, offset, n}
-		last = item.ID
+		nodes[head.ID] = node{parent, offset, n}
+		last = head.ID
 		offset += int64(n)
 	}
 	if !headerSeen {
