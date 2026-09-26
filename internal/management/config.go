@@ -41,6 +41,26 @@ func NewConfig(agentDir string, limits Limits) *Config {
 	}
 }
 
+// Raw 返回 models.json 的原始文档，密钥字段被打码，供前端编辑使用。
+func (c *Config) Raw() (map[string]any, error) {
+	raw, err := c.read("models.json")
+	if err != nil {
+		if os.IsNotExist(err) {
+			return map[string]any{"providers": map[string]any{}}, nil
+		}
+		return nil, protocol.E("pi_error", "无法读取 models.json")
+	}
+	var doc map[string]any
+	if json.Unmarshal(raw, &doc) != nil {
+		return nil, protocol.E("invalid_history", "models.json 不是合法 JSON")
+	}
+	out, _ := redact(doc).(map[string]any)
+	if _, ok := out["providers"]; !ok {
+		out["providers"] = map[string]any{}
+	}
+	return out, nil
+}
+
 // Models 返回 models.json 中的自定义 provider 与模型，密钥字段被打码。
 func (c *Config) Models() (map[string]any, error) {
 	raw, err := c.read("models.json")
@@ -176,4 +196,81 @@ func sortedKeys(m map[string]any) []string {
 	}
 	sort.Strings(keys)
 	return keys
+}
+
+// WriteModels 原子写入 models.json。
+// 设计约束：
+//   - 先序列化到同目录临时文件，再 rename，避免半截配置被 Pi 读到；
+//   - 落盘前做结构校验，拒绝把明显损坏的文档写进去；
+//   - 密钥字段原样保留（前端编辑时用占位符回传的会保持原值）。
+func (c *Config) WriteModels(doc map[string]any) error {
+	if doc == nil {
+		return protocol.E("invalid_params", "配置不能为空")
+	}
+	providers, ok := doc["providers"]
+	if !ok {
+		return protocol.E("invalid_params", "配置必须包含 providers 字段")
+	}
+	if _, ok := providers.(map[string]any); !ok {
+		return protocol.E("invalid_params", "providers 必须是对象")
+	}
+	if err := c.validateModelsDocument(doc); err != nil {
+		return err
+	}
+	b, err := json.MarshalIndent(doc, "", "  ")
+	if err != nil {
+		return protocol.E("pi_error", "配置序列化失败")
+	}
+	b = append(b, '\n')
+	if int64(len(b)) > c.limits.MaxFileBytes {
+		return protocol.E("limit_exceeded", "配置超过体积上限")
+	}
+	path := filepath.Join(c.agentDir, "models.json")
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, b, 0600); err != nil {
+		return protocol.E("pi_error", "写入临时文件失败")
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		_ = os.Remove(tmp)
+		return protocol.E("pi_error", "替换配置文件失败")
+	}
+	return nil
+}
+
+// validateModelsDocument 在落盘前拦截明显损坏的配置。
+func (c *Config) validateModelsDocument(doc map[string]any) error {
+	providers, _ := doc["providers"].(map[string]any)
+	if len(providers) > c.limits.MaxModels {
+		return protocol.E("limit_exceeded", "provider 数量超过上限")
+	}
+	for name, v := range providers {
+		if name == "" || len(name) > 128 {
+			return protocol.E("invalid_params", "provider 名称长度必须在 1 到 128 之间")
+		}
+		entry, ok := v.(map[string]any)
+		if !ok {
+			return protocol.E("invalid_params", "provider "+name+" 必须是对象")
+		}
+		if models, exists := entry["models"]; exists {
+			list, ok := models.(map[string]any)
+			if !ok {
+				return protocol.E("invalid_params", "provider "+name+" 的 models 必须是对象")
+			}
+			if len(list) > c.limits.MaxModels {
+				return protocol.E("limit_exceeded", "provider "+name+" 的模型数量超过上限")
+			}
+			for id := range list {
+				if id == "" || len(id) > 128 {
+					return protocol.E("invalid_params", "模型 ID 长度必须在 1 到 128 之间")
+				}
+			}
+		}
+		if api, exists := entry["api"]; exists {
+			s, ok := api.(string)
+			if !ok || (!strings.HasPrefix(s, "http://") && !strings.HasPrefix(s, "https://")) {
+				return protocol.E("invalid_params", "provider "+name+" 的 api 必须是 http(s) 地址")
+			}
+		}
+	}
+	return nil
 }

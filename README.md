@@ -72,8 +72,10 @@ WS 命令：
 - 文件与 Git：`files.list`、`files.stat`、`files.read`、`files.roots`、`git.status`、`git.diff`
 - 扩展对话：`session.ui_response`、`session.pending_dialogs`
 - 其他：`session.stats`、`session.set_name`、`session.last_assistant`、`session.commands`、
-  `session.export_html`、`sessions.search`、`sessions.delete`、
-  `config.models`、`config.settings`、`config.trust`
+  `session.export_html`、`sessions.search`、`sessions.delete`
+- 模型配置：`config.models`、`config.models.raw`、`config.models.write`、
+  `config.models.discover`、`config.models.test`、`config.catalog`
+- 资源清单：`config.packages`、`config.settings`、`config.trust`
 
 协议细节见 [`api/v1/protocol.md`](../api/v1/protocol.md)，模块边界见 [`docs/architecture.md`](docs/architecture.md)，Pi 兼容矩阵见 [`docs/pi-compatibility.md`](docs/pi-compatibility.md)。
 
@@ -144,10 +146,37 @@ kill -TERM $BRIDGE; wait $BRIDGE 2>/dev/null
 
 | 能力 | 原因 |
 |---|---|
-| 远程安装/卸载 Pi 包 | 等于任意代码执行。包在本机 CLI 用 `pi install` 管理，桥只读结果 |
+| 远程安装/卸载/更新 Pi 包 | 等于任意代码执行。包在本机 CLI 用 `pi install` 管理，桥只列清单与版本 |
 | 任意 CLI 命令透传 | 会绕过全部参数与路径校验，`PrefixArgs` 只来自运维配置 |
 | `session.import` | 导入会改写会话文件，先不做成网络接口 |
 | 会话写入接口 | 会话正文由 Pi 独占写入，桥不提供 `files.write` 之类入口 |
+| OAuth 设备码登录 | 只接 API key；设备码流程需要浏览器回调和令牌暂存 |
+| Web Push | 需要公网推送服务与出站连接，内网部署下收益不成比例 |
+
+## 模型配置与资源清单
+
+模型配置的**操作由前端触发**，桥只提供原语：
+
+| 命令 | 作用 |
+|---|---|
+| `config.models` | 已配置的 provider/模型摘要，密钥打码 |
+| `config.models.raw` | 原始文档供前端编辑 |
+| `config.models.write` | 原子写入 `models.json`，落盘前做结构校验 |
+| `config.models.discover` | 向供应商 `/models` 查询可用模型 |
+| `config.models.test` | 用一次最小 GET 验证凭据是否可用 |
+| `config.catalog` | models.dev 目录，用于按型号补全参数 |
+| `config.packages` | 已安装插件/技能清单 + 是否有新版本 |
+
+`config.models.discover` 的 URL 构造与 Pi Web 的 `buildModelsListURL` 一致：
+Anthropic 补 `/v1` 与 `limit=1000`，Google 补 `/v1beta` 与 `pageSize=1000`，
+已是 `/models` 结尾则不再拼接。鉴权头按 `api` 类型选择 `x-api-key` /
+`x-goog-api-key` / `Authorization`，自定义头部优先且拒绝控制字符。
+
+写入是「临时文件 + rename」的原子替换，落盘前拒绝缺 `providers`、
+`providers` 非对象、`api` 非 http(s)、模型 ID 为空等明显损坏的文档。
+
+`config.packages` 只读：列出 `settings.json` 的 `packages`，对 npm 来源
+并发查询 registry 版本并标注 `hasUpdate`。**不提供安装、卸载、更新**。
 
 ## 云端部署
 

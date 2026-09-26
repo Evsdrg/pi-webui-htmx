@@ -47,7 +47,9 @@ var SupportedMethods = []string{
 	"session.stats", "session.set_name", "session.last_assistant", "session.commands",
 	"session.export_html",
 	"sessions.search", "sessions.delete",
-	"config.models", "config.settings", "config.trust",
+	"config.models", "config.models.raw", "config.models.write",
+	"config.models.discover", "config.models.test", "config.catalog",
+	"config.packages", "config.settings", "config.trust",
 	"terminal.open", "terminal.input", "terminal.resize", "terminal.close", "terminal.list",
 	"files.list", "files.stat", "files.read", "files.roots",
 	"git.status", "git.diff",
@@ -60,6 +62,7 @@ type Server struct {
 	terminals    *terminal.Manager
 	files        *workspace.Files
 	piConfig     *management.Config
+	discovery    management.DiscoveryLimits
 	exportDir    string
 	receipts     *storage.Receipts
 	metrics      *observe.Metrics
@@ -70,13 +73,14 @@ type Server struct {
 }
 
 // New 构造入口；token 至少 32 字符，host 为监听地址上的主机名。
-func New(manager *run.Manager, store *sessions.Store, terminals *terminal.Manager, files *workspace.Files, piConfig *management.Config, exportDir string, receipts *storage.Receipts, metrics *observe.Metrics, token, host string) *Server {
+func New(manager *run.Manager, store *sessions.Store, terminals *terminal.Manager, files *workspace.Files, piConfig *management.Config, discovery management.DiscoveryLimits, exportDir string, receipts *storage.Receipts, metrics *observe.Metrics, token, host string) *Server {
 	return &Server{
 		manager:     manager,
 		store:       store,
 		terminals:   terminals,
 		files:       files,
 		piConfig:    piConfig,
+		discovery:   discovery,
 		exportDir:   exportDir,
 		receipts:    receipts,
 		metrics:     metrics,
@@ -871,6 +875,66 @@ func (s *Server) dispatchCommon(ctx context.Context, r protocol.Request, sink co
 			return nil, err
 		}
 		return s.piConfig.Models()
+	case "config.models.raw":
+		if err := empty(); err != nil {
+			return nil, err
+		}
+		return s.piConfig.Raw()
+	case "config.models.write":
+		var p struct {
+			Config map[string]any `json:"config"`
+		}
+		if err := protocol.Decode(r.Params, &p); err != nil {
+			return nil, err
+		}
+		if err := s.piConfig.WriteModels(p.Config); err != nil {
+			return nil, err
+		}
+		return map[string]bool{"written": true}, nil
+	case "config.models.discover":
+		var p struct {
+			BaseURL string            `json:"baseUrl"`
+			API     string            `json:"api"`
+			APIKey  string            `json:"apiKey"`
+			Headers map[string]string `json:"headers"`
+		}
+		if err := protocol.Decode(r.Params, &p); err != nil {
+			return nil, err
+		}
+		models, err := s.piConfig.Discover(ctx, p.BaseURL, p.API, p.APIKey, p.Headers, s.discovery)
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{"models": models}, nil
+	case "config.models.test":
+		var p struct {
+			BaseURL string            `json:"baseUrl"`
+			API     string            `json:"api"`
+			APIKey  string            `json:"apiKey"`
+			Headers map[string]string `json:"headers"`
+		}
+		if err := protocol.Decode(r.Params, &p); err != nil {
+			return nil, err
+		}
+		return s.piConfig.TestConnection(ctx, p.BaseURL, p.API, p.APIKey, p.Headers, s.discovery)
+	case "config.catalog":
+		if err := empty(); err != nil {
+			return nil, err
+		}
+		entries, err := s.piConfig.Catalog(ctx, s.discovery)
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{"models": entries}, nil
+	case "config.packages":
+		if err := empty(); err != nil {
+			return nil, err
+		}
+		list, err := s.piConfig.Packages(ctx, s.discovery)
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{"packages": list}, nil
 	case "config.settings":
 		if err := empty(); err != nil {
 			return nil, err

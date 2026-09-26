@@ -62,7 +62,9 @@
 | 扩展对话 | `session.ui_response`、`session.pending_dialogs` |
 | 终端 | `terminal.open`、`terminal.input`、`terminal.resize`、`terminal.close`、`terminal.list` |
 | 文件与 Git | `files.list`、`files.stat`、`files.read`、`files.roots`、`git.status`、`git.diff` |
-| 其他 | `session.stats`、`session.set_name`、`session.last_assistant`、`session.commands`、`session.export_html`、`sessions.search`、`sessions.delete`、`config.models`、`config.settings`、`config.trust` |
+| 其他 | `session.stats`、`session.set_name`、`session.last_assistant`、`session.commands`、`session.export_html`、`sessions.search`、`sessions.delete` |
+| 模型配置 | `config.models`、`config.models.raw`、`config.models.write`、`config.models.discover`、`config.models.test`、`config.catalog` |
+| 资源清单 | `config.packages`、`config.settings`、`config.trust` |
 
 共同约束：
 
@@ -72,7 +74,11 @@
 - `session.set_thinking` 必须落在 `session.thinking_levels` 返回的列表内
 - `session.export_html` 只接受桥构造的导出目录加受限文件名
 - `files.*`、`git.*`、`terminal.*` 全部限制在授权工作区内
-- `config.*` 只读，且递归打码密钥字段
+- `config.settings`/`config.trust`/`config.packages` 只读，密钥字段递归打码
+- `config.models.write` 原子写入，落盘前做结构校验；密钥字段原样保留
+- `config.models.discover`/`test`/`catalog` 访问外部地址，URL 只允许 http(s)，
+  自定义头部拒绝控制字符，供应商错误码透出不吞掉
+- 远程安装/更新 Pi 包刻意不实现
 
 ## 事件
 

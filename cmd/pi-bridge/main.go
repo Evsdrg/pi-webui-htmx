@@ -147,7 +147,7 @@ func serve() error {
 		return err
 	}
 	piConfig := management.NewConfig(*agentDir, management.DefaultLimits())
-	handler := transport.New(manager, store, terminals, files, piConfig, exportDir, receipts, metrics, token, ln.Addr().String())
+	handler := transport.New(manager, store, terminals, files, piConfig, management.DefaultDiscoveryLimits(), exportDir, receipts, metrics, token, ln.Addr().String())
 
 	// 云端隧道：本地主动外连，relay 只搬运字节。
 	var tunnelClient *tunnel.Client

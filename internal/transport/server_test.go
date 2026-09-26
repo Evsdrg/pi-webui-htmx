@@ -82,7 +82,7 @@ func newTestServer(t *testing.T) (*Server, *run.Manager, string) {
 	if err := os.MkdirAll(exportDir, 0700); err != nil {
 		t.Fatal(err)
 	}
-	return New(m, store, terminals, files, piConfig, exportDir, receipts, metrics, testToken, "127.0.0.1:30142"), m, cwd
+	return New(m, store, terminals, files, piConfig, management.DefaultDiscoveryLimits(), exportDir, receipts, metrics, testToken, "127.0.0.1:30142"), m, cwd
 }
 
 func writeSessionFile(t *testing.T, dir, id, cwd string) {
@@ -652,5 +652,48 @@ func Test能力清单与实际分发一致(t *testing.T) {
 				t.Fatalf("能力清单声明支持 %s，实际却未实现", method)
 			}
 		}
+	}
+}
+
+func Test模型配置HTTP端点只接受GET(t *testing.T) {
+	s, _, _ := newTestServer(t)
+	// 配置写入只走 WS（带 requestId 防重与回执），HTTP 侧不提供 PUT/POST。
+	for _, method := range []string{http.MethodPost, http.MethodPut, http.MethodDelete} {
+		req := httptest.NewRequest(method, "/api/v1/config/models", strings.NewReader("{}"))
+		req.Host = "127.0.0.1:30142"
+		req.Header.Set("Authorization", "Bearer "+testToken)
+		rec := httptest.NewRecorder()
+		s.ServeHTTP(rec, req)
+		if rec.Code != http.StatusMethodNotAllowed {
+			t.Fatalf("%s 应返回 405，实际 %d", method, rec.Code)
+		}
+	}
+}
+
+func Test配置写入拒绝损坏文档(t *testing.T) {
+	dir := t.TempDir()
+	cfg := management.NewConfig(dir, management.DefaultLimits())
+	for name, doc := range map[string]map[string]any{
+		"缺 providers": {"x": 1},
+		"api 非法":      {"providers": map[string]any{"p": map[string]any{"api": "ftp://x"}}},
+		"模型 ID 为空":    {"providers": map[string]any{"p": map[string]any{"models": map[string]any{"": nil}}}},
+	} {
+		if err := cfg.WriteModels(doc); err == nil {
+			t.Fatalf("%s 应被拒绝", name)
+		}
+	}
+}
+
+func Test发现接口拒绝非法URL与头部(t *testing.T) {
+	cfg := management.NewConfig(t.TempDir(), management.DefaultLimits())
+	if _, err := cfg.Discover(context.Background(), "ftp://x", "openai-completions", "", nil, management.DefaultDiscoveryLimits()); err == nil {
+		t.Fatal("非 http(s) 必须被拒绝")
+	}
+	if _, err := cfg.Discover(context.Background(), "", "openai-completions", "", nil, management.DefaultDiscoveryLimits()); err == nil {
+		t.Fatal("空 baseURL 必须被拒绝")
+	}
+	if _, err := cfg.Discover(context.Background(), "https://x.example", "openai-completions", "",
+		map[string]string{"X-Bad": "a\r\nX-Injected: 1"}, management.DefaultDiscoveryLimits()); err == nil {
+		t.Fatal("头部注入必须被拒绝")
 	}
 }
