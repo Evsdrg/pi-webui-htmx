@@ -2,17 +2,13 @@
 package sessions
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
-	"io"
 	"os"
 	"path/filepath"
 	"time"
 
-	"pi-bridge-go/internal/jsonl"
 	"pi-bridge-go/internal/protocol"
 	"pi-bridge-go/internal/workspace"
 )
@@ -34,6 +30,10 @@ type Store struct {
 	policy *workspace.Policy
 	limits Limits
 	index  *Index
+
+	// scan 缓存最近一次全文件扫描的结果，见 scanCache 的说明。
+	// 翻页时文件不变，可把约八成的解析开销省掉。
+	scan scanCache
 }
 
 // Header 是会话首条记录的解析结果，path 不对外暴露。
@@ -257,94 +257,16 @@ func (s *Store) History(ctx context.Context, id, leaf, before string, limit int)
 	if !st.Mode().IsRegular() || st.Size() > s.limits.FileBytes {
 		return Page{}, protocol.E("limit_exceeded", "历史文件超过体积上限")
 	}
-	r := bufio.NewReader(io.LimitReader(f, st.Size()))
-	nodes := map[string]node{}
-	offset := int64(0)
-	last := ""
-	headerSeen := false
-	for {
-		if err = ctx.Err(); err != nil {
-			return Page{}, err
+	// 先查缓存：翻页与切标签时文件不变，可省掉整个解析阶段。
+	// 失效判定见 scanCache 的说明——只认 size 与 mtime 都完全一致。
+	nodes, last, cached := s.scan.get(h.path, st.Size(), st.ModTime().UnixNano())
+	if !cached {
+		var scanErr error
+		nodes, last, scanErr = s.scanFile(ctx, f, st.Size(), id, h.Cwd)
+		if scanErr != nil {
+			return Page{}, scanErr
 		}
-		b, n, e := jsonl.Read(r, s.limits.LineBytes)
-		if errors.Is(e, io.EOF) || errors.Is(e, jsonl.ErrIncomplete) {
-			break
-		}
-		if e != nil {
-			return Page{}, protocol.E("limit_exceeded", "历史记录超过体积上限")
-		}
-		if !headerSeen {
-			var current Header
-			if json.Unmarshal(b, &current) != nil || current.Type != "session" || current.ID != id || current.Version != 3 || current.Cwd != h.Cwd {
-				return Page{}, protocol.E("conflict", "会话头部已变化")
-			}
-			headerSeen = true
-			offset += int64(n)
-			continue
-		}
-		// 快路径：只读行首三个字段。绝大多数记录在这里就结束，
-		// 不必把整行（可能上百 KB）解析一遍。
-		head, fast := parseEntryHead(b)
-		if !fast {
-			// 慢路径：完整解析。这里刻意自己校验并返回错误，
-			// 而不是把结果塞进 entryHead——原来用 json.RawMessage
-			// 承载 parentId，能区分「解析失败」和「解出来是空」；
-			// 硬塞进 entryHead 会把「parentId 是数字」这类错误
-			// 从「父条目 ID 无效」悄悄变成「父链断裂」。
-			var item struct {
-				Type   string          `json:"type"`
-				ID     string          `json:"id"`
-				Parent json.RawMessage `json:"parentId"`
-			}
-			if json.Unmarshal(b, &item) != nil || item.Type == "" || item.Type == "session" || !ValidID(item.ID) || len(item.Parent) == 0 {
-				return Page{}, protocol.E("invalid_history", "完整的历史记录格式错误")
-			}
-			if _, ok := nodes[item.ID]; ok {
-				return Page{}, protocol.E("invalid_history", "历史条目 ID 重复")
-			}
-			parent := ""
-			if !bytes.Equal(item.Parent, []byte("null")) {
-				if json.Unmarshal(item.Parent, &parent) != nil || !ValidID(parent) {
-					return Page{}, protocol.E("invalid_history", "父条目 ID 无效")
-				}
-			}
-			if parent != "" {
-				if _, ok := nodes[parent]; !ok || parent == item.ID {
-					return Page{}, protocol.E("invalid_history", "父链断裂或存在环")
-				}
-			}
-			if len(nodes) >= s.limits.Entries {
-				return Page{}, protocol.E("limit_exceeded", "历史索引条目数超过上限")
-			}
-			nodes[item.ID] = node{parent, offset, n}
-			last = item.ID
-			offset += int64(n)
-			continue
-		}
-		if head.Type == "" || head.Type == "session" || !ValidID(head.ID) || !head.HasParent {
-			return Page{}, protocol.E("invalid_history", "完整的历史记录格式错误")
-		}
-		if _, ok := nodes[head.ID]; ok {
-			return Page{}, protocol.E("invalid_history", "历史条目 ID 重复")
-		}
-		parent := head.Parent // parentId 为 null 时天然是空串
-		if !head.ParentNull && !ValidID(parent) {
-			return Page{}, protocol.E("invalid_history", "父条目 ID 无效")
-		}
-		if parent != "" {
-			if _, ok := nodes[parent]; !ok || parent == head.ID {
-				return Page{}, protocol.E("invalid_history", "父链断裂或存在环")
-			}
-		}
-		if len(nodes) >= s.limits.Entries {
-			return Page{}, protocol.E("limit_exceeded", "历史索引条目数超过上限")
-		}
-		nodes[head.ID] = node{parent, offset, n}
-		last = head.ID
-		offset += int64(n)
-	}
-	if !headerSeen {
-		return Page{}, protocol.E("invalid_history", "缺少完整的会话头部")
+		s.scan.put(h.path, st.Size(), st.ModTime().UnixNano(), nodes, last)
 	}
 	if leaf == "" {
 		leaf = last

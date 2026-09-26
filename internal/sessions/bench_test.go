@@ -141,6 +141,37 @@ func BenchmarkHistory翻页(b *testing.B) {
 	})
 }
 
+// BenchmarkHistory连续翻页 是真实场景：打开会话后不断点「加载更早」。
+//
+// 与上面的「单次翻页」不同，这里每次都从不同的 before 开始，
+// 而且故意在两次 History 之间不做任何事——正是用户在浏览器里的操作节奏。
+// 缓存命中时省掉整个解析阶段，这是它唯一真正起作用的场景。
+func BenchmarkHistory连续翻页(b *testing.B) {
+	store, id, _ := buildBigSession(b, 2000)
+	defer store.Close()
+	ctx := context.Background()
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		// 每轮从头翻 10 页。
+		page, err := store.History(ctx, id, "", "", 50)
+		if err != nil {
+			b.Fatal(err)
+		}
+		before := page.OldestEntryID
+		for j := 0; j < 10; j++ {
+			p, err := store.History(ctx, id, "", before, 50)
+			if err != nil {
+				b.Fatal(err)
+			}
+			if p.OldestEntryID == "" {
+				break
+			}
+			before = p.OldestEntryID
+		}
+	}
+}
+
 // BenchmarkProjectAndGroup 测投影与回合聚合——每个 HTML 片段都要做一遍。
 func BenchmarkProjectAndGroup(b *testing.B) {
 	for _, turns := range []int{100, 1000} {
