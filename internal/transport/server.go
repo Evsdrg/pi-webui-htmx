@@ -5,6 +5,7 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"crypto/subtle"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -55,7 +56,7 @@ var SupportedMethods = []string{
 	"config.models.discover", "config.models.test", "config.catalog",
 	"config.packages", "config.settings", "config.trust",
 	"terminal.open", "terminal.input", "terminal.resize", "terminal.close", "terminal.list",
-	"files.list", "files.index", "files.stat", "files.read", "files.roots",
+	"files.list", "files.index", "files.stat", "files.read", "files.image", "files.roots",
 	"git.status", "git.diff",
 }
 
@@ -286,6 +287,11 @@ func (s *Server) serveUI(w http.ResponseWriter, r *http.Request) bool {
 	// 惰性内容：思考文本与工具结果图片。
 	// 历史页只带占位符，base64 图片和大段思考等用户点了才取——
 	// 否则每一页翻迁都要为当时并没看的内容付带宽。
+	// 文件查看器的图片：与惰性工具图片同理，二进制不该经过 UTF-8 转换。
+	case path == "/ui/file-image":
+		s.serveFileImage(w, r)
+		return true
+
 	case strings.HasPrefix(path, "/ui/sessions/") && strings.HasSuffix(path, "/lazy"):
 		s.serveLazy(w, r, path)
 		return true
@@ -1585,6 +1591,18 @@ func (s *Server) dispatchCommon(ctx context.Context, r protocol.Request, sink co
 			return nil, err
 		}
 		return map[string]any{"text": text, "truncated": truncated, "size": size}, nil
+	case "files.image":
+		var p struct {
+			Path string `json:"path"`
+		}
+		if err := protocol.Decode(r.Params, &p); err != nil {
+			return nil, err
+		}
+		body, mime, err := s.files.Image(p.Path)
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{"mime": mime, "data": base64.StdEncoding.EncodeToString(body), "size": len(body)}, nil
 	case "files.index":
 		var p struct {
 			Path  string `json:"path"`
@@ -1864,4 +1882,26 @@ func (s *Server) serveLazy(w http.ResponseWriter, r *http.Request, path string) 
 	default:
 		writeError(w, 400, protocol.E("invalid_params", "kind 必须是 thinking 或 tool-image"))
 	}
+}
+
+// serveFileImage 处理 /ui/file-image?path=...。
+// 与 files.read 分开：图片按字节返回，不做 UTF-8 转换——
+// 那会破坏像素数据，此前 PNG 就是这样被转成一屏乱码的。
+func (s *Server) serveFileImage(w http.ResponseWriter, r *http.Request) {
+	path := r.URL.Query().Get("path")
+	if path == "" {
+		writeError(w, 400, protocol.E("invalid_params", "path 不能为空"))
+		return
+	}
+	body, mime, err := s.files.Image(path)
+	if err != nil {
+		writeError(w, 400, err)
+		return
+	}
+	w.Header().Set("Content-Type", mime)
+	// 工作区文件可能被外部修改，不能长期缓存。
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.WriteHeader(200)
+	_, _ = w.Write(body)
 }
