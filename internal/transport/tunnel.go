@@ -35,20 +35,11 @@ type virtualConn struct {
 	ctx     context.Context
 	cancel  context.CancelFunc
 	lastUse time.Time
-	subs    map[string]*subscriber
-	terms   map[string]*terminal.Subscription
-	seen    map[string]bool
-}
-
-type subscriber struct {
-	ch     chan protocol.Message
-	bytes  atomic.Int64
-	closed atomic.Bool
-}
-
-type queuedEvent struct {
-	message protocol.Message
-	bytes   int
+	// subs 只记录「这个虚拟连接订了哪些会话」，用于关闭时核对；
+	// 真正的有界队列在 worker 侧，慢订阅者由那里摘除。
+	subs  map[string]struct{}
+	terms map[string]*terminal.Subscription
+	seen  map[string]bool
 }
 
 // NewTunnelBridge 构造隧道接入层。
@@ -173,7 +164,7 @@ func (t *TunnelBridge) acquire(id string) *virtualConn {
 	c := &virtualConn{
 		id: id, bridge: t, out: make(chan []byte, 64),
 		ctx: ctx, cancel: cancel, lastUse: time.Now(),
-		subs: map[string]*subscriber{}, terms: map[string]*terminal.Subscription{},
+		subs: map[string]struct{}{}, terms: map[string]*terminal.Subscription{},
 		seen: map[string]bool{},
 	}
 	t.virtual[id] = c
@@ -314,16 +305,14 @@ func (c *virtualConn) subscribe(r protocol.Request) (any, error) {
 			}
 		}
 	}
-	if old := c.subs[r.SessionID]; old != nil {
-		old.closed.Store(true)
+	if _, ok := c.subs[r.SessionID]; ok {
 		delete(c.subs, r.SessionID)
 	}
 	sub, info, err := w.Subscribe()
 	if err != nil {
 		return nil, err
 	}
-	box := &subscriber{ch: make(chan protocol.Message, 32)}
-	c.subs[r.SessionID] = box
+	c.subs[r.SessionID] = struct{}{}
 	c.reply(protocol.Reply(r.RequestID, map[string]any{"subscribed": true, "epoch": info.Epoch, "seq": info.Seq, "replay": true}, nil))
 	go func() {
 		defer sub.Close()
@@ -347,10 +336,7 @@ func (c *virtualConn) unsubscribe(r protocol.Request) (any, error) {
 	if err := protocol.Decode(r.Params, &struct{}{}); err != nil {
 		return nil, err
 	}
-	if box := c.subs[r.SessionID]; box != nil {
-		box.closed.Store(true)
-		delete(c.subs, r.SessionID)
-	}
+	delete(c.subs, r.SessionID)
 	return map[string]bool{"subscribed": false}, nil
 }
 

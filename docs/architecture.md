@@ -1,6 +1,7 @@
 # Pi Bridge 架构
 
-状态：已接受的目标架构；实现进度见 README 与 pi-compatibility.md。本文的目标能力不代表当前已实现。
+状态：目标架构。A–E 阶段已实现，命令清单见 `api/v1/protocol.md`，
+进度与验收见 `docs/pi-compatibility.md`。
 
 ## 1. 目标与边界
 

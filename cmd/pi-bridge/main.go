@@ -151,12 +151,13 @@ func serve() error {
 
 	// 云端隧道：本地主动外连，relay 只搬运字节。
 	var tunnelClient *tunnel.Client
+	var bridge *transport.TunnelBridge
 	if *relayURL != "" {
 		deviceToken := os.Getenv("PI_BRIDGE_DEVICE_TOKEN")
 		if deviceToken == "" {
 			return errors.New("启用 --relay 时必须设置 PI_BRIDGE_DEVICE_TOKEN")
 		}
-		bridge := transport.NewTunnelBridge(handler, nil, 8, 5*time.Minute)
+		bridge = transport.NewTunnelBridge(handler, nil, 8, 5*time.Minute)
 		handler.SetTunnelBridge(bridge)
 		cfg := tunnel.Defaults()
 		cfg.RelayURL = *relayURL
@@ -182,7 +183,11 @@ func serve() error {
 			return fmt.Errorf("HTTP 服务：%w", err)
 		}
 	}
-	// 关闭管理器会连带取消已升级的 WS 连接，Shutdown 本身不负责这部分。
+	// 关闭顺序：先隧道接入层（取消虚拟连接），再管理器（连带取消已升级的 WS 连接），
+	// 最后才是 HTTP Shutdown——Shutdown 本身不负责已升级的连接。
+	if bridge != nil {
+		bridge.Close()
+	}
 	manager.Close()
 	ctx, stop := context.WithTimeout(context.Background(), 5*time.Second)
 	defer stop()

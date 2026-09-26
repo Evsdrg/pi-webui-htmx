@@ -209,12 +209,6 @@ func (f *Files) Read(path string) (string, bool, int64, error) {
 	return string(b), false, size, nil
 }
 
-// Root 返回 path 所属的授权根。
-func (f *Files) Root(path string) (string, error) {
-	root, _, err := f.resolve(path)
-	return root, err
-}
-
 // Roots 返回全部授权根。
 func (f *Files) Roots() []string {
 	out := make([]string, len(f.policy.roots))

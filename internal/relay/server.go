@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"strconv"
 	"strings"
@@ -123,6 +124,32 @@ func (s *Server) Close() {
 	}
 }
 
+// dropDevice 中断某设备的全部隧道与浏览器连接。
+func (s *Server) dropDevice(deviceID string) {
+	s.mu.Lock()
+	tunnel := s.tunnels[deviceID]
+	if tunnel != nil {
+		delete(s.tunnels, deviceID)
+	}
+	clients := make([]*clientConn, 0, 4)
+	for k, c := range s.clients {
+		if c.deviceID == deviceID {
+			clients = append(clients, c)
+			delete(s.clients, k)
+		}
+	}
+	s.mu.Unlock()
+	if tunnel != nil {
+		tunnel.cancel()
+		tunnel.ws.Close(websocket.StatusPolicyViolation, "device revoked")
+	}
+	for _, c := range clients {
+		c.cancel()
+		c.ws.Close(websocket.StatusPolicyViolation, "device revoked")
+	}
+	s.registry.SetOnline(deviceID, false)
+}
+
 // Stats 返回转发器状态。
 func (s *Server) Stats() map[string]any {
 	s.mu.Lock()
@@ -131,6 +158,7 @@ func (s *Server) Stats() map[string]any {
 		"tunnels": len(s.tunnels),
 		"clients": len(s.clients),
 		"devices": s.registry.Stats(),
+		"users":   s.users.Stats(),
 	}
 }
 
@@ -223,14 +251,13 @@ func decodeRelay(r *http.Request, dst any) error {
 		return protocol.E("invalid_params", "缺少请求体")
 	}
 	defer r.Body.Close()
-	limited := http.MaxBytesReader(nil, r.Body, 64<<10)
-	dec := json.NewDecoder(limited)
+	dec := json.NewDecoder(io.LimitReader(r.Body, 64<<10))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(dst); err != nil {
 		return protocol.E("invalid_params", "请求体不是合法的 JSON 对象")
 	}
 	var extra any
-	if err := dec.Decode(&extra); !errors.Is(err, nil) && err.Error() != "EOF" {
+	if err := dec.Decode(&extra); err != nil && !errors.Is(err, io.EOF) {
 		return protocol.E("invalid_params", "一次只能发送一个 JSON 值")
 	}
 	return nil
@@ -341,6 +368,9 @@ func (s *Server) handleRevoke(w http.ResponseWriter, r *http.Request) {
 		writeRelayError(w, relayErrorStatus(err), err)
 		return
 	}
+	// 撤销必须立刻生效：中断该设备的活跃隧道与浏览器连接，
+	// 不能只等它自己掉线。
+	s.dropDevice(p.DeviceID)
 	writeRelayJSON(w, 200, map[string]any{"revoked": true})
 }
 

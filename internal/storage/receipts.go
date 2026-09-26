@@ -90,15 +90,6 @@ func (r *Receipts) Close() error {
 	return err
 }
 
-func (r *Receipts) Degraded() bool {
-	if r == nil {
-		return false
-	}
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	return r.degraded
-}
-
 // currentPath 返回当前日志路径；轮转时递增序号。
 func (r *Receipts) currentPath() string {
 	return filepath.Join(r.dir, "receipts.jsonl")

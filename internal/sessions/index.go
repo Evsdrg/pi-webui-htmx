@@ -54,12 +54,14 @@ func writeFingerprint(h *fnv64a, path string, size int64, mod time.Time) {
 
 // indexEntry 是索引中的一条会话元数据，只保留渲染列表所需字段。
 type indexEntry struct {
-	id       string
-	path     string // 相对 root 的斜杠路径
-	cwd      string
-	name     string
-	modified time.Time
-	size     int64
+	id        string
+	path      string // 相对 root 的斜杠路径
+	cwd       string
+	name      string
+	version   int
+	timestamp string
+	modified  time.Time
+	size      int64
 }
 
 // Index 是会话目录的内存索引。
@@ -154,6 +156,7 @@ func (x *Index) build(ctx context.Context) error {
 		}
 		found = append(found, indexEntry{
 			id: header.id, path: path, cwd: header.cwd, name: header.name,
+			version: header.version, timestamp: header.timestamp,
 			modified: mod, size: size,
 		})
 		return nil
@@ -167,6 +170,15 @@ func (x *Index) build(ctx context.Context) error {
 		}
 		return found[i].modified.After(found[j].modified)
 	})
+	// 重复 ID 必须覆盖全部文件，不能只检查进入上限的那一批，
+	// 否则超限时会悄悄选定其中一个副本。
+	seen := make(map[string]struct{}, len(found))
+	for _, e := range found {
+		if _, dup := seen[e.id]; dup {
+			return protocol.E("conflict", "配置目录内出现重复会话 ID")
+		}
+		seen[e.id] = struct{}{}
+	}
 	entries := make(map[string]indexEntry, len(found))
 	order := make([]string, 0, len(found))
 	truncated := false
@@ -174,9 +186,6 @@ func (x *Index) build(ctx context.Context) error {
 		if i >= x.limits.Files {
 			truncated = true
 			break
-		}
-		if _, dup := entries[e.id]; dup {
-			return protocol.E("conflict", "配置目录内出现重复会话 ID")
 		}
 		entries[e.id] = e
 		order = append(order, e.id)
@@ -305,10 +314,11 @@ func walkDir(root *os.Root, dir string, fn func(path string, size int64, mod tim
 
 // headerInfo 是会话头解析结果。
 type headerInfo struct {
-	id      string
-	cwd     string
-	name    string
-	version int
+	id        string
+	cwd       string
+	name      string
+	version   int
+	timestamp string
 }
 
 // readHeader 只读首条记录，不改变文件。
@@ -327,11 +337,12 @@ func readHeader(root *os.Root, path string) (headerInfo, error) {
 		return headerInfo{}, err
 	}
 	var raw struct {
-		Type    string `json:"type"`
-		Version int    `json:"version"`
-		ID      string `json:"id"`
-		Cwd     string `json:"cwd"`
-		Name    string `json:"name"`
+		Type      string `json:"type"`
+		Version   int    `json:"version"`
+		ID        string `json:"id"`
+		Cwd       string `json:"cwd"`
+		Name      string `json:"name"`
+		Timestamp string `json:"timestamp"`
 	}
 	if err := jsonUnmarshal(b, &raw); err != nil {
 		return headerInfo{}, err
@@ -339,5 +350,5 @@ func readHeader(root *os.Root, path string) (headerInfo, error) {
 	if raw.Type != "session" || !ValidID(raw.ID) {
 		return headerInfo{}, protocol.E("invalid_history", "会话头部无效")
 	}
-	return headerInfo{id: raw.ID, cwd: raw.Cwd, name: raw.Name, version: raw.Version}, nil
+	return headerInfo{id: raw.ID, cwd: raw.Cwd, name: raw.Name, version: raw.Version, timestamp: raw.Timestamp}, nil
 }

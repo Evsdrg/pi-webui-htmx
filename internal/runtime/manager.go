@@ -88,6 +88,7 @@ type MetricsSink interface {
 	WorkerStarted()
 	WorkerReaped()
 	WorkerExited()
+	EventPublished()
 	EventDropped()
 }
 
@@ -396,6 +397,9 @@ func (w *Worker) publishLocked(event string, data any) {
 		return
 	}
 	n := int64(len(b))
+	if w.cfg.Metrics != nil {
+		w.cfg.Metrics.EventPublished()
+	}
 	w.replay.Push(w.seq, b)
 	for s := range w.subs {
 		if s.bytes.Add(n) > int64(w.cfg.SubscriberBytes) {
@@ -604,8 +608,18 @@ func (w *Worker) stop(force, idleOnly bool) error {
 	}
 	w.closing = true
 	w.status = "stopping"
+	// 先取消所有待回复对话，否则扩展会在进程退出前一直等待人工输入。
+	dialogs := make([]string, 0, len(w.pendingDialogs))
+	for id := range w.pendingDialogs {
+		dialogs = append(dialogs, id)
+	}
+	w.pendingDialogs = map[string]struct{}{}
+	w.waitingInput = false
 	w.publishLocked("bridge.worker_state", w.infoLocked())
 	w.mu.Unlock()
+	for _, id := range dialogs {
+		w.client.Notify(map[string]any{"type": "extension_ui_response", "id": id, "cancelled": true})
+	}
 	w.client.CloseInput()
 	select {
 	case <-w.done:

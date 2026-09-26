@@ -328,17 +328,6 @@ func (r *Registry) SetDeviceToken(deviceID, token string) error {
 	return nil
 }
 
-// DeviceTokenHash 返回某设备当前令牌哈希，供启动时比对持久化令牌。
-func (r *Registry) DeviceTokenHash(deviceID string) (string, error) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	d, ok := r.devices[deviceID]
-	if !ok {
-		return "", protocol.E("not_found", "设备不存在")
-	}
-	return d.TokenHash, nil
-}
-
 // Owner 返回设备归属用户；未归属时返回空。
 func (r *Registry) Owner(deviceID string) (string, error) {
 	r.mu.Lock()

@@ -274,3 +274,66 @@ func cookieJar(t *testing.T, srv *httptest.Server, userToken string) []*http.Coo
 	defer resp.Body.Close()
 	return resp.Cookies()
 }
+
+func Test撤销后立即中断活跃隧道(t *testing.T) {
+	s, _, users := newRelayServer(t)
+	srv := httptest.NewServer(s)
+	defer srv.Close()
+	ut, _ := users.AddUser("alice")
+	ds, _ := users.AddDeviceSecret("dev-1")
+	_, out := postJSON(t, srv, "/api/relay/pair", `{"deviceId":"dev-1","secret":"`+ds+`"}`, "")
+	code, _ := out["pairingCode"].(string)
+	_, out2 := postJSON(t, srv, "/api/relay/claim", `{"pairingCode":"`+code+`"}`, ut)
+	dt, _ := out2["deviceToken"].(string)
+
+	tunnel := dialTunnelOrFail(t, srv, "dev-1", dt)
+	defer tunnel.CloseNow()
+	// 确认隧道已注册。
+	waitFor(t, "隧道注册", func() bool { return s.Stats()["tunnels"].(int) == 1 })
+
+	if status, _ := postJSON(t, srv, "/api/relay/revoke", `{"deviceId":"dev-1"}`, ut); status != 200 {
+		t.Fatalf("撤销失败: %d", status)
+	}
+	// 撤销必须立刻断开隧道，而不是等它自己掉线。
+	waitFor(t, "隧道被中断", func() bool { return s.Stats()["tunnels"].(int) == 0 })
+	if _, err := s.registry.AuthenticateDevice("dev-1", dt); err == nil {
+		t.Fatal("撤销后设备令牌必须失效")
+	}
+}
+
+func Test撤销中断该设备的浏览器连接(t *testing.T) {
+	s, _, users := newRelayServer(t)
+	srv := httptest.NewServer(s)
+	defer srv.Close()
+	ut, _ := users.AddUser("alice")
+	ds, _ := users.AddDeviceSecret("dev-1")
+	_, out := postJSON(t, srv, "/api/relay/pair", `{"deviceId":"dev-1","secret":"`+ds+`"}`, "")
+	code, _ := out["pairingCode"].(string)
+	_, out2 := postJSON(t, srv, "/api/relay/claim", `{"pairingCode":"`+code+`"}`, ut)
+	dt, _ := out2["deviceToken"].(string)
+	dialTunnelOrFail(t, srv, "dev-1", dt)
+
+	client := dialClientOrFail(t, srv, "dev-1", "tab-1", ut)
+	if client == nil {
+		t.Fatal("浏览器连接失败")
+	}
+	defer client.CloseNow()
+	waitFor(t, "浏览器连接注册", func() bool { return s.Stats()["clients"].(int) == 1 })
+
+	if status, _ := postJSON(t, srv, "/api/relay/revoke", `{"deviceId":"dev-1"}`, ut); status != 200 {
+		t.Fatalf("撤销失败: %d", status)
+	}
+	waitFor(t, "浏览器连接被中断", func() bool { return s.Stats()["clients"].(int) == 0 })
+}
+
+func waitFor(t *testing.T, what string, cond func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if cond() {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("等待超时: %s", what)
+}

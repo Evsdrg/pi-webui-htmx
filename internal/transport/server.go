@@ -201,7 +201,11 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		list, err := s.store.List(r.Context(), offset, limit)
 		respond(w, list, err)
 	case "/api/v1/metrics":
-		out := map[string]any{"metrics": s.metrics.Snapshot(), "sessions": s.store.Index().Stats(), "receipts": s.receipts.Stats(), "workers": s.manager.List(), "terminals": s.terminals.List()}
+		sessionStats := s.store.Index().Stats()
+		if n, ok := sessionStats["sessions"].(int); ok {
+			s.metrics.SetSessionsIndexed(n)
+		}
+		out := map[string]any{"metrics": s.metrics.Snapshot(), "sessions": sessionStats, "receipts": s.receipts.Stats(), "workers": s.manager.List(), "terminals": s.terminals.List()}
 		if s.tunnelBridge != nil {
 			out["tunnel"] = s.tunnelBridge.Stats()
 		}
