@@ -36,6 +36,7 @@
     "config.models.raw",
     "config.models.test",
     "config.packages",
+    "files.image",
     "files.index",
     "files.roots",
     "session.abort",

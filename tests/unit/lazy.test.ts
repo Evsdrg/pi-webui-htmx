@@ -71,3 +71,22 @@ describe('惰性内容占位符', () => {
     cleanup();
   });
 });
+
+describe('文件查看器按类型分流', () => {
+  it('含 ANSI 转义时挂 .ansi 且跳过语法高亮', async () => {
+    const { document, cleanup } = mount(`<div id=file-preview hidden><pre><code id=file-content></code></pre></div>`);
+    // 直接验证 ansi 模块的行为：转义序列必须变成带色 span。
+    const { mountAnsi } = await import('@/modules/ansi');
+    const code = document.getElementById('file-content')!;
+    code.textContent = '\u001b[31mRED\u001b[0m plain';
+    code.classList.add('ansi');
+    mountAnsi(document.getElementById('file-preview')!);
+    expect(code.querySelectorAll('span[style]').length).toBeGreaterThan(0);
+    expect(code.textContent).toContain('RED');
+    // 已渲染过的节点不重复处理。
+    const before = code.innerHTML;
+    mountAnsi(document.getElementById('file-preview')!);
+    expect(code.innerHTML).toBe(before);
+    cleanup();
+  });
+});

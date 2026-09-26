@@ -48,14 +48,72 @@ export class Workspace {
     if (generation !== this.generation) return;
     el('file-path').textContent = path;
   }
+  // read 按文件类型分流：图片走 <img>，其余走文本。
+  //
+  // 顺序是刻意的：先问桥「这是不是图片」。桥按魔数判断，比前端可靠；
+  // 而且 files.read 现在会明确拒绝二进制，不会再像以前那样把 PNG 的
+  // 字节转成 UTF-8 乱码返回。
   private async read(path: string): Promise<void> {
     const generation = ++this.generation;
-    const data = await this.bridge.request<{text:string;truncated:boolean;size:number}>('files.read', '', { path });
+    const image = await this.bridge.request<{mime:string;data:string}>('files.image', '', { path }).catch(() => null);
     if (generation !== this.generation) return;
-    el('file-name').textContent = path.split('/').pop() ?? path; el('file-name').title = path;
-    el('file-content').textContent = data.text + (data.truncated ? '\n[预览已截断]' : '');
-    el('file-preview').hidden = false;
+    const name = path.split('/').pop() ?? path;
+    el('file-name').textContent = name; el('file-name').title = path;
+    if (image && image.data) {
+      const frame = document.createElement('img');
+      frame.className = 'file-image';
+      frame.alt = name;
+      frame.src = `data:${image.mime};base64,${image.data}`;
+      this.showPreview(frame);
+      return;
+    }
+    let text: string;
+    try {
+      const data = await this.bridge.request<{text:string;truncated:boolean}>('files.read', '', { path });
+      text = data.text + (data.truncated ? '\n[预览已截断]' : '');
+    } catch (error) {
+      // 二进制文件：桥会给一句可读的原因，直接展示比静默失败好。
+      this.showPreview(this.note(error instanceof Error ? error.message : '无法读取文件'));
+      return;
+    }
+    const code = document.createElement('code');
+    code.id = 'file-content';
+    code.textContent = text;
+    // 含 ANSI 转义时挂 .ansi，入口会用 ansi_up 着色；
+    // 不挂就会被当成普通代码，转义序列原样显示。
+    if (text.includes('\u001b[')) code.classList.add('ansi');
+    this.showPreview(code);
+    // ANSI 与语法高亮互斥：ansi_up 要按转义序列重新生成带色 span，
+    // hljs 又会把同一段文本当代码再包一层。ANSI 文件只走前者。
+    if (code.classList.contains('ansi')) { void this.mountAnsi(); return; }
     mountHighlight(el('file-preview'), languageFor(path));
+  }
+
+  private note(message: string): HTMLElement {
+    const p = document.createElement('p');
+    p.className = 'empty-note';
+    p.textContent = message;
+    return p;
+  }
+
+  // showPreview 用给定节点替换预览区内容。
+  // 预览区从「只有一个 <pre><code>」变成可放任意节点，
+  // 所以这里重建 <pre> 而不是复用固定结构。
+  private showPreview(node: HTMLElement): void {
+    const box = el('file-preview');
+    const existing = box.querySelector('pre');
+    if (existing) existing.remove();
+    const pre = document.createElement('pre');
+    pre.append(node);
+    box.append(pre);
+    box.hidden = false;
+  }
+
+  private async mountAnsi(): Promise<void> {
+    try {
+      const { mountAnsi } = await import('./ansi');
+      mountAnsi(el('file-preview'));
+    } catch (error) { console.warn('ANSI 渲染失败', error); }
   }
   private async git(): Promise<void> {
     const cwd = this.cwd;

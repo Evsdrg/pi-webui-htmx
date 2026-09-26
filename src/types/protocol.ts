@@ -134,6 +134,7 @@ export type Method =
   | "files.index"
   | "files.stat"
   | "files.read"
+  | "files.image"
   | "files.roots"
   | "git.status"
   | "git.diff";
