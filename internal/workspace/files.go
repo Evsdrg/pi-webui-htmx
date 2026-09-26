@@ -211,7 +211,7 @@ func (f *Files) Read(path string) (string, bool, int64, error) {
 	}
 	// 二进制不当文本读。此前 PNG 会被 string(b) 转成乱码返回，
 	// 前端照着渲染出一屏替换字符；现在明确告知调用方该走别的路径。
-	if kind := DetectBinary(b, name(path)); kind != "" {
+	if kind := DetectBinary(b); kind != "" {
 		return "", false, size, protocol.E("unsupported", kind)
 	}
 	return string(b), false, size, nil
@@ -242,19 +242,11 @@ func (f *Files) Image(path string) ([]byte, string, error) {
 	if err != nil {
 		return nil, "", protocol.E("pi_error", "读取失败")
 	}
-	mime := ImageMime(b, name(path))
+	mime := ImageMime(b)
 	if mime == "" {
 		return nil, "", protocol.E("unsupported", "不是受支持的图片格式")
 	}
 	return b, mime, nil
-}
-
-// name 取路径末段，与 filepath.Base 等价但不依赖调用方传入的原始字符串。
-func name(path string) string {
-	if i := strings.LastIndexAny(path, `/\`); i >= 0 {
-		return path[i+1:]
-	}
-	return path
 }
 
 // Roots 返回全部授权根。

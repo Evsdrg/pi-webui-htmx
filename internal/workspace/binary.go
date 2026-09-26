@@ -26,7 +26,7 @@ var imageMimes = []struct {
 //   - ISO-BMFF（avif/heic）：b[4:8]="ftyp"，b[8:12] 是品牌
 //
 // 曾经把两者按同一套偏移判断，WebP 因此永远认不出来。
-func ImageMime(b []byte, filename string) string {
+func ImageMime(b []byte) string {
 	for _, cand := range imageMimes {
 		if bytes.HasPrefix(b, cand.prefix) {
 			return cand.mime
@@ -49,8 +49,8 @@ func ImageMime(b []byte, filename string) string {
 // 判定用「含 NUL 字节」这个务实标准：文本文件不会有 NUL，
 // 而绝大多数二进制格式（图片、压缩包、可执行文件）都很早就会出现。
 // 这比维护一份格式清单可靠，也不会把合法的 UTF-8 文本误判成二进制。
-func DetectBinary(b []byte, filename string) string {
-	if mime := ImageMime(b, filename); mime != "" {
+func DetectBinary(b []byte) string {
+	if mime := ImageMime(b); mime != "" {
 		return "这是图片文件（" + mime + "），请用图片方式查看"
 	}
 	// 只检查前 8 KB：足够覆盖所有常见格式的魔数，

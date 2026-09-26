@@ -148,13 +148,14 @@ func (s *Server) authorized(r *http.Request) bool {
 // 三种语义互斥，优先级 cancelled > confirmed > value，
 // 与 Pi 的 parseResponse 一致。
 func (s *Server) handleUiResponse(w http.ResponseWriter, r *http.Request) {
+	encoding := presentation.PickEncoding(r.Header.Get("Accept-Encoding"))
 	rest := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/ui/sessions/"), "/ui-response")
 	sessionID := rest
 	if i := strings.IndexByte(rest, '/'); i >= 0 {
 		sessionID = rest[:i]
 	}
 	if !sessions.ValidID(sessionID) {
-		writeError(w, 400, protocol.E("invalid_params", "会话 ID 不合法"))
+		writeError(w, encoding, 400, protocol.E("invalid_params", "会话 ID 不合法"))
 		return
 	}
 
@@ -167,12 +168,12 @@ func (s *Server) handleUiResponse(w http.ResponseWriter, r *http.Request) {
 	ct := r.Header.Get("Content-Type")
 	if strings.HasPrefix(ct, "application/json") {
 		if err := json.NewDecoder(io.LimitReader(r.Body, 64<<10)).Decode(&p); err != nil {
-			writeError(w, 400, protocol.E("invalid_params", "请求体不是合法 JSON"))
+			writeError(w, encoding, 400, protocol.E("invalid_params", "请求体不是合法 JSON"))
 			return
 		}
 	} else {
 		if err := r.ParseForm(); err != nil {
-			writeError(w, 400, protocol.E("invalid_params", "表单解析失败"))
+			writeError(w, encoding, 400, protocol.E("invalid_params", "表单解析失败"))
 			return
 		}
 		p.ID = r.FormValue("id")
@@ -181,13 +182,13 @@ func (s *Server) handleUiResponse(w http.ResponseWriter, r *http.Request) {
 		p.Cancelled = r.FormValue("cancelled")
 	}
 	if p.ID == "" {
-		writeError(w, 400, protocol.E("invalid_params", "缺少对话 id"))
+		writeError(w, encoding, 400, protocol.E("invalid_params", "缺少对话 id"))
 		return
 	}
 
 	wkr, err := s.manager.Get(sessionID)
 	if err != nil {
-		writeError(w, 400, protocol.E("worker_not_running", "会话没有活跃的工作进程"))
+		writeError(w, encoding, 400, protocol.E("worker_not_running", "会话没有活跃的工作进程"))
 		return
 	}
 	var value *string
@@ -201,7 +202,7 @@ func (s *Server) handleUiResponse(w http.ResponseWriter, r *http.Request) {
 		value = &v
 	}
 	if err := wkr.UIResponse(r.Context(), p.ID, value, confirmed, cancelled); err != nil {
-		writeError(w, 400, err)
+		writeError(w, encoding, 400, err)
 		return
 	}
 	// htmx 默认会把响应换入目标；回执成功无需换任何内容。
@@ -215,10 +216,11 @@ func (s *Server) handleUiResponse(w http.ResponseWriter, r *http.Request) {
 //   - 这里返回 HTML 片段，htmx 直接换入 DOM
 //   - 流式对话不走这里，走 WS（见 wsHandler）
 func (s *Server) serveUI(w http.ResponseWriter, r *http.Request) bool {
+	encoding := presentation.PickEncoding(r.Header.Get("Accept-Encoding"))
 	if s.ui == nil {
 		// 未配置 UI 包时 UI 路由整体不存在，回 404 让调用方继续。
 		if r.URL.Path == "/" || strings.HasPrefix(r.URL.Path, "/assets/") || strings.HasPrefix(r.URL.Path, "/ui/") {
-			writeError(w, 404, protocol.E("not_found", "未配置 UI 包，使用 --ui-dir 指定 pi-webui-htmx 目录"))
+			writeError(w, encoding, 404, protocol.E("not_found", "未配置 UI 包，使用 --ui-dir 指定 pi-webui-htmx 目录"))
 			return true
 		}
 		return false
@@ -229,23 +231,22 @@ func (s *Server) serveUI(w http.ResponseWriter, r *http.Request) bool {
 	case path == "/":
 		id := r.URL.Query().Get("session")
 		if id != "" && !sessions.ValidID(id) {
-			writeError(w, 400, protocol.E("invalid_params", "会话 ID 不合法"))
+			writeError(w, encoding, 400, protocol.E("invalid_params", "会话 ID 不合法"))
 			return true
 		}
 		html, err := s.ui.RenderShell(id)
 		if err != nil {
-			writeError(w, 500, err)
+			writeError(w, encoding, 500, err)
 			return true
 		}
-		writeHTML(w, html)
+		writeHTML(w, encoding, html)
 		return true
 
 	case strings.HasPrefix(path, "/assets/"):
 		name := strings.TrimPrefix(path, "/assets/")
-		encoding := presentation.PickEncoding(r.Header.Get("Accept-Encoding"))
 		body, mime, ok := s.ui.Asset(name, encoding)
 		if !ok {
-			writeError(w, 404, protocol.E("not_found", "资源不存在"))
+			writeError(w, encoding, 404, protocol.E("not_found", "资源不存在"))
 			return true
 		}
 		// 文件名带内容哈希，可长期不可变缓存。
@@ -263,25 +264,25 @@ func (s *Server) serveUI(w http.ResponseWriter, r *http.Request) bool {
 	case path == "/ui/sessions":
 		offset, err := number(r, "offset", 0)
 		if err != nil {
-			writeError(w, 400, err)
+			writeError(w, encoding, 400, err)
 			return true
 		}
 		limit, err := number(r, "limit", 50)
 		if err != nil {
-			writeError(w, 400, err)
+			writeError(w, encoding, 400, err)
 			return true
 		}
 		list, lerr := s.store.List(r.Context(), offset, limit)
 		if lerr != nil {
-			writeError(w, 400, lerr)
+			writeError(w, encoding, 400, lerr)
 			return true
 		}
 		html, rerr := s.ui.RenderSessionsPage(list, r.URL.Query().Get("selected"), offset)
 		if rerr != nil {
-			writeError(w, 500, rerr)
+			writeError(w, encoding, 500, rerr)
 			return true
 		}
-		writeHTML(w, html)
+		writeHTML(w, encoding, html)
 		return true
 
 	// 惰性内容：思考文本与工具结果图片。
@@ -299,7 +300,7 @@ func (s *Server) serveUI(w http.ResponseWriter, r *http.Request) bool {
 	case strings.HasPrefix(path, "/ui/sessions/") && strings.HasSuffix(path, "/history"):
 		id := strings.TrimSuffix(strings.TrimPrefix(path, "/ui/sessions/"), "/history")
 		if !sessions.ValidID(id) {
-			writeError(w, 400, protocol.E("invalid_params", "会话 ID 不合法"))
+			writeError(w, encoding, 400, protocol.E("invalid_params", "会话 ID 不合法"))
 			return true
 		}
 		before := r.URL.Query().Get("before")
@@ -315,61 +316,61 @@ func (s *Server) serveUI(w http.ResponseWriter, r *http.Request) bool {
 		}
 		page, perr := s.store.History(r.Context(), id, leaf, before, 50)
 		if perr != nil {
-			writeError(w, 400, perr)
+			writeError(w, encoding, 400, perr)
 			return true
 		}
 		html, herr := s.ui.RenderHistory(id, page)
 		if herr != nil {
-			writeError(w, 500, herr)
+			writeError(w, encoding, 500, herr)
 			return true
 		}
-		writeHTML(w, html)
+		writeHTML(w, encoding, html)
 		return true
 
 	case path == "/ui/models":
 		out, merr := s.piConfig.Models()
 		if merr != nil {
-			writeError(w, 400, merr)
+			writeError(w, encoding, 400, merr)
 			return true
 		}
 		models := presentation.ConfigModels(out)
 		html, rerr := s.ui.RenderModels(models, "")
 		if rerr != nil {
-			writeError(w, 500, rerr)
+			writeError(w, encoding, 500, rerr)
 			return true
 		}
-		writeHTML(w, html)
+		writeHTML(w, encoding, html)
 		return true
 
 	case path == "/ui/diff":
 		diff, truncated, err := s.files.GitDiff(r.Context(), r.URL.Query().Get("path"), r.URL.Query().Get("staged") == "true", 512<<10)
 		if err != nil {
-			writeError(w, 400, err)
+			writeError(w, encoding, 400, err)
 			return true
 		}
 		html, err := s.ui.RenderDiff("", presentation.ParseDiff(diff))
 		if err != nil {
-			writeError(w, 500, err)
+			writeError(w, encoding, 500, err)
 			return true
 		}
 		if truncated {
 			html += "<p class=\"empty-note\">差异已达到预览上限。</p>"
 		}
-		writeHTML(w, html)
+		writeHTML(w, encoding, html)
 		return true
 
 	case path == "/ui/packages":
 		pkgs, perr := s.piConfig.Packages(r.Context(), s.discovery)
 		if perr != nil {
-			writeError(w, 400, perr)
+			writeError(w, encoding, 400, perr)
 			return true
 		}
 		html, rerr := s.ui.RenderPackages(toAnyMaps(pkgs))
 		if rerr != nil {
-			writeError(w, 500, rerr)
+			writeError(w, encoding, 500, rerr)
 			return true
 		}
-		writeHTML(w, html)
+		writeHTML(w, encoding, html)
 		return true
 
 	case path == "/ui/files":
@@ -382,24 +383,24 @@ func (s *Server) serveUI(w http.ResponseWriter, r *http.Request) bool {
 		}
 		entries, truncated, ferr := s.files.List(root)
 		if ferr != nil {
-			writeError(w, 400, ferr)
+			writeError(w, encoding, 400, ferr)
 			return true
 		}
 		html, rerr := s.ui.RenderFiles(root, toAnyMaps(entries), truncated)
 		if rerr != nil {
-			writeError(w, 500, rerr)
+			writeError(w, encoding, 500, rerr)
 			return true
 		}
-		writeHTML(w, html)
+		writeHTML(w, encoding, html)
 		return true
 
 	case path == "/ui/extensions/status":
 		html, rerr := s.ui.RenderExtensionStatus(s.extensionStatuses())
 		if rerr != nil {
-			writeError(w, 500, rerr)
+			writeError(w, encoding, 500, rerr)
 			return true
 		}
-		writeHTML(w, html)
+		writeHTML(w, encoding, html)
 		return true
 
 	case strings.HasPrefix(path, "/ui/extensions/dialog/"):
@@ -407,7 +408,7 @@ func (s *Server) serveUI(w http.ResponseWriter, r *http.Request) bool {
 		// 让 htmx 移除占位而不是显示错误。
 		id := strings.TrimPrefix(path, "/ui/extensions/dialog/")
 		if id == "" || strings.ContainsAny(id, "/\\") {
-			writeError(w, 400, protocol.E("invalid_params", "对话 ID 不合法"))
+			writeError(w, encoding, 400, protocol.E("invalid_params", "对话 ID 不合法"))
 			return true
 		}
 		raw, found := s.pendingDialog(id)
@@ -417,15 +418,15 @@ func (s *Server) serveUI(w http.ResponseWriter, r *http.Request) bool {
 		}
 		d, derr := presentation.DialogFromPi(id, r.URL.Query().Get("sessionId"), raw)
 		if derr != nil {
-			writeError(w, 400, derr)
+			writeError(w, encoding, 400, derr)
 			return true
 		}
 		html, rerr := s.ui.RenderExtensionDialog(d)
 		if rerr != nil {
-			writeError(w, 500, rerr)
+			writeError(w, encoding, 500, rerr)
 			return true
 		}
-		writeHTML(w, html)
+		writeHTML(w, encoding, html)
 		return true
 
 	case path == "/ui/extensions/dialogs":
@@ -433,7 +434,7 @@ func (s *Server) serveUI(w http.ResponseWriter, r *http.Request) bool {
 		sessionID := r.URL.Query().Get("sessionId")
 		items, ferr := s.pendingDialogsFor(sessionID)
 		if ferr != nil {
-			writeError(w, 400, ferr)
+			writeError(w, encoding, 400, ferr)
 			return true
 		}
 		dialogs := make([]presentation.DialogData, 0, len(items))
@@ -446,10 +447,10 @@ func (s *Server) serveUI(w http.ResponseWriter, r *http.Request) bool {
 		}
 		html, rerr := s.ui.RenderExtensionDialogs(dialogs)
 		if rerr != nil {
-			writeError(w, 500, rerr)
+			writeError(w, encoding, 500, rerr)
 			return true
 		}
-		writeHTML(w, html)
+		writeHTML(w, encoding, html)
 		return true
 	}
 	return false
@@ -508,13 +509,11 @@ func dialogID(raw json.RawMessage) string {
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("X-Content-Type-Options", "nosniff")
-	// 一次性协商编码，写响应的辅助函数从内部键读取后即删。
-	// 走内部键而不是改十几个调用点的签名：那些函数拿不到 *http.Request。
-	if encoding := presentation.PickEncoding(r.Header.Get("Accept-Encoding")); encoding != "" {
-		w.Header().Set(encodingKey, encoding)
-	}
+	// 编码协商是纯函数，写响应的辅助函数各自按需调用即可；
+	// 不再需要一次协商后靠内部 Header 键往下传。
+	encoding := presentation.PickEncoding(r.Header.Get("Accept-Encoding"))
 	if r.Host != s.host {
-		writeError(w, http.StatusForbidden, protocol.E("host_denied", "Host 不在预期范围内"))
+		writeError(w, encoding, http.StatusForbidden, protocol.E("host_denied", "Host 不在预期范围内"))
 		return
 	}
 	scheme := "http"
@@ -522,22 +521,22 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		scheme = "https"
 	}
 	if origin := r.Header.Get("Origin"); origin != "" && origin != scheme+"://"+s.host {
-		writeError(w, http.StatusForbidden, protocol.E("origin_denied", "未启用跨源访问"))
+		writeError(w, encoding, http.StatusForbidden, protocol.E("origin_denied", "未启用跨源访问"))
 		return
 	}
 	if r.Method == http.MethodGet && r.URL.Path == "/healthz" {
-		writeJSON(w, 200, map[string]any{"ok": true})
+		writeJSON(w, encoding, 200, map[string]any{"ok": true})
 		return
 	}
 	if r.Method == http.MethodPost && r.URL.Path == "/api/v1/auth" {
 		if !s.bearer(r) {
-			writeError(w, 401, protocol.E("unauthorized", "需要 Bearer token"))
+			writeError(w, encoding, 401, protocol.E("unauthorized", "需要 Bearer token"))
 			return
 		}
 		expires := time.Now().Add(8 * time.Hour)
 		exp := strconv.FormatInt(expires.Unix(), 10)
 		http.SetCookie(w, &http.Cookie{Name: cookieName, Value: exp + "." + s.signature(exp), HttpOnly: true, Secure: r.TLS != nil, SameSite: http.SameSiteStrictMode, Path: "/", Expires: expires, MaxAge: 8 * 60 * 60})
-		writeJSON(w, 200, map[string]any{"ok": true})
+		writeJSON(w, encoding, 200, map[string]any{"ok": true})
 		return
 	}
 	// 登录外壳和哈希资源不含用户数据；所有片段与 API 仍需认证。
@@ -548,14 +547,14 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	if !s.authorized(r) {
 		s.metrics.AuthFailure()
-		writeError(w, 401, protocol.E("unauthorized", "需要身份验证"))
+		writeError(w, encoding, 401, protocol.E("unauthorized", "需要身份验证"))
 		return
 	}
 	// 扩展对话回执是 POST，且要转成 WS 命令 session.ui_response。
 	// 必须在通用的「只接受 GET」之前处理。
 	if r.Method == http.MethodPost && strings.HasPrefix(r.URL.Path, "/ui/sessions/") && strings.HasSuffix(r.URL.Path, "/ui-response") {
 		if s.ui == nil {
-			writeError(w, 404, protocol.E("not_found", "未配置 UI 包"))
+			writeError(w, encoding, 404, protocol.E("not_found", "未配置 UI 包"))
 			return
 		}
 		s.handleUiResponse(w, r)
@@ -563,7 +562,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if r.Method != http.MethodGet {
-		writeError(w, 405, protocol.E("invalid_request", "请求方法不被允许"))
+		writeError(w, encoding, 405, protocol.E("invalid_request", "请求方法不被允许"))
 		return
 	}
 	// 导出下载是桥自身能力，不依赖 UI 包：没配 --ui-dir 时也要能取回文件。
@@ -577,7 +576,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	switch r.URL.Path {
 	case "/api/v1/capabilities":
-		writeJSON(w, 200, map[string]any{
+		writeJSON(w, encoding, 200, map[string]any{
 			"version": 1, "phase": "A", "piBaseline": "0.85.1",
 			"methods":          SupportedMethods,
 			"replay":           true,
@@ -597,16 +596,16 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case "/api/v1/sessions":
 		limit, err := number(r, "limit", 50)
 		if err != nil {
-			writeError(w, 400, err)
+			writeError(w, encoding, 400, err)
 			return
 		}
 		offset, err := number(r, "offset", 0)
 		if err != nil {
-			writeError(w, 400, err)
+			writeError(w, encoding, 400, err)
 			return
 		}
 		list, err := s.store.List(r.Context(), offset, limit)
-		respond(w, list, err)
+		respond(w, encoding, list, err)
 	case "/api/v1/metrics":
 		sessionStats := s.store.Index().Stats()
 		if n, ok := sessionStats["sessions"].(int); ok {
@@ -616,7 +615,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if s.tunnelBridge != nil {
 			out["tunnel"] = s.tunnelBridge.Stats()
 		}
-		writeJSON(w, 200, out)
+		writeJSON(w, encoding, 200, out)
 	case "/api/v1/ws":
 		s.serveWS(w, r)
 	default:
@@ -626,15 +625,15 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			id := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, prefix), suffix)
 			limit, err := number(r, "limit", 50)
 			if err != nil {
-				writeError(w, 400, err)
+				writeError(w, encoding, 400, err)
 				return
 			}
 			s.metrics.HistoryRequest()
 			page, err := s.store.History(r.Context(), id, r.URL.Query().Get("leafId"), r.URL.Query().Get("before"), limit)
-			respond(w, page, err)
+			respond(w, encoding, page, err)
 			return
 		}
-		writeError(w, 404, protocol.E("not_found", "接口不存在"))
+		writeError(w, encoding, 404, protocol.E("not_found", "接口不存在"))
 	}
 }
 
@@ -693,10 +692,12 @@ func toAnyMaps(v any) []map[string]any {
 }
 
 // writeHTML 输出 HTML 片段。htmx 靠 Content-Type 决定如何处理响应。
-func writeHTML(w http.ResponseWriter, html string) {
+// writeHTML 写一段 HTML 片段。encoding 由调用方现场协商后传入。
+// 曾经用内部 Header 键在 ServeHTTP 与写函数之间偷递，还要靠「读取后即删」
+// 才不外泄——数据流隐式化，纯属为了少改调用点签名。
+func writeHTML(w http.ResponseWriter, encoding, html string) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Vary", "Accept-Encoding")
-	encoding := takeEncoding(w)
 	body := []byte(html)
 	// 必须与 ShouldCompress 一致：Compress 在 body 小于阈值时直接写原文，
 	// 这里若仍然标 Content-Encoding，客户端会按该编码解压明文并失败。
@@ -709,7 +710,7 @@ func writeHTML(w http.ResponseWriter, html string) {
 	_, _ = presentation.Compress(w, body, encoding)
 }
 
-func writeJSON(w http.ResponseWriter, status int, v any) {
+func writeJSON(w http.ResponseWriter, encoding string, status int, v any) {
 	body, err := json.Marshal(v)
 	if err != nil {
 		body = []byte(`{"error":"encode_failed"}`)
@@ -717,7 +718,6 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Vary", "Accept-Encoding")
-	encoding := takeEncoding(w)
 	if presentation.ShouldCompress(body, encoding) {
 		w.Header().Set("Content-Encoding", encoding)
 	}
@@ -725,26 +725,15 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 	_, _ = presentation.Compress(w, body, encoding)
 }
 
-// encodingKey 是 ServeHTTP 与写响应辅助函数之间传递协商结果的内部键。
-// 用 Header 承载只为省去改十几个调用点签名；读取后立即删除，不会外泄。
-const encodingKey = "X-Pi-Bridge-Encoding"
-
-// takeEncoding 取出协商到的编码并清除内部键。
-func takeEncoding(w http.ResponseWriter) string {
-	encoding := w.Header().Get(encodingKey)
-	w.Header().Del(encodingKey)
-	return encoding
-}
-
 // writeError 把内部错误转成协议错误响应。
-func writeError(w http.ResponseWriter, status int, err error) {
-	writeJSON(w, status, protocol.Reply("", nil, err))
+func writeError(w http.ResponseWriter, encoding string, status int, err error) {
+	writeJSON(w, encoding, status, protocol.Reply("", nil, err))
 }
 
 // respond 按错误码映射 HTTP 状态；未识别的错误一律按 500 处理。
-func respond(w http.ResponseWriter, data any, err error) {
+func respond(w http.ResponseWriter, encoding string, data any, err error) {
 	if err == nil {
-		writeJSON(w, 200, data)
+		writeJSON(w, encoding, 200, data)
 		return
 	}
 	status := 500
@@ -765,7 +754,7 @@ func respond(w http.ResponseWriter, data any, err error) {
 			status = 413
 		}
 	}
-	writeError(w, status, err)
+	writeError(w, encoding, status, err)
 }
 
 // connection 是单条 WebSocket 连接的发送队列、订阅与命令信号量。
@@ -876,11 +865,12 @@ func (c *connection) writer() {
 
 // serveWS 升级连接，随后串行读取命令、异步执行，读循环永不被命令阻塞。
 func (s *Server) serveWS(w http.ResponseWriter, r *http.Request) {
+	encoding := presentation.PickEncoding(r.Header.Get("Accept-Encoding"))
 	select {
 	case s.connections <- struct{}{}:
 		defer func() { <-s.connections }()
 	default:
-		writeError(w, 429, protocol.E("limit_exceeded", "连接数量已达上限"))
+		writeError(w, encoding, 429, protocol.E("limit_exceeded", "连接数量已达上限"))
 		return
 	}
 	ws, err := websocket.Accept(w, r, nil)
@@ -1806,30 +1796,30 @@ type noReply struct{}
 // serveExport 下载导出的 HTML。文件名只能来自 safeExportName 的产出，
 // 这里再拒绝路径分隔符并核对父目录，双保险。
 func (s *Server) serveExport(w http.ResponseWriter, r *http.Request) {
+	encoding := presentation.PickEncoding(r.Header.Get("Accept-Encoding"))
 	name := strings.TrimPrefix(r.URL.Path, "/ui/exports/")
 	if name == "" || strings.ContainsAny(name, "/\\") || strings.Contains(name, "..") {
-		writeError(w, 400, protocol.E("invalid_params", "文件名不合法"))
+		writeError(w, encoding, 400, protocol.E("invalid_params", "文件名不合法"))
 		return
 	}
 	target := filepath.Join(s.exportDir, name)
 	if filepath.Dir(target) != filepath.Clean(s.exportDir) {
-		writeError(w, 400, protocol.E("invalid_params", "文件名不合法"))
+		writeError(w, encoding, 400, protocol.E("invalid_params", "文件名不合法"))
 		return
 	}
 	info, err := os.Stat(target)
 	if err != nil || !info.Mode().IsRegular() || info.Size() > 64<<20 {
-		writeError(w, 404, protocol.E("not_found", "导出文件不存在"))
+		writeError(w, encoding, 404, protocol.E("not_found", "导出文件不存在"))
 		return
 	}
 	body, err := os.ReadFile(target)
 	if err != nil {
-		writeError(w, 404, protocol.E("not_found", "导出文件不存在"))
+		writeError(w, encoding, 404, protocol.E("not_found", "导出文件不存在"))
 		return
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Content-Disposition", `attachment; filename="`+name+`"`)
 	w.Header().Set("Vary", "Accept-Encoding")
-	encoding := takeEncoding(w)
 	if presentation.ShouldCompress(body, encoding) {
 		w.Header().Set("Content-Encoding", encoding)
 	}
@@ -1842,34 +1832,35 @@ func (s *Server) serveExport(w http.ResponseWriter, r *http.Request) {
 // kind 决定取文本还是图片字节。两者都从磁盘上的 JSONL 现读，
 // 桥不做任何缓存：内容可能被后续 fork/compact 改变，缓存只会提供陈旧数据。
 func (s *Server) serveLazy(w http.ResponseWriter, r *http.Request, path string) {
+	encoding := presentation.PickEncoding(r.Header.Get("Accept-Encoding"))
 	id := strings.TrimSuffix(strings.TrimPrefix(path, "/ui/sessions/"), "/lazy")
 	if !sessions.ValidID(id) {
-		writeError(w, 400, protocol.E("invalid_params", "会话 ID 不合法"))
+		writeError(w, encoding, 400, protocol.E("invalid_params", "会话 ID 不合法"))
 		return
 	}
 	entryID := r.URL.Query().Get("entryId")
 	if !sessions.ValidID(entryID) {
-		writeError(w, 400, protocol.E("invalid_params", "条目 ID 不合法"))
+		writeError(w, encoding, 400, protocol.E("invalid_params", "条目 ID 不合法"))
 		return
 	}
 	raw := r.URL.Query().Get("blockIndex")
 	blockIndex, err := strconv.Atoi(raw)
 	if raw == "" || err != nil || blockIndex < 0 {
-		writeError(w, 400, protocol.E("invalid_params", "blockIndex 必须是非负整数"))
+		writeError(w, encoding, 400, protocol.E("invalid_params", "blockIndex 必须是非负整数"))
 		return
 	}
 	switch r.URL.Query().Get("kind") {
 	case "thinking":
 		text, err := s.store.Thinking(r.Context(), id, entryID, blockIndex)
 		if err != nil {
-			writeError(w, 400, err)
+			writeError(w, encoding, 400, err)
 			return
 		}
-		writeJSON(w, 200, map[string]string{"thinking": text})
+		writeJSON(w, encoding, 200, map[string]string{"thinking": text})
 	case "tool-image":
 		body, mime, err := s.store.ToolImage(r.Context(), id, entryID, blockIndex)
 		if err != nil {
-			writeError(w, 400, err)
+			writeError(w, encoding, 400, err)
 			return
 		}
 		// 图片带内容哈希可长期缓存；文件名与 entryId 相关但不含哈希，
@@ -1880,7 +1871,7 @@ func (s *Server) serveLazy(w http.ResponseWriter, r *http.Request, path string) 
 		w.WriteHeader(200)
 		_, _ = w.Write(body)
 	default:
-		writeError(w, 400, protocol.E("invalid_params", "kind 必须是 thinking 或 tool-image"))
+		writeError(w, encoding, 400, protocol.E("invalid_params", "kind 必须是 thinking 或 tool-image"))
 	}
 }
 
@@ -1888,14 +1879,15 @@ func (s *Server) serveLazy(w http.ResponseWriter, r *http.Request, path string) 
 // 与 files.read 分开：图片按字节返回，不做 UTF-8 转换——
 // 那会破坏像素数据，此前 PNG 就是这样被转成一屏乱码的。
 func (s *Server) serveFileImage(w http.ResponseWriter, r *http.Request) {
+	encoding := presentation.PickEncoding(r.Header.Get("Accept-Encoding"))
 	path := r.URL.Query().Get("path")
 	if path == "" {
-		writeError(w, 400, protocol.E("invalid_params", "path 不能为空"))
+		writeError(w, encoding, 400, protocol.E("invalid_params", "path 不能为空"))
 		return
 	}
 	body, mime, err := s.files.Image(path)
 	if err != nil {
-		writeError(w, 400, err)
+		writeError(w, encoding, 400, err)
 		return
 	}
 	w.Header().Set("Content-Type", mime)

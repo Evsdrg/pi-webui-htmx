@@ -3,6 +3,7 @@ package runtime
 import (
 	"context"
 	"encoding/json"
+	"slices"
 
 	"pi-bridge-go/internal/protocol"
 )
@@ -106,7 +107,7 @@ func (w *Worker) SetThinkingLevel(ctx context.Context, level string) error {
 	if err != nil {
 		return err
 	}
-	if !containsString(levels, level) {
+	if !slices.Contains(levels, level) {
 		return protocol.E("invalid_params", "当前模型不支持该思考等级")
 	}
 	_, err = w.call(ctx, "set_thinking_level", map[string]any{"level": level}, true)
@@ -318,15 +319,6 @@ func (w *Worker) Entries(ctx context.Context, since string, limit int) (map[stri
 		out.Entries = out.Entries[:limit]
 	}
 	return map[string]any{"entries": out.Entries, "leafId": out.LeafID}, nil
-}
-
-func containsString(list []string, want string) bool {
-	for _, v := range list {
-		if v == want {
-			return true
-		}
-	}
-	return false
 }
 
 // ExportHTML 让 Pi 把当前会话导出为 HTML。

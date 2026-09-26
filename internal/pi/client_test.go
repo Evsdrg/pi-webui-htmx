@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -292,7 +293,7 @@ func Test并发调用写入不交错(t *testing.T) {
 	var replay strings.Builder
 	for i := 1; i <= total; i++ {
 		replay.WriteString(`{"type":"response","id":"rpc-`)
-		replay.WriteString(itoa(i))
+		replay.WriteString(strconv.Itoa(i))
 		replay.WriteString(`","success":true,"data":{}}`)
 		replay.WriteString("\n")
 	}
@@ -307,18 +308,6 @@ func Test并发调用写入不交错(t *testing.T) {
 			t.Fatal("并发调用未全部返回")
 		}
 	}
-}
-
-func itoa(n int) string {
-	if n == 0 {
-		return "0"
-	}
-	var b []byte
-	for n > 0 {
-		b = append([]byte{byte('0' + n%10)}, b...)
-		n /= 10
-	}
-	return string(b)
 }
 
 func Test上下文已取消时不写入(t *testing.T) {

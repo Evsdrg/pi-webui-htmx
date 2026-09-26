@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -801,7 +802,7 @@ func Test协商编码与实际压缩器一致(t *testing.T) {
 	// 造足够多的会话，让列表片段超过压缩阈值。
 	// cwd 必须用服务器自己那一个：策略只允许它，别处的会话会被过滤掉。
 	for i := 0; i < 60; i++ {
-		writeSessionFile(t, s.store.Dir(), "sess-"+itoaForTest(i), cwd)
+		writeSessionFile(t, s.store.Dir(), "sess-"+strconv.Itoa(i), cwd)
 	}
 	for _, accept := range []string{"br", "gzip", "br, gzip", "gzip, br", ""} {
 		name := accept
@@ -875,18 +876,6 @@ func plainBody(t *testing.T, s *Server, path string) []byte {
 	rec := httptest.NewRecorder()
 	s.ServeHTTP(rec, req)
 	return rec.Body.Bytes()
-}
-
-func itoaForTest(v int) string {
-	if v == 0 {
-		return "0"
-	}
-	var out []byte
-	for v > 0 {
-		out = append([]byte{byte('0' + v%10)}, out...)
-		v /= 10
-	}
-	return string(out)
 }
 
 // Test导出下载受鉴权与路径约束 覆盖三点：

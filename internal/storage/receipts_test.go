@@ -3,6 +3,7 @@ package storage
 import (
 	"os"
 	"path/filepath"
+	"strconv"
 	"testing"
 	"time"
 )
@@ -62,7 +63,7 @@ func Test条数上限不无限增长(t *testing.T) {
 	}
 	defer r.Close()
 	for i := 0; i < 100; i++ {
-		_ = r.Record(Receipt{RequestID: "r" + itoa(i), Method: "session.prompt", Outcome: OutcomeOK})
+		_ = r.Record(Receipt{RequestID: "r" + strconv.Itoa(i), Method: "session.prompt", Outcome: OutcomeOK})
 	}
 	if got := r.Stats()["entries"].(int); got != 10 {
 		t.Fatalf("内存回执数应受上限约束: %d", got)
@@ -86,7 +87,7 @@ func Test轮转后旧文件被淘汰(t *testing.T) {
 	}
 	defer r.Close()
 	for i := 0; i < 200; i++ {
-		_ = r.Record(Receipt{RequestID: "req-" + itoa(i), Method: "session.prompt", Outcome: OutcomeUnknown, At: time.Now()})
+		_ = r.Record(Receipt{RequestID: "req-" + strconv.Itoa(i), Method: "session.prompt", Outcome: OutcomeUnknown, At: time.Now()})
 	}
 	files, err := filepath.Glob(filepath.Join(dir, "*.jsonl"))
 	if err != nil {
@@ -112,16 +113,4 @@ func Test目录损坏时降级而不崩溃(t *testing.T) {
 	if _, ok := r.Lookup("ok1"); !ok {
 		t.Fatal("损坏行之后的有效回执仍应加载")
 	}
-}
-
-func itoa(n int) string {
-	if n == 0 {
-		return "0"
-	}
-	var b []byte
-	for n > 0 {
-		b = append([]byte{byte('0' + n%10)}, b...)
-		n /= 10
-	}
-	return string(b)
 }

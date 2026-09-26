@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -634,33 +635,14 @@ func intField(m map[string]any, key string) int {
 func formatSize(n int) string {
 	const unit = 1024
 	if n < unit {
-		return itoa(n) + " B"
+		return strconv.Itoa(n) + " B"
 	}
 	div, exp := 1024, 0
 	for m := n / unit; m >= unit; m /= unit {
 		div *= unit
 		exp++
 	}
-	return itoa(n/div) + " " + string("KMGTPE"[exp]) + "iB"
-}
-
-func itoa(n int) string {
-	if n == 0 {
-		return "0"
-	}
-	neg := n < 0
-	if neg {
-		n = -n
-	}
-	var b []byte
-	for n > 0 {
-		b = append([]byte{byte('0' + n%10)}, b...)
-		n /= 10
-	}
-	if neg {
-		b = append([]byte{'-'}, b...)
-	}
-	return string(b)
+	return strconv.Itoa(n/div) + " " + string("KMGTPE"[exp]) + "iB"
 }
 
 // Now 供测试替换时间来源。

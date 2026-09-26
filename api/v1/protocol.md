@@ -61,7 +61,7 @@
 | bash | `session.bash`、`session.abort_bash`、`session.bash_output` |
 | 扩展对话 | `session.ui_response`、`session.pending_dialogs` |
 | 终端 | `terminal.open`、`terminal.input`、`terminal.resize`、`terminal.close`、`terminal.list` |
-| 文件与 Git | `files.list`、`files.stat`、`files.read`、`files.roots`、`git.status`、`git.diff` |
+| 文件与 Git | `files.list`、`files.index`、`files.stat`、`files.read`、`files.image`、`files.roots`、`git.status`、`git.diff` |
 | 其他 | `session.stats`、`session.set_name`、`session.last_assistant`、`session.commands`、`session.export_html`、`sessions.search`、`sessions.delete` |
 | 模型配置 | `config.models`、`config.models.raw`、`config.models.write`、`config.models.discover`、`config.models.test`、`config.catalog` |
 | 资源清单 | `config.packages`、`config.settings`、`config.trust` |
@@ -136,6 +136,44 @@ HTTP 响应：
 - 删除优先使用 `trash`；删除后索引立即失效
 
 后续 HTML fragment 接口渲染同一 page projection，并提供稳定 entryId/groupId 和分页占位；DOM 不因补页重新折叠已有内容。
+后续 HTML fragment 接口渲染同一 page projection，并提供稳定 entryId/groupId 和分页占位；DOM 不因补页重新折叠已有内容。
+
+### 惰性内容
+
+`entries` 的每条记录可带 `lazy`，只列块下标与类型，不带内容本身：
+
+```json
+{"lazy":[{"blockIndex":0,"kind":"thinking"},{"blockIndex":1,"kind":"image"}]}
+```
+
+取内容走 HTTP，不占 WS 命令面：
+
+```
+GET /ui/sessions/{id}/lazy?kind=thinking&entryId=&blockIndex=
+GET /ui/sessions/{id}/lazy?kind=tool-image&entryId=&blockIndex=
+```
+
+- `thinking` 返回 `{"thinking":"..."}`；`tool-image` 返回图片字节
+- `blockIndex` 必须是非负整数；上限 4096
+- MIME 白名单 png/jpeg/webp/gif/bmp/avif，SVG 拒收（可执行内容）
+- 图片上限 10 MB，思考文本上限 512 KB，超限显式报错
+- 从磁盘现读，不缓存——内容可能被后续 fork/compact 改变
+- 历史页因此不含 base64 与思考正文：实测 436 KB 会话文件对应 5.6 KB 片段
+
+### 文件索引与图片
+
+```
+files.index   {"path":"...","query":"..."}
+files.image   {"path":"..."}
+GET /ui/file-image?path=
+```
+
+- `files.index` 无 query 返回 `{files:[...],truncated}`（上限 5000）；
+  有 query 返回 `{matches:[{path,isDir}]}`（上限 50），由服务端排序
+- git 仓库走 `git ls-files`，非仓库退回复制目录 BFS（深度 8、硬上限 5 万）
+- `files.image` 与 `/ui/file-image` 按字节返回，不经 UTF-8 转换；
+  `files.read` 遇到二进制返回带可读原因的 `unsupported`
+- 图片格式按魔数判定而非扩展名
 
 ## 运行限额与可观测性
 

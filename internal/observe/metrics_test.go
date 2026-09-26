@@ -1,6 +1,7 @@
 package observe
 
 import (
+	"strconv"
 	"sync"
 	"testing"
 )
@@ -67,7 +68,7 @@ func Test并发累加不丢失(t *testing.T) {
 func Test方法集合有上限(t *testing.T) {
 	m := NewMethods()
 	for i := 0; i < 200; i++ {
-		m.Register("m" + itoa(i))
+		m.Register("m" + strconv.Itoa(i))
 	}
 	m.mu.RLock()
 	n := len(m.names)
@@ -75,16 +76,4 @@ func Test方法集合有上限(t *testing.T) {
 	if n > 64 {
 		t.Fatalf("方法集合应上限 64，实际 %d", n)
 	}
-}
-
-func itoa(n int) string {
-	if n == 0 {
-		return "0"
-	}
-	var b []byte
-	for n > 0 {
-		b = append([]byte{byte('0' + n%10)}, b...)
-		n /= 10
-	}
-	return string(b)
 }

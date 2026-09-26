@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -242,5 +243,5 @@ func TestCompress并发安全且复用写入器(t *testing.T) {
 
 func assetName(i int) string {
 	const hex = "0123456789abcdef"
-	return "chunk-" + string(hex[i%16]) + string(hex[(i/16)%16]) + "-" + itoa(i) + ".js"
+	return "chunk-" + string(hex[i%16]) + string(hex[(i/16)%16]) + "-" + strconv.Itoa(i) + ".js"
 }
