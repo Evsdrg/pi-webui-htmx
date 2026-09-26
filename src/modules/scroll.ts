@@ -95,7 +95,13 @@ export function mountScroll(): void {
   });
 }
 
-/** 读取桥下发的滚动模式。仅作诊断记录，不参与决策。 */
+/**
+ * 读取桥下发的滚动模式。
+ *
+ * 仅用于诊断与断言测试，**不参与滚动决策**——决策依据是前端记录的
+ * 「交换前用户是否贴在底部」，因为桥看不到浏览器状态。
+ * 保留它是为了在测试中断言「桥确实下发了我预期的模式」。
+ */
 export function scrollModeFrom(detail: { xhr?: XMLHttpRequest }): string {
   return detail.xhr?.getResponseHeader(SCROLL_MODE_HEADER) ?? "append";
 }

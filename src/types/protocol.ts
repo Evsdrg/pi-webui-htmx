@@ -169,6 +169,10 @@ export interface PiEvent {
   id?: string;
   /** extension_ui_request 的方法名。 */
   method?: string;
+  /** notify 的消息正文。 */
+  message?: string;
+  /** notify 的级别。 */
+  notifyType?: string;
   assistantMessageEvent?: AssistantEvent;
   steering?: string[];
   followUp?: string[];

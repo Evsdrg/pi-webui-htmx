@@ -25,11 +25,9 @@
     "noEmit": true,
     "paths": {
       "@/*": [
-        "src/*"
+        "./src/*"
       ]
-    },
-    "baseUrl": ".",
-    "ignoreDeprecations": "6.0"
+    }
   },
   "include": [
     "src/**/*.ts",

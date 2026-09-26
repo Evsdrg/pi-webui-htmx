@@ -88,7 +88,6 @@
       "highlight": "highlight.js",
       "math": "katex",
       "mermaid": "mermaid",
-      "terminal": "@xterm/xterm",
       "ansi": "ansi_up"
     }
   }

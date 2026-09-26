@@ -169,6 +169,13 @@ export function connectStream(): void {
   client?.dispose();
   client = new StreamClient({
     onDelta: appendDelta,
+    // 扩展的 fire-and-forget 推送。notify 弹 toast，
+    // 其余（setStatus/setWidget/setTitle）由 extensionState 与专门端点处理。
+    onExtension: (ev) => {
+      if (ev.type === "extension_ui_request" && ev.method === "notify" && ev.message) {
+        void import("@/modules/toast").then((m) => m.showToast(ev.message ?? "", (ev.notifyType as never) ?? "info"));
+      }
+    },
     onStart: () => {
       const live = document.getElementById("live");
       live?.classList.add("thinking");
