@@ -82,9 +82,32 @@ bash 输出转 HTML。小，无依赖。
 | 状态管理库 | DOM 即状态 | htmx 的模型下引入 Redux/Zustand 是自相矛盾 |
 | i18n 框架 | 两份模板或服务端选语言 | 三句话的需求不需要框架 |
 | 虚拟滚动 | 历史分页 + 整轮渲染 | 已经够用；虚拟滚动与 htmx 的 DOM 替换冲突 |
-| 构建工具（Vite/webpack） | 无 | 没有模块图需要打包；`lib/` 下的库直接放文件 |
-| TypeScript | 不用 | `app.js` 约 90 行，`client/` 各模块百行级，类型收益低于成本 |
-| 前端测试框架 | 不用 | 契约由 Go 侧测试守住（模板渲染、转义、数据形状），客户端只做DOM 粘合 |
+| 前端测试框架 | 不用 | 契约由 Go 侧测试守住（模板渲染、转义、数据形状），客户端只做 DOM 粘合 |
+
+### 关于 Vite / pnpm / TypeScript（0.2.0 起已采用）
+
+0.1.0 时判断「不值得」：自己写的代码只有 340 行 / gzip 4 KB，
+引工具链省不下体积。用户的要求是「工具链可以重，最终产物足够轻」，
+目标从「省工具链」变成「保产物」，于是三项都上。
+
+各自解决的真实问题：
+
+| 工具 | 解决的问题 | 无它会怎样 |
+|---|---|---|
+| **pnpm** | 依赖图与锁文件 | `curl` 拉包、手工记版本，升级时无法确认兼容性 |
+| **Vite 7** | 代码分割 + 内容哈希 + 压缩 | 手工拆 chunk 不可能做好；无哈希则不能长期缓存 |
+| **TypeScript** | 协议类型 | `src/types/protocol.ts` 305 行，把桥的 v1 协议、错误码全集、Pi 事件载荷、扩展 UI 通道全部类型化。没有它，`msg.data.assistantMessageEvent.type` 拼错只能运行时发现 |
+| **Tailwind v4** | 与 Pi Web 一致的类名写法 | 手写 CSS 亦可，但迁移 Pi Web 的模板时要逐个翻译类名 |
+
+**代价与约束**（这是关键，不是免费午餐）：
+
+- 构建从零步骤变成一步 `pnpm vite build`
+- 桥的加载逻辑必须读 `dist/.vite/manifest.json` 解析哈希文件名
+- 首屏预算写进 `ui-manifest.json`，`check-contract.mjs` 超预算即失败——
+  否则 TypeScript 的运行时类型助手和 Vite 的默认 chunk 策略会把重库
+  悄悄拖回首屏（本次就实测发生过：静态 import katex/xterm 让首屏
+  从 24 KB 涨到 105 KB）
+- `dist/` 进 `.gitignore`，CI 必须构建后才能部署
 
 ---
 
@@ -103,6 +126,8 @@ bash 输出转 HTML。小，无依赖。
 
 对照 Pi Web 首屏 gzip 0.91 MiB / 解码 2.93 MiB——主要是它把
 mermaid + KaTeX + syntax-highlighter + xterm 全打了进去。
+
+我们靠代码分割做到：**首屏 27 KB gzip，其余 2.4 MB 全部惰性。**
 
 ---
 

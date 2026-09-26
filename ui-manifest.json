@@ -1,6 +1,6 @@
 {
   "$comment": "UI 包契约。桥在启动时读取本文件；字段缺失或版本不兼容时拒绝加载该 UI 包，而不是带着不确定的模板跑。",
-  "uiVersion": "0.1.0",
+  "uiVersion": "0.2.0",
   "protocolVersion": 1,
   "piBaseline": "0.85.1",
   "templates": {
@@ -13,18 +13,8 @@
     "extStatus": "templates/extensions/status.html",
     "extWidgets": "templates/extensions/widgets.html",
     "extDialog": "templates/extensions/dialog.html",
-    "_comment": "所有相对路径均相对于 src/ 目录；下划线开头的键是说明，不是模板",
-    "diff": "templates/diff.html"
-  },
-  "assets": {
-    "app.css": "assets/app.css",
-    "app.js": "assets/app.js",
-    "htmx": "assets/vendor/htmx.min.js",
-    "markdown": "assets/lib/markdown.js",
-    "highlight": "assets/lib/highlight.js",
-    "katex": "assets/lib/katex.js",
-    "mermaid": "assets/lib/mermaid.js",
-    "terminal": "assets/lib/terminal.js"
+    "diff": "templates/diff.html",
+    "_comment": "相对路径以 src/ 为基准；下划线开头的键是说明，不是模板"
   },
   "routes": {
     "shell": "/",
@@ -81,5 +71,25 @@
       "getEditorComponent",
       "pasteToEditor"
     ]
+  },
+  "build": {
+    "_comment": "构建产物布局。桥只消费 dist/，不再读 src/assets。",
+    "toolchain": "pnpm + Vite 7 + TypeScript 5 + Tailwind v4",
+    "outputDir": "dist",
+    "viteManifest": "dist/.vite/manifest.json",
+    "entry": "src/entry/app.ts",
+    "firstLoadBudgetGzipKB": 32
+  },
+  "assets": {
+    "_comment": "构建后由 dist/.vite/manifest.json 解析真实文件名；这里只声明逻辑入口。",
+    "entry": "app",
+    "lazy": {
+      "markdown": "marked",
+      "highlight": "highlight.js",
+      "math": "katex",
+      "mermaid": "mermaid",
+      "terminal": "@xterm/xterm",
+      "ansi": "ansi_up"
+    }
   }
 }

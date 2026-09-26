@@ -1,0 +1,40 @@
+import { defineConfig } from "vite";
+import tailwindcss from "@tailwindcss/vite";
+import { resolve } from "node:path";
+
+// Vite 只负责 JS/CSS。Go 模板在 src/templates/，由桥渲染，
+// Vite 不碰它们——但 Tailwind 需要扫描它们才能产出用到的类。
+export default defineConfig({
+  plugins: [tailwindcss()],
+  resolve: {
+    alias: {
+      "@": resolve(import.meta.dirname, "src"),
+    },
+  },
+  build: {
+    outDir: "dist",
+    emptyOutDir: true,
+    // 桥需要 manifest 把逻辑名（app.css）解析成带哈希的真实文件名。
+    manifest: true,
+    // mermaid 一个库就 6 MB，默认阈值会一直告警。
+    chunkSizeWarningLimit: 1600,
+    // 产物要轻：关掉 sourcemap，开 brotli 友好的长缓存命名。
+    sourcemap: false,
+    target: "es2022",
+    cssCodeSplit: true,
+    modulePreload: { polyfill: false },
+    rollupOptions: {
+      input: {
+        app: resolve(import.meta.dirname, "src/entry/app.ts"),
+      },
+      output: {
+        // 内容哈希 + 长期不可变缓存。
+        entryFileNames: "assets/[name]-[hash].js",
+        chunkFileNames: "assets/[name]-[hash].js",
+        assetFileNames: "assets/[name]-[hash][extname]",
+      },
+    },
+  },
+  // 重库不进首屏：显式声明为惰性 chunk 的边界。
+  optimizeDeps: { include: ["htmx.org", "marked", "dompurify"] },
+});

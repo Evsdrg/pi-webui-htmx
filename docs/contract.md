@@ -46,8 +46,9 @@ pi-webui-htmx/
 | 资产 | 归属 | 桥能否修改 |
 |---|---|---|
 | `src/templates/**` | UI 仓 | ❌ 只读加载 |
-| `src/assets/**` | UI 仓 | ❌ 只读服务 |
+| `dist/**` | UI 仓构建产物 | ❌ 只读服务 |
 | `ui-manifest.json` | UI 仓 | ❌ 只读解析 |
+| `dist/.vite/manifest.json` | Vite 生成 | 桥读它解析哈希文件名 |
 | 会话数据、模型配置、进程 | 桥 | — |
 | 流式协议帧 | 桥定义，UI 消费 | — |
 
@@ -265,6 +266,29 @@ CJS/ESM，没有浏览器包，而本仓刻意不引入构建步骤；同时服�
 思考块和最终文本的完整结构。
 
 ---
+
+## 4.1 构建与加载
+
+工具链：**pnpm + Vite 7 + TypeScript 5 + Tailwind v4**。
+用户明确要求「工具链可以重，最终产物要轻」，因此选了完整栈；
+产物侧由契约强制约束：
+
+- 首屏 gzip 预算写死在 `ui-manifest.json` 的 `build.firstLoadBudgetGzipKB`，
+  校验脚本超预算即失败
+- 重库（katex / mermaid / xterm）**不得**出现在首屏 chunk 的实现代码里，
+  只允许出现 import 说明字符串
+- 文件名带内容哈希，可长期不可变缓存
+
+**Vite 只处理 JS/CSS，不处理 Go 模板。** 模板由桥在请求时渲染，
+Vite 既不知道也不该知道它们的存在。Tailwind 通过 `@source` 扫描模板目录，
+这样才能产出「模板里用到的类」。
+
+桥的加载顺序：
+
+1. 读 `ui-manifest.json`，校验 `protocolVersion` 与 `requiredMethods`
+2. 读 `dist/.vite/manifest.json`，把逻辑名 `app` 解析成 `app-<hash>.js`
+3. 渲染 `shell.html` 时注入解析后的 `<script>` 与 `<link>`
+4. 其余模板按需渲染
 
 ## 5. 协议与版本协商
 
