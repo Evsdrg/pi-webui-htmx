@@ -167,6 +167,8 @@ export type AssistantEvent =
 export interface PiEvent {
   type: string;
   id?: string;
+  /** extension_ui_request 的方法名。 */
+  method?: string;
   assistantMessageEvent?: AssistantEvent;
   steering?: string[];
   followUp?: string[];

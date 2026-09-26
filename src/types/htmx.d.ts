@@ -1,16 +1,11 @@
-// htmx 的全局类型。htmx.org 不自带 d.ts，这里只声明我们用到的部分。
+// htmx 的 ESM 构建是 default 导出，不自动挂到 window。
+// 我们在入口显式挂载，这里只为 window.htmx 补上类型声明。
+import type htmx from "htmx.org";
+
 declare global {
   interface Window {
-    htmx: {
-      /** 手动触发某个元素的 htmx 行为。 */
-      trigger(element: Element | string, name: string, detail?: unknown): void;
-      /** 手工处理新插入的 DOM。 */
-      process(element: ParentNode): void;
-      ajax(verb: string, path: string, options: { target?: string; swap?: string }): void;
-      on(event: string, handler: (event: Event) => void): void;
-      find(selector: string): Element | null;
-      values(element: Element): Record<string, string>;
-    };
+    htmx: typeof htmx;
   }
 }
+
 export {};

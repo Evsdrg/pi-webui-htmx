@@ -21,6 +21,15 @@ interface StreamHandlers {
   onStart(): void;
   onSettled(): void;
   onStatus(status: string): void;
+  /** 无需回执的扩展 UI（setStatus/setWidget/notify/setTitle/set_editor_text）。 */
+  onExtension?(ev: PiEvent): void;
+}
+
+/** 需要回执的扩展方法，与 ui-manifest.json 的 needsResponse 一致。 */
+const DIALOG_METHODS = new Set(["select", "confirm", "input", "editor"]);
+
+function isDialogMethod(method: unknown): boolean {
+  return typeof method === "string" && DIALOG_METHODS.has(method);
 }
 
 export class StreamClient {
@@ -107,6 +116,15 @@ export class StreamClient {
       case "agent_settled":
         this.handlers.onStatus("空闲");
         this.handlers.onSettled();
+        break;
+      case "extension_ui_request":
+        // 需要回执的对话让 htmx 去拉对话框 HTML；
+        // fire-and-forget 的（setStatus/setWidget/notify）直接转发给处理器。
+        if (isDialogMethod(ev.method)) {
+          window.htmx.trigger(document.body, "ext-dialog");
+        } else {
+          this.handlers.onExtension?.(ev);
+        }
         break;
       default:
         break;

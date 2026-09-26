@@ -23,12 +23,13 @@
     "isolatedModules": true,
     "skipLibCheck": true,
     "noEmit": true,
-    "baseUrl": ".",
     "paths": {
       "@/*": [
         "src/*"
       ]
-    }
+    },
+    "baseUrl": ".",
+    "ignoreDeprecations": "6.0"
   },
   "include": [
     "src/**/*.ts",

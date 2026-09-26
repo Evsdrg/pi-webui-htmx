@@ -11,25 +11,24 @@
     "check": "node scripts/check-contract.mjs"
   },
   "dependencies": {
-    "@xterm/addon-fit": "^0.10.0",
-    "@xterm/xterm": "^5.5.0",
-    "ansi_up": "^6.0.2",
-    "dompurify": "^3.2.4",
-    "highlight.js": "^11.11.1",
-    "htmx.org": "^2.0.4",
-    "katex": "^0.16.22",
-    "marked": "^15.0.7"
+    "@xterm/addon-fit": "^0.11.0",
+    "@xterm/xterm": "^6.0.0",
+    "ansi_up": "^6.0.6",
+    "dompurify": "^3.4.16",
+    "highlight.js": "^11.12.0",
+    "htmx.org": "^2.0.11",
+    "katex": "^0.18.9",
+    "marked": "^18.0.14"
   },
   "devDependencies": {
-    "@tailwindcss/vite": "^4.1.11",
+    "@tailwindcss/vite": "^4.3.3",
     "@types/dompurify": "^3.0.5",
-    "@types/katex": "^0.16.7",
-    "@types/marked": "^6.0.0",
-    "@types/node": "^24.3.0",
+    "@types/katex": "^0.16.8",
+    "@types/node": "^24.13.6",
     "mermaid": "^12.0.0",
-    "tailwindcss": "^4.1.11",
-    "typescript": "^5.8.3",
-    "vite": "^7.1.2"
+    "tailwindcss": "^4.3.3",
+    "typescript": "^6.0.3",
+    "vite": "^8.3.1"
   },
   "engines": {
     "node": ">=20.19"
