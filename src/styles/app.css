@@ -226,3 +226,9 @@ input,select,textarea { background:var(--bg); border:1px solid var(--border); bo
 .branch-fork-row { display:flex; gap:8px; align-items:center; font-size:12px; }
 .branch-fork-row span { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; flex:1; }
 .branch-empty { color:var(--text-muted); font-size:12px; }
+
+/* @ 文件补全与斜杠命令共用菜单外形；路径等宽显示便于对齐。 */
+.mention-menu { max-height:220px; overflow:auto; }
+.mention-item { display:flex; gap:8px; align-items:baseline; width:100%; text-align:left; }
+.mention-item[aria-selected="true"] { background:var(--accent-soft); }
+.mention-path { font-family:var(--font-mono); font-size:11px; }

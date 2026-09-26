@@ -34,6 +34,7 @@ export class Workbench {
   private workspace: import('./workspace').Workspace | undefined;
   private models: import('./models').ModelsEditor | undefined;
   private branch: import('./branch').BranchNavigator | undefined;
+  private mention: import('./mention').FileCompleter | undefined;
   private currentModel: { provider: string; id: string; name: string } | undefined;
 
   constructor(private readonly bottom: () => void) {}
@@ -44,10 +45,27 @@ export class Workbench {
     this.bridge.addEventListener('message', (event) => this.onMessage((event as CustomEvent<Message>).detail), { signal });
     el('auth-form').addEventListener('submit', (event) => { event.preventDefault(); void this.login(); }, { signal });
     el('composer').addEventListener('submit', (event) => { event.preventDefault(); void this.send(); }, { signal });
+    // 单个 keydown 处理器，@ 菜单优先。
+    // 曾经这里是两个监听：第一个无条件 requestSubmit()，第二个才想
+    // preventDefault()——那时表单已经提交，半个查询（"@"）就被当成
+    // 消息发出去了。合并不但修掉这个顺序问题，也避免再长出第三个。
     el<HTMLTextAreaElement>('prompt').addEventListener('keydown', (event) => {
+      if (this.mention?.active) {
+        if (event.key === 'ArrowDown') { event.preventDefault(); this.mention.move(1); return; }
+        if (event.key === 'ArrowUp') { event.preventDefault(); this.mention.move(-1); return; }
+        // Enter/Tab 一律消费：没有候选也绝不放行，否则 "@" 会被提交。
+        if (event.key === 'Enter' || event.key === 'Tab') { this.mention.choose(); event.preventDefault(); return; }
+        if (event.key === 'Escape') { event.preventDefault(); this.mention.hide(); return; }
+      }
       if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) { event.preventDefault(); el<HTMLFormElement>('composer').requestSubmit(); }
     }, { signal });
-    el<HTMLTextAreaElement>('prompt').addEventListener('input', () => { this.saveCurrentDraft(); this.showCommands(); this.updateControls(); }, { signal });
+    el<HTMLTextAreaElement>('prompt').addEventListener('input', () => {
+      this.saveCurrentDraft(); this.showCommands();
+      // @ 补全是增强功能：它出任何问题都不能挡住 updateControls，
+      // 否则发送按钮与排队提示会停在一个错误状态上。
+      try { this.mention?.refresh(); } catch (error) { console.warn('@ 补全刷新失败', error); }
+      this.updateControls();
+    }, { signal });
     el('new-form').addEventListener('submit', (event) => {
       event.preventDefault(); const cwd = el<HTMLInputElement>('cwd-input').value.trim();
       if (!cwd) return; this.selectSession('', cwd, '新会话'); el<HTMLDialogElement>('new-dialog').close(); el('prompt').focus();
@@ -66,6 +84,7 @@ export class Workbench {
         .catch((err) => { this.fail(err); void this.refreshState(); });
     }, { signal });
     this.wireAttachments();
+    void this.wireMention();
     el('auto-retry').addEventListener('change', () => {
       const enabled = el<HTMLInputElement>('auto-retry').checked;
       // Pi 没有自动重试的读回字段，失败时把勾选还原，避免界面停在假状态。
@@ -514,6 +533,19 @@ export class Workbench {
       event.preventDefault(); depth = 0; composer.classList.remove('dragging'); dropHint.hidden = true;
       if (event.dataTransfer?.files.length) void this.attach(event.dataTransfer.files);
     }, { signal });
+  }
+
+  // wireMention 动态加载 @ 补全。它只在用户真的打 @ 时才有用，
+  // 不值得进首屏包；加载失败也不该影响其余功能。
+  private async wireMention(): Promise<void> {
+    try {
+      const { FileCompleter } = await import('./mention');
+      this.mention = new FileCompleter(el<HTMLTextAreaElement>('prompt'), document.getElementById('mention-menu'), () => this.cwd,
+        // files.index 无 query 时返回 {files}，有 query 时返回 {matches}；
+        // @ 后刚打完还没有查询词，走的是前者，这里要兜住。
+        (cwd, query) => this.request<{ files?: string[]; matches?: { path: string }[] }>('files.index', { path: cwd, query })
+          .then((r) => (r.matches ?? (r.files ?? []).map((path) => ({ path })))));
+    } catch (error) { console.warn('@ 补全加载失败', error); }
   }
 
   private async attach(files: FileList | File[]): Promise<void> {

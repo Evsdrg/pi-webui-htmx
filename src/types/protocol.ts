@@ -131,6 +131,7 @@ export type Method =
   | "terminal.close"
   | "terminal.list"
   | "files.list"
+  | "files.index"
   | "files.stat"
   | "files.read"
   | "files.roots"

@@ -136,8 +136,11 @@ describe('排队与压缩设置', () => {
     document.getElementById('prompt')!.dispatchEvent(new Event('input'));
     expect(hint.hidden).toBe(false);
     expect(hint.textContent).toContain('插入指令');
+    const steerText = hint.textContent;
     document.querySelector<HTMLInputElement>('input[name="queue-kind"][value="followUp"]')!.click();
     document.getElementById('prompt')!.dispatchEvent(new Event('input'));
+    // 只断言文案随模式变化，不锁死具体措辞——那是实现细节。
+    expect(hint.textContent).not.toBe(steerText);
     expect(hint.textContent).toContain('排到队列末尾');
   });
 });
@@ -203,5 +206,38 @@ describe('附件随消息发送', () => {
     const box = document.getElementById('attachments')!;
     expect(box.hidden).toBe(true);
     expect(box.childElementCount).toBe(0);
+  });
+});
+
+describe('@ 菜单与 Enter 的按键归属', () => {
+  it('菜单开着时 Enter 不提交，关闭后才提交', async () => {
+    const prompt = document.getElementById('prompt') as HTMLTextAreaElement;
+    // 菜单开着、且有候选：Enter 应插入而不是提交。
+    (workbench as unknown as { mention?: unknown }).mention = {
+      active: true,
+      move: () => true,
+      choose: () => true,
+      hide: () => {},
+      refresh: () => {},
+    };
+    prompt.value = '@REA';
+    prompt.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }));
+    expect(fake.request).not.toHaveBeenCalledWith('session.prompt', expect.anything(), expect.anything(), expect.anything());
+
+    // 菜单开着但没有候选：choose 返回 false，仍然不得提交。
+    (workbench as unknown as { mention?: unknown }).mention = {
+      active: true, move: () => false, choose: () => false, hide: () => {}, refresh: () => {},
+    };
+    prompt.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }));
+    const promptCalls = vi.mocked(fake.request).mock.calls.filter((c) => c[0] === 'session.prompt');
+    expect(promptCalls).toHaveLength(0);
+
+    // 菜单关闭：Enter 恢复提交。
+    (workbench as unknown as { mention?: unknown }).mention = {
+      active: false, move: () => false, choose: () => false, hide: () => {}, refresh: () => {},
+    };
+    prompt.value = '普通消息';
+    prompt.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }));
+    await vi.waitFor(() => expect(fake.request).toHaveBeenCalledWith('session.prompt', 's1', { text: '普通消息' }, 30_000));
   });
 });
