@@ -10,6 +10,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -549,6 +550,11 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	if r.Method != http.MethodGet {
 		writeError(w, 405, protocol.E("invalid_request", "请求方法不被允许"))
+		return
+	}
+	// 导出下载是桥自身能力，不依赖 UI 包：没配 --ui-dir 时也要能取回文件。
+	if strings.HasPrefix(r.URL.Path, "/ui/exports/") {
+		s.serveExport(w, r)
 		return
 	}
 	// ---- UI 层：htmx 片段由桥渲染，静态资源来自 UI 包构建产物 ----
@@ -1737,3 +1743,37 @@ func (c *connection) connContext() context.Context { return c.ctx }
 // noReply 表示该命令已自行发送响应，无需框架再补一条。
 // 当前用于订阅：先发确认，再由推送协程持续发送事件。
 type noReply struct{}
+
+// serveExport 下载导出的 HTML。文件名只能来自 safeExportName 的产出，
+// 这里再拒绝路径分隔符并核对父目录，双保险。
+func (s *Server) serveExport(w http.ResponseWriter, r *http.Request) {
+	name := strings.TrimPrefix(r.URL.Path, "/ui/exports/")
+	if name == "" || strings.ContainsAny(name, "/\\") || strings.Contains(name, "..") {
+		writeError(w, 400, protocol.E("invalid_params", "文件名不合法"))
+		return
+	}
+	target := filepath.Join(s.exportDir, name)
+	if filepath.Dir(target) != filepath.Clean(s.exportDir) {
+		writeError(w, 400, protocol.E("invalid_params", "文件名不合法"))
+		return
+	}
+	info, err := os.Stat(target)
+	if err != nil || !info.Mode().IsRegular() || info.Size() > 64<<20 {
+		writeError(w, 404, protocol.E("not_found", "导出文件不存在"))
+		return
+	}
+	body, err := os.ReadFile(target)
+	if err != nil {
+		writeError(w, 404, protocol.E("not_found", "导出文件不存在"))
+		return
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Content-Disposition", `attachment; filename="`+name+`"`)
+	w.Header().Set("Vary", "Accept-Encoding")
+	encoding := takeEncoding(w)
+	if presentation.ShouldCompress(body, encoding) {
+		w.Header().Set("Content-Encoding", encoding)
+	}
+	w.WriteHeader(200)
+	_, _ = presentation.Compress(w, body, encoding)
+}

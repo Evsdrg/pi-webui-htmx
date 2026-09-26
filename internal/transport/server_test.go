@@ -886,3 +886,111 @@ func itoaForTest(v int) string {
 	}
 	return string(out)
 }
+
+// Test导出下载受鉴权与路径约束 覆盖三点：
+// 未授权拿不到、路径穿越拿不到、合法文件名能拿到且带下载头。
+func Test导出下载受鉴权与路径约束(t *testing.T) {
+	s, _, _ := newTestServer(t)
+	if err := os.MkdirAll(s.exportDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(s.exportDir, "ok.html"), []byte("<html>导出内容</html>"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	// 放一个目录外的文件，确认穿越取不到。
+	outside := filepath.Join(filepath.Dir(s.exportDir), "secret.html")
+	if err := os.WriteFile(outside, []byte("secret"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	get := func(path string, auth bool) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		req.Host = "127.0.0.1:30142"
+		if auth {
+			req.Header.Set("Authorization", "Bearer "+testToken)
+		}
+		rec := httptest.NewRecorder()
+		s.ServeHTTP(rec, req)
+		return rec
+	}
+	if rec := get("/ui/exports/ok.html", false); rec.Code != http.StatusUnauthorized {
+		t.Fatalf("未授权应 401，实际 %d", rec.Code)
+	}
+	for _, bad := range []string{
+		"/ui/exports/../secret.html",
+		"/ui/exports/..%2fsecret.html",
+		"/ui/exports/none.html",
+		"/ui/exports/",
+	} {
+		if rec := get(bad, true); rec.Code == http.StatusOK {
+			t.Errorf("%s 不应成功", bad)
+		}
+	}
+	rec := get("/ui/exports/ok.html", true)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("合法导出应 200，实际 %d", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), "导出内容") {
+		t.Fatal("响应不是预期内容")
+	}
+	if disposition := rec.Header().Get("Content-Disposition"); !strings.Contains(disposition, "ok.html") {
+		t.Fatalf("缺少下载头: %q", disposition)
+	}
+	if rec.Header().Get("Vary") != "Accept-Encoding" {
+		t.Fatal("缺少 Vary: Accept-Encoding")
+	}
+}
+
+// TestState透传队列与自动压缩 确认 Pi 可读回的三个字段真的到了 State。
+// 这三个字段此前的 State 投影里没有，前端无法反映当前排队模式与自动压缩。
+func TestState透传队列与自动压缩(t *testing.T) {
+	s, _, cwd := newTestServer(t)
+	srv := httptest.NewUnstartedServer(s)
+	s.host = srv.Listener.Addr().String()
+	srv.Start()
+	defer srv.Close()
+	url := "ws" + strings.TrimPrefix(srv.URL, "http") + "/api/v1/ws"
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	header := http.Header{}
+	header.Set("Authorization", "Bearer "+testToken)
+	conn, _, err := websocket.Dial(ctx, url, &websocket.DialOptions{HTTPHeader: header})
+	if err != nil {
+		t.Fatalf("WS 连接失败: %v", err)
+	}
+	defer conn.CloseNow()
+	send := func(v any) {
+		b, _ := json.Marshal(v)
+		if err := conn.Write(ctx, websocket.MessageText, b); err != nil {
+			t.Fatalf("发送失败: %v", err)
+		}
+	}
+	read := func() map[string]any {
+		_, b, err := conn.Read(ctx)
+		if err != nil {
+			t.Fatalf("读取失败: %v", err)
+		}
+		var m map[string]any
+		if json.Unmarshal(b, &m) != nil {
+			t.Fatalf("响应不是 JSON: %s", b)
+		}
+		return m
+	}
+	send(map[string]any{"version": 1, "kind": "command", "requestId": "s1", "method": "session.start", "params": map[string]any{"cwd": cwd}})
+	started := read()
+	if started["ok"] != true {
+		t.Fatalf("启动失败: %v", started)
+	}
+	data, _ := started["data"].(map[string]any)
+	sessionID, _ := data["sessionId"].(string)
+	send(map[string]any{"version": 1, "kind": "command", "requestId": "s2", "sessionId": sessionID, "method": "session.state"})
+	m := read()
+	if m["ok"] != true {
+		t.Fatalf("读取状态失败: %v", m)
+	}
+	raw, _ := json.Marshal(m["data"])
+	for _, field := range []string{"steeringMode", "followUpMode", "autoCompactionEnabled"} {
+		if !strings.Contains(string(raw), field) {
+			t.Fatalf("状态缺少 %s: %s", field, raw)
+		}
+	}
+}

@@ -45,6 +45,8 @@ func Defaults() Config {
 }
 
 // State 是 Pi 会话状态的对外投影，不包含私有凭据。
+// SteeringMode / FollowUpMode / AutoCompactionEnabled 直接来自 Pi 的
+// RpcSessionState，可读回；自动重试没有对应的读回字段，只能设置。
 type State struct {
 	SessionID           string `json:"sessionId"`
 	SessionName         string `json:"sessionName,omitempty"`
@@ -53,6 +55,9 @@ type State struct {
 	IsCompacting        bool   `json:"isCompacting"`
 	PendingMessageCount int    `json:"pendingMessageCount"`
 	MessageCount        int    `json:"messageCount"`
+	SteeringMode        string `json:"steeringMode,omitempty"`
+	FollowUpMode        string `json:"followUpMode,omitempty"`
+	AutoCompaction      bool   `json:"autoCompactionEnabled"`
 	Model               *struct {
 		ID       string `json:"id"`
 		Name     string `json:"name"`
