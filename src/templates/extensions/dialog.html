@@ -1,42 +1,18 @@
-{{/* 通用扩展对话框：select/confirm/input/editor 四合一。
-     必须带 data-dialog-id，提交时经 /ui/sessions/{id}/ui-response 回执。
-     三者语义互斥：cancelled 优先，其次 confirmed，其余用 value。 */}}
-<dialog class="ext-dialog" id="ext-dialog" data-dialog-id="{{.ID}}" data-method="{{.Method}}" open>
-  <form method="dialog"
-        hx-post="/ui/sessions/{{.SessionID}}/ui-response"
-        hx-swap="none"
-        hx-on::after-request="document.getElementById('ext-dialog')?.close()">
-    <input type="hidden" name="id" value="{{.ID}}">
+<dialog class="ext-dialog" data-dialog-id="{{.ID}}" data-method="{{.Method}}" aria-label="{{.Title}}">
+  <form data-extension-form data-session-id="{{.SessionID}}">
     <h3>{{.Title}}</h3>
-    {{if .Message}}<p class="ext-dialog-message">{{.Message}}</p>{{end}}
-
+    {{if .Message}}<p>{{.Message}}</p>{{end}}
     {{if eq .Method "select"}}
-    <ul class="ext-dialog-options">
-      {{range .Options}}
-      <li><label><input type="radio" name="value" value="{{.}}" required> {{.}}</label></li>
-      {{end}}
-    </ul>
-    <div class="ext-dialog-actions">
-      <button type="submit" class="btn btn-primary">确定</button>
-      <button type="submit" class="btn" name="cancelled" value="true">取消</button>
-    </div>
-    {{else if eq .Method "confirm"}}
-    <div class="ext-dialog-actions">
-      <button type="submit" class="btn btn-primary" name="confirmed" value="true">确定</button>
-      <button type="submit" class="btn" name="cancelled" value="true">取消</button>
-    </div>
+    <label>选择一项<select name="value" required>{{range .Options}}<option value="{{.}}">{{.}}</option>{{end}}</select></label>
+    {{else if eq .Method "input"}}
+    <label>输入内容<input name="value" type="text" placeholder="{{.Placeholder}}" value="{{.Prefill}}" maxlength="200000"></label>
     {{else if eq .Method "editor"}}
-    <textarea name="value" rows="10" required>{{.Prefill}}</textarea>
-    <div class="ext-dialog-actions">
-      <button type="submit" class="btn btn-primary">提交</button>
-      <button type="submit" class="btn" name="cancelled" value="true">取消</button>
-    </div>
-    {{else}}
-    <input type="text" name="value" value="{{.Prefill}}" placeholder="{{.Placeholder}}" required>
-    <div class="ext-dialog-actions">
-      <button type="submit" class="btn btn-primary">提交</button>
-      <button type="submit" class="btn" name="cancelled" value="true">取消</button>
-    </div>
+    <label>编辑内容<textarea name="value" rows="10" maxlength="200000">{{.Prefill}}</textarea></label>
     {{end}}
+    <div class="ext-dialog-actions">
+      <button class="btn" type="submit" name="cancelled" value="true" formnovalidate>取消</button>
+      {{if eq .Method "confirm"}}<button class="btn" type="submit" name="confirmed" value="false">否</button><button class="btn btn-primary" type="submit" name="confirmed" value="true">确定</button>
+      {{else}}<button class="btn btn-primary" type="submit" name="answer" value="true">提交</button>{{end}}
+    </div>
   </form>
 </dialog>

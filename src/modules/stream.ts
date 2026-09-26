@@ -1,196 +1,90 @@
-// 流式层：htmx 负责请求-响应界面，这里只补它不擅长的增量渲染。
-//
-// 三条硬约束：
-// 1. 只做 textContent 追加，绝不重解析已有节点——逐 token 重渲染会丢光标、闪烁。
-// 2. agent_settled 后整轮重取，拿权威 message_end，而不是继续拼接。
-// 3. 断线指数退避，但绝不自动重发有副作用的命令。
-
-import type {
-  EventMessage,
-  Message,
-  Method,
-  PiEvent,
-  Request,
-} from "@/types/protocol";
-
-const MAX_BACKOFF_MS = 10_000;
-const INITIAL_BACKOFF_MS = 500;
-
-interface StreamHandlers {
-  onDelta(text: string): void;
-  onStart(): void;
-  onSettled(): void;
-  onStatus(status: string): void;
-  /** 无需回执的扩展 UI（setStatus/setWidget/notify/setTitle/set_editor_text）。 */
-  onExtension?(ev: PiEvent): void;
+// 这里只维护当前正在输出的一轮；历史仍由桥分页渲染。
+export function record(value: unknown): Record<string, unknown> { return value !== null && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {}; }
+export function text(value: unknown): string { return typeof value === 'string' ? value : ''; }
+export function messageText(value: unknown): string {
+  const content = record(value).content;
+  if (typeof content === 'string') return content;
+  return Array.isArray(content) ? content.filter((block) => record(block).type === 'text').map((block) => text(record(block).text)).join('\n') : '';
 }
-
-/** 需要回执的扩展方法，与 ui-manifest.json 的 needsResponse 一致。 */
-const DIALOG_METHODS = new Set(["select", "confirm", "input", "editor"]);
-
-function isDialogMethod(method: unknown): boolean {
-  return typeof method === "string" && DIALOG_METHODS.has(method);
+export type RunState = 'idle' | 'running' | 'retrying' | 'compacting' | 'waiting_input';
+export function runStateAfter(state: RunState, event: Record<string, unknown>): RunState {
+  switch (event.type) {
+    case 'agent_start': return 'running';
+    case 'agent_settled': return 'idle';
+    case 'auto_retry_start': return 'retrying';
+    case 'compaction_start': case 'auto_compaction_start': return 'compacting';
+    case 'extension_ui_request': return ['confirm', 'select', 'input', 'editor'].includes(text(event.method)) ? 'waiting_input' : state;
+    // agent_end 后可能重试或继续运行，不把它判作最终结束。
+    default: return state;
+  }
 }
-
-export class StreamClient {
-  private ws: WebSocket | null = null;
-  private backoff = INITIAL_BACKOFF_MS;
-  private timer: number | undefined;
-  private seq = 0;
-  private disposed = false;
-
-  constructor(private readonly handlers: StreamHandlers) {}
-
-  connect(): void {
-    if (this.disposed) return;
-    const proto = location.protocol === "https:" ? "wss:" : "ws:";
-    const ws = new WebSocket(`${proto}//${location.host}/api/v1/ws`);
-    this.ws = ws;
-
-    ws.onopen = () => {
-      this.backoff = INITIAL_BACKOFF_MS;
-      setConnState(true);
-      const sessionId = currentSessionId();
-      if (sessionId) this.send("session.subscribe", sessionId);
-    };
-    ws.onclose = () => {
-      setConnState(false);
-      this.ws = null;
-      if (this.disposed) return;
-      this.timer = window.setTimeout(() => this.connect(), this.backoff);
-      this.backoff = Math.min(this.backoff * 2, MAX_BACKOFF_MS);
-    };
-    ws.onerror = () => ws.close();
-    ws.onmessage = (event: MessageEvent<string>) => {
-      let msg: Message;
-      try {
-        msg = JSON.parse(event.data) as Message;
-      } catch {
-        return;
-      }
-      this.handle(msg);
-    };
+export class EventCursor {
+  epoch = ''; seq = 0;
+  accept(epoch: string, seq: number): boolean {
+    if (!epoch || !Number.isSafeInteger(seq) || seq <= 0) return false;
+    if (epoch !== this.epoch) { this.epoch = epoch; this.seq = 0; }
+    if (seq <= this.seq) return false;
+    this.seq = seq; return true;
   }
+  reset(): void { this.epoch = ''; this.seq = 0; }
+}
+const MAX_LIVE_CHARS = 200_000;
 
-  dispose(): void {
-    this.disposed = true;
-    if (this.timer !== undefined) window.clearTimeout(this.timer);
-    this.ws?.close();
-    this.ws = null;
+export class LiveView {
+  private frame = 0;
+  private chunks = '';
+  private rendered = 0;
+  private toolCount = 0;
+  private truncated = false;
+  constructor(private readonly root: HTMLElement) {}
+  begin(userText?: string): void {
+    this.clear(); this.root.hidden = false; this.root.dataset.running = 'true';
+    const user = this.root.querySelector<HTMLElement>('#live-user');
+    if (user) { user.textContent = userText ?? ''; user.hidden = !userText; }
   }
-
-  /** 发送命令。requestId 单调递增，保证连接内不重复。 */
-  send(method: Method, sessionId: string, params?: unknown): void {
-    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
-    const req: Request = {
-      version: 1,
-      kind: "command",
-      requestId: `ui-${Date.now()}-${++this.seq}`,
-      sessionId,
-      method,
-      ...(params === undefined ? {} : { params }),
-    };
-    this.ws.send(JSON.stringify(req));
-  }
-
-  private handle(msg: Message): void {
-    if (msg.kind !== "event") return;
-    const event = msg as EventMessage;
-    if (event.event !== "pi.event") return;
-    const ev = event.data as PiEvent | undefined;
-    if (!ev) return;
-
-    switch (ev.type) {
-      case "agent_start":
-        resetLive();
-        this.handlers.onStart();
-        this.handlers.onStatus("运行中");
-        break;
-      case "message_update": {
-        const inner = ev.assistantMessageEvent;
-        if (inner?.type === "text_delta" && inner.delta) {
-          this.handlers.onDelta(inner.delta);
-        }
-        break;
-      }
-      case "agent_settled":
-        this.handlers.onStatus("空闲");
-        this.handlers.onSettled();
-        break;
-      case "extension_ui_request":
-        // 需要回执的对话让 htmx 去拉对话框 HTML；
-        // fire-and-forget 的（setStatus/setWidget/notify）直接转发给处理器。
-        if (isDialogMethod(ev.method)) {
-          window.htmx.trigger(document.body, "ext-dialog");
-        } else {
-          this.handlers.onExtension?.(ev);
-        }
-        break;
-      default:
-        break;
+  event(event: Record<string, unknown>): void {
+    if (event.type === 'message_start') { this.flush(); this.append('\n\n'); }
+    if (event.type === 'message_update') {
+      const delta = record(event.assistantMessageEvent);
+      if (delta.type === 'text_delta') this.append(text(delta.delta));
+      if (delta.type === 'thinking_delta') this.appendThinking(text(delta.delta));
+    }
+    if (event.type === 'tool_execution_start') {
+      this.root.hidden = false;
+      const tools = this.root.querySelector('#live-tools');
+      if (tools && this.toolCount++ < 100) { const line = document.createElement('div'); line.textContent = `调用 ${text(event.toolName) || '工具'}`; tools.append(line); }
+    }
+    if (event.type === 'message_end') {
+      const message = record(event.message);
+      if (message.stopReason === 'error' && message.errorMessage) this.append(`\n${text(message.errorMessage)}`);
     }
   }
-}
-
-export function currentSessionId(): string {
-  return document.body.dataset.sessionId ?? "";
-}
-
-export function setConnState(online: boolean): void {
-  const el = document.getElementById("conn-state");
-  if (!el) return;
-  el.textContent = online ? "已连接" : "未连接";
-  el.className = `state ${online ? "state-online" : "state-offline"}`;
-}
-
-function resetLive(): void {
-  const live = document.getElementById("live");
-  if (live) live.innerHTML = "";
-}
-
-/** 增量追加：只用 textContent，不碰已有节点的 innerHTML。 */
-export function appendDelta(text: string): void {
-  const live = document.getElementById("live");
-  if (!live) return;
-  let node = live.querySelector<HTMLElement>("[data-stream]");
-  if (!node) {
-    node = document.createElement("div");
-    node.className = "bubble";
-    node.setAttribute("data-stream", "");
-    live.appendChild(node);
+  finish(): void { this.flush(); delete this.root.dataset.running; }
+  clear(): void {
+    cancelAnimationFrame(this.frame); this.frame = 0; this.chunks = ''; this.rendered = 0; this.toolCount = 0; this.truncated = false;
+    for (const id of ['live-text','live-thinking','live-tools','live-user']) this.root.querySelector(`#${id}`)?.replaceChildren();
+    this.root.hidden = true; delete this.root.dataset.running;
   }
-  node.appendChild(document.createTextNode(text));
-}
-
-let client: StreamClient | null = null;
-
-/** 挂载流式层。重复调用会先释放旧实例。 */
-export function connectStream(): void {
-  client?.dispose();
-  client = new StreamClient({
-    onDelta: appendDelta,
-    // 扩展的 fire-and-forget 推送。notify 弹 toast，
-    // 其余（setStatus/setWidget/setTitle）由 extensionState 与专门端点处理。
-    onExtension: (ev) => {
-      if (ev.type === "extension_ui_request" && ev.method === "notify" && ev.message) {
-        void import("@/modules/toast").then((m) => m.showToast(ev.message ?? "", (ev.notifyType as never) ?? "info"));
-      }
-    },
-    onStart: () => {
-      const live = document.getElementById("live");
-      live?.classList.add("thinking");
-    },
-    onSettled: () => {
-      const live = document.getElementById("live");
-      live?.classList.remove("thinking");
-      // 等权威 message_end 后再整轮重取，避免把半轮塞进折叠组。
-      const turns = document.getElementById("turns");
-      if (turns) window.htmx.trigger(turns, "load");
-    },
-    onStatus: (status) => {
-      const el = document.getElementById("session-state");
-      if (el) el.textContent = status;
-    },
-  });
-  client.connect();
+  dispose(): void { cancelAnimationFrame(this.frame); this.chunks = ''; }
+  private append(delta: string): void {
+    this.root.hidden = false;
+    const remaining = MAX_LIVE_CHARS - this.rendered - this.chunks.length;
+    if (delta.length > remaining && !this.truncated) {
+      this.chunks += delta.slice(0, Math.max(0, remaining)) + '\n[实时预览已达上限，完成后读取持久历史]'; this.truncated = true;
+    } else if (!this.truncated) this.chunks += delta;
+    if (!this.frame) this.frame = requestAnimationFrame(() => this.flush());
+  }
+  private flush(): void {
+    cancelAnimationFrame(this.frame); this.frame = 0;
+    const el = this.root.querySelector('#live-text');
+    if (el && this.chunks) {
+      let node = el.firstChild;
+      if (!(node instanceof Text)) { node = document.createTextNode(''); el.replaceChildren(node); }
+      (node as Text).appendData(this.chunks); this.rendered += this.chunks.length; this.chunks = '';
+    }
+  }
+  private appendThinking(delta: string): void {
+    const el = this.root.querySelector('#live-thinking');
+    if (el && (el.textContent?.length ?? 0) < 40_000) el.textContent = (el.textContent ?? '') + delta.slice(0, 40_000 - (el.textContent?.length ?? 0));
+  }
 }

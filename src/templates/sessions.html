@@ -1,20 +1,7 @@
-{{/* 侧栏会话列表：只渲染列表项，不含正文 */}}
 {{range .Items}}
-<div class="session-item {{if eq .ID $.Selected}}selected{{end}}"
-     hx-get="/ui/sessions/{{.ID}}/history"
-     hx-trigger="click"
-     hx-target="#turns"
-     hx-swap="innerHTML">
+<a class="session-item{{if eq .ID $.Selected}} selected{{end}}" href="/?session={{.ID}}" data-session="{{.ID}}" data-cwd="{{.Cwd}}" data-title="{{.Title}}">
   <span class="session-title">{{.Title}}</span>
-  <span class="session-meta">{{.Modified}}</span>
-</div>
-{{else}}
-<p class="muted">没有会话</p>
-{{end}}
-{{if .HasMore}}
-<div hx-get="/ui/sessions?offset={{.NextOffset}}"
-     hx-trigger="revealed"
-     hx-swap="afterend">
-  <p class="muted">加载更多…</p>
-</div>
-{{end}}
+  <span class="session-meta"><time>{{.Modified}}</time><span title="{{.Cwd}}">{{.Cwd}}</span></span>
+</a>
+{{else}}<p class="empty-note">还没有会话。新建一个，开始协作。</p>{{end}}
+{{if .HasMore}}<button class="btn" hx-get="/ui/sessions?offset={{.NextOffset}}" hx-target="this" hx-swap="outerHTML" hx-disabled-elt="this">加载更多会话</button>{{end}}

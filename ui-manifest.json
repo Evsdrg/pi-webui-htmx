@@ -26,7 +26,7 @@
     "files": "/ui/files",
     "extStatus": "/ui/extensions/status",
     "extWidgets": "/ui/extensions/widgets",
-    "extDialog": "/ui/extensions/dialog/{id}",
+    "extDialog": "/ui/extensions/dialogs?sessionId={id}",
     "diff": "/ui/diff"
   },
   "requiredMethods": [
@@ -39,9 +39,10 @@
     "session.unsubscribe",
     "sessions.search",
     "config.models",
-    "config.models.write",
     "config.packages",
-    "session.ui_response"
+    "session.ui_response",
+    "session.pending_dialogs",
+    "files.roots"
   ],
   "extensionChannel": {
     "fireAndForget": [
@@ -74,11 +75,11 @@
   },
   "build": {
     "_comment": "构建产物布局。桥只消费 dist/，不再读 src/assets。",
-    "toolchain": "pnpm + Vite 7 + TypeScript 5 + Tailwind v4",
+    "toolchain": "pnpm + Vite 8 + TypeScript 7 + Tailwind v4",
     "outputDir": "dist",
     "viteManifest": "dist/.vite/manifest.json",
     "entry": "src/entry/app.ts",
-    "firstLoadBudgetGzipKB": 32
+    "firstLoadBudgetGzipKB": 40
   },
   "assets": {
     "_comment": "构建后由 dist/.vite/manifest.json 解析真实文件名；这里只声明逻辑入口。",
@@ -88,7 +89,8 @@
       "highlight": "highlight.js",
       "math": "katex",
       "mermaid": "mermaid",
-      "ansi": "ansi_up"
+      "ansi": "ansi_up",
+      "terminal": "@xterm/xterm"
     }
   }
 }

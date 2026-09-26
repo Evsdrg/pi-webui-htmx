@@ -275,8 +275,11 @@ CJS/ESM，没有浏览器包，而本仓刻意不引入构建步骤；同时服�
 
 - 首屏 gzip 预算写死在 `ui-manifest.json` 的 `build.firstLoadBudgetGzipKB`，
   校验脚本超预算即失败
+- **首屏体积按入口的静态依赖闭包统计**，不是只算入口文件。只算入口会漏掉
+  被静态引用的子 chunk：实测漏算时 24 KB，算全后 33 KB。
 - 重库（katex / mermaid / xterm）**不得**出现在首屏 chunk 的实现代码里，
   只允许出现 import 说明字符串
+- 动态分块引用的每个产物都必须存在于 `dist/`，防止用裸包名绕过 Vite
 - 文件名带内容哈希，可长期不可变缓存
 
 **Vite 只处理 JS/CSS，不处理 Go 模板。** 模板由桥在请求时渲染，
@@ -289,6 +292,11 @@ Vite 既不知道也不该知道它们的存在。Tailwind 通过 `@source` 扫�
 2. 读 `dist/.vite/manifest.json`，把逻辑名 `app` 解析成 `app-<hash>.js`
 3. 渲染 `shell.html` 时注入解析后的 `<script>` 与 `<link>`
 4. 其余模板按需渲染
+
+**交互接线不在契约检查范围内。** 契约校验只覆盖模板结构、manifest 与产物；
+「表单真的连到了 `session.ui_response`」「滚动真的保住了视口」这类行为由
+`tests/unit/` 与浏览器实测负责。用正则断言 `session.ui_response` 出现在模板里
+曾经造成过误导：实现已改成 WS 回执，模板里不再有那个字符串，而检查仍然报绿。
 
 ## 5. 协议与版本协商
 

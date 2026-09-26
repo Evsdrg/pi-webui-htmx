@@ -1,16 +1,4 @@
-{{/* 文件浏览 */}}
-<div class="crumbs"><a href="/ui/files?path={{.Root}}">{{.Root}}</a></div>
-<ul class="files">
 {{range .Entries}}
-  <li class="{{if .IsDir}}dir{{else}}file{{end}}">
-    {{if .IsDir}}
-    <a href="/ui/files?path={{.Path}}" hx-get="/ui/files?path={{.Path}}" hx-target="#files" hx-swap="innerHTML">{{.Name}}/</a>
-    {{else}}
-    <span>{{.Name}}</span><span class="muted">{{.Size}}</span>
-    {{end}}
-  </li>
-{{else}}
-  <li class="muted">空目录</li>
-{{end}}
-</ul>
-{{if .Truncated}}<p class="muted">条目过多，仅显示前若干项</p>{{end}}
+<button class="file-item" data-file-path="{{.Path}}" data-directory="{{.IsDir}}"><span aria-hidden="true">{{if .IsDir}}▸{{else}}·{{end}}</span><span>{{.Name}}</span>{{if not .IsDir}}<span class="muted">{{.Size}}</span>{{end}}</button>
+{{else}}<p class="empty-note">目录为空。</p>{{end}}
+{{if .Truncated}}<p class="empty-note">目录项已达到显示上限。</p>{{end}}

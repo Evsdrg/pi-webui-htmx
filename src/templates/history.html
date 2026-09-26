@@ -1,47 +1,16 @@
-{{/* 历史片段：一次返回若干个完整回合。
-     整轮渲染是刻意设计—— Pi Web 按单条消息切片，往回翻页时
-     会把已在屏幕上的 assistant 重新折进 ProcessDetailsGroup，
-     导致视口内容被顶走。这里一个片段就是若干完整回合，
-     插入位置永远在整轮边界上。 */}}
+{{/* 分页控件独立交换；历史正文只含回合，旧内容始终插到顶部。 */}}
+<div id="older-slot" hx-swap-oob="innerHTML">
+{{if .HasMore}}<div class="older"><button class="btn" id="older-sentinel"
+ hx-get="/ui/sessions/{{.SessionID}}/history?before={{.OldestEntryID}}&amp;leafId={{.LeafID}}"
+ hx-target="#turns" hx-swap="afterbegin" hx-sync="this:drop" hx-disabled-elt="this">↑ 加载更早的消息</button></div>{{end}}
+</div>
 {{range .Turns}}
 <article class="turn" data-turn-id="{{.ID}}">
-  <div class="turn-user">
-    <span class="role">你</span>
-    <div class="bubble">{{.UserText}}</div>
-  </div>
-  {{if .HasProcess}}
-  <details class="turn-process">
-    <summary>过程（{{len .Steps}} 步）</summary>
-    <ol>
-      {{range .Steps}}
-      <li><span class="step-kind">{{.Kind}}</span> <span class="step-detail">{{.Detail}}</span></li>
-      {{end}}
-    </ol>
-  </details>
-  {{end}}
-  {{if .AssistantText}}
-  <div class="turn-assistant">
-    <span class="role">Pi</span>
-    <div class="bubble markdown">{{.AssistantText}}</div>
-  </div>
-  {{end}}
+  {{if .UserText}}<div class="turn-user"><div class="bubble">{{.UserText}}</div></div>{{end}}
+  {{if .HasProcess}}<details class="turn-process"><summary>查看过程 · {{len .Steps}} 步</summary><ol>
+    {{range .Steps}}<li><span class="step-kind">{{.Kind}}</span><pre class="step-detail">{{.Detail}}</pre></li>{{end}}
+  </ol></details>{{end}}
+  {{if .AssistantText}}<div class="turn-assistant"><span class="role" role="img" aria-label="Pi 助手">π</span><div class="bubble markdown">{{.AssistantText}}</div></div>{{end}}
+  <div class="turn-actions"><button class="icon-btn" data-action="copy-turn" aria-label="复制此回合内容">复制</button>{{if .UserText}}<button class="icon-btn" data-action="fork" data-entry-id="{{.ID}}">从此处分支</button>{{end}}</div>
 </article>
-{{else}}
-<p class="muted">这一页没有更早的会话</p>
-{{end}}
-{{if .HasMore}}
-{{/* 翻页哨兵，必须放在回合容器之外（由 shell 提供挂载点）。
-
-     为什么不能放在 #turns 里面并用 afterbegin：
-     afterbegin 会把整段响应（含新的哨兵）插到容器最前，新哨兵一进入
-     视口就再次满足 revealed，于是同一页被反复插入，视口被无限顶高。
-
-     正确做法：哨兵是独立元素，hx-swap="outerHTML" 用整段响应替换自己。
-     响应里既有一批完整回合，也有下一个哨兵，顺序天然正确。 */}}
-<div class="older" id="older-sentinel"
-     hx-get="/ui/sessions/{{.SessionID}}/history?before={{.OldestEntryID}}&leafId={{.LeafID}}"
-     hx-trigger="revealed"
-     hx-swap="outerHTML">
-  <p class="muted">加载更早的会话…</p>
-</div>
 {{end}}

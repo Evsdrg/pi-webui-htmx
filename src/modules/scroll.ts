@@ -1,107 +1,71 @@
-// 滚动位置管理。
-//
-// 为什么不用 Pi Web 那套「保持离底部距离」的公式：
-// 那个公式只在新增高度全部位于视口上方时正确。Pi Web 按单条消息切片，
-// 翻页时会把已在屏幕上的 assistant 重新折进 ProcessDetailsGroup，
-// 新增高度有一部分在当前轮内部，于是底部被钉死、中间被撑开。
-//
-// 我们的做法分两层：
-//
-// 1. 结构性：一个历史片段只含完整回合，插入位置永远在轮边界（服务端保证）
-// 2. 行为层：由「用户当时是否贴在底部」决定，而不是由桥单方下模式
-//
-// 第 2 点是关键。桥的 X-Scroll-Mode 只能猜，它看不到浏览器状态：
-//   - 用户正在读历史时，append 模式会把他强行拉到底部
-//   - 用户贴着底部等流式输出时，prepend 模式会让新内容把他顶离底部
-// 两者都由前端判断才准确。桥的头降级为提示，不再作为唯一依据。
+// 翻页保持正在阅读的条目与像素偏移；追加内容只在原本贴底时跟随。
+export interface ScrollMetrics { scrollHeight: number; scrollTop: number; clientHeight: number }
+export function isAtBottom(el: ScrollMetrics, threshold = 48): boolean { return el.scrollHeight - el.scrollTop - el.clientHeight <= threshold; }
+export function captureDistance(el: ScrollMetrics): number { return el.scrollHeight - el.scrollTop; }
+export function restoreDistance(el: ScrollMetrics, distance: number): number { return Math.max(0, Math.min(el.scrollHeight - el.clientHeight, el.scrollHeight - distance)); }
+export function scrollModeFrom(xhr: Pick<XMLHttpRequest, 'getResponseHeader'>): string | null { return xhr.getResponseHeader('X-Scroll-Mode'); }
 
-const SCROLL_MODE_HEADER = "X-Scroll-Mode";
-
-/** 判定「贴在底部」的像素阈值。容忍亚像素、懒加载图片与字体替换。 */
-const BOTTOM_SLOP = 80;
-
-/** 记录某次交换前的离底部距离。 */
-function captureDistance(el: HTMLElement): number {
-  return el.scrollHeight - el.scrollTop;
+export interface ViewportAnchor { id: string; offset: number }
+export function captureAnchor(scroller: HTMLElement): ViewportAnchor | null {
+  const top = scroller.getBoundingClientRect().top;
+  for (const turn of scroller.querySelectorAll<HTMLElement>('[data-turn-id]')) {
+    const rect = turn.getBoundingClientRect();
+    if (rect.bottom > top + 1) return { id: turn.dataset.turnId ?? '', offset: rect.top - top };
+  }
+  return null;
+}
+export function restoreAnchor(scroller: HTMLElement, anchor: ViewportAnchor): boolean {
+  const node = Array.from(scroller.querySelectorAll<HTMLElement>('[data-turn-id]')).find((el) => el.dataset.turnId === anchor.id);
+  if (!node) return false;
+  scroller.scrollTop += node.getBoundingClientRect().top - scroller.getBoundingClientRect().top - anchor.offset;
+  return true;
 }
 
-/** 恢复离底部距离。只在新增内容全部位于视口上方时使用。 */
-function restoreDistance(el: HTMLElement, distance: number): void {
-  el.scrollTop = Math.max(0, el.scrollHeight - distance);
-}
-
-/** 是否贴在底部。 */
-export function isAtBottom(el: HTMLElement): boolean {
-  return el.scrollHeight - el.scrollTop - el.clientHeight < BOTTOM_SLOP;
-}
-
-/** 找到承载回合的滚动容器。 */
-function turnsContainer(): HTMLElement | null {
-  return document.getElementById("turns");
-}
-
-/**
- * 挂载滚动处理。
- *
- * beforeSwap：记录用户是否贴在底部，以及当时的离底部距离。
- * afterSwap：按记录决定——
- *   - 贴在底部 → 滚到新底部（流式输出、切会话）
- *   - 不在底部 → 保持离底部距离（向上翻页）
- *
- * 目标元素可能是 #turns（首屏/切会话）或翻页哨兵（向上翻页），
- * 两种情况都归并到同一个容器上处理。
- */
-export function mountScroll(): void {
-  const state = new WeakMap<Element, { atBottom: boolean; distance: number }>();
-
-  document.body.addEventListener("htmx:beforeSwap", (event: Event) => {
-    const detail = (event as CustomEvent).detail as { target?: Element };
-    const target = detail.target;
-    if (!(target instanceof HTMLElement)) return;
-    const container = turnsContainer();
-    if (!container) return;
-    // 空容器（首次加载）没有「用户意图」可言。此时记录 atBottom=true，
-    // 让首屏落在最新消息上——这与「打开一个会话想看最新进展」一致。
-    // 若用户已经翻过历史，容器非空，isAtBottom 会给出真实答案。
-    const hadContent = container.querySelectorAll(".turn").length > 0;
-    state.set(target, {
-      atBottom: hadContent ? isAtBottom(container) : true,
-      distance: captureDistance(container),
-    });
+export function mountScroll(): { bottom(): void; dispose(): void } {
+  const scroller = document.getElementById('chat-scroll');
+  if (!scroller) return { bottom() {}, dispose() {} };
+  const abort = new AbortController();
+  let pinned = true;
+  let anchor: ViewportAnchor | null = null;
+  let pending: { atBottom: boolean; anchor: ViewportAnchor | null; distance: number; top: number; prepend: boolean; reset: boolean } | null = null;
+  let frame = 0;
+  let programmatic = false;
+  const mark = () => {
+    programmatic = true;
+    cancelAnimationFrame(frame);
+    frame = requestAnimationFrame(() => { programmatic = false; });
+  };
+  const updateButton = () => { const button = document.getElementById('jump-latest'); if (button) button.hidden = pinned; };
+  const bottom = () => { mark(); scroller.scrollTop = scroller.scrollHeight; pinned = true; anchor = null; updateButton(); };
+  scroller.addEventListener('scroll', () => {
+    if (programmatic) return;
+    pinned = isAtBottom(scroller);
+    anchor = pinned ? null : captureAnchor(scroller);
+    updateButton();
+  }, { passive: true, signal: abort.signal });
+  scroller.addEventListener('wheel', () => { anchor = null; }, { passive: true, signal: abort.signal });
+  scroller.addEventListener('touchstart', () => { anchor = null; }, { passive: true, signal: abort.signal });
+  document.addEventListener('htmx:beforeSwap', (event) => {
+    const detail = (event as CustomEvent).detail as { target?: HTMLElement; xhr?: XMLHttpRequest; shouldSwap?: boolean };
+    if (detail.target?.id !== 'turns' || detail.shouldSwap === false) return;
+    pending = { atBottom: isAtBottom(scroller), anchor: captureAnchor(scroller), distance: captureDistance(scroller), top: scroller.scrollTop, prepend: detail.xhr?.getResponseHeader('X-Scroll-Mode') === 'prepend', reset: scroller.dataset.resetScroll === 'true' };
+  }, { signal: abort.signal });
+  document.addEventListener('htmx:afterSwap', (event) => {
+    const target = (event as CustomEvent).detail?.target as HTMLElement | undefined;
+    if (target?.id !== 'turns' || !pending) return;
+    const saved = pending; pending = null; delete scroller.dataset.resetScroll;
+    if (saved.reset || (saved.atBottom && !saved.prepend)) { bottom(); return; }
+    mark();
+    anchor = saved.anchor;
+    if (!anchor || !restoreAnchor(scroller, anchor)) scroller.scrollTop = saved.prepend ? restoreDistance(scroller, saved.distance) : saved.top;
+    pinned = isAtBottom(scroller); updateButton();
+  }, { signal: abort.signal });
+  // Markdown、图片和流式文本异步增高时也保持阅读位置。
+  const observer = new ResizeObserver(() => {
+    if (pending) return;
+    if (pinned) bottom();
+    else if (anchor) { mark(); restoreAnchor(scroller, anchor); }
   });
-
-  document.body.addEventListener("htmx:afterSwap", (event: Event) => {
-    const detail = (event as CustomEvent).detail as { target?: Element };
-    const target = detail.target;
-    if (!(target instanceof HTMLElement)) return;
-    const saved = state.get(target);
-    if (!saved) return;
-    state.delete(target);
-    const container = turnsContainer();
-    if (!container) return;
-    if (saved.atBottom) {
-      container.scrollTop = container.scrollHeight;
-    } else {
-      restoreDistance(container, saved.distance);
-    }
-  });
-
-  // 窗口尺寸变化时，若仍贴着底部就继续贴住。
-  window.addEventListener("resize", () => {
-    const container = turnsContainer();
-    if (container && isAtBottom(container)) {
-      container.scrollTop = container.scrollHeight;
-    }
-  });
-}
-
-/**
- * 读取桥下发的滚动模式。
- *
- * 仅用于诊断与断言测试，**不参与滚动决策**——决策依据是前端记录的
- * 「交换前用户是否贴在底部」，因为桥看不到浏览器状态。
- * 保留它是为了在测试中断言「桥确实下发了我预期的模式」。
- */
-export function scrollModeFrom(detail: { xhr?: XMLHttpRequest }): string {
-  return detail.xhr?.getResponseHeader(SCROLL_MODE_HEADER) ?? "append";
+  for (const id of ['turns', 'live']) { const el = document.getElementById(id); if (el) observer.observe(el); }
+  return { bottom, dispose() { abort.abort(); observer.disconnect(); cancelAnimationFrame(frame); } };
 }

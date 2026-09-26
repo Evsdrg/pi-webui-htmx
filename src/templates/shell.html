@@ -3,61 +3,72 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Pi Bridge</title>
-{{/* 资源路径由桥注入，文件名带内容哈希，可长期不可变缓存 */}}
+<meta name="color-scheme" content="light dark">
+<title>Pi · 工作台</title>
 {{range .CSS}}<link rel="stylesheet" href="/assets/{{.}}">{{end}}
 </head>
 <body data-session-id="{{.SessionID}}" hx-history="false">
-<header class="topbar">
-  <span class="brand">Pi Bridge</span>
-  <span id="conn-state" class="state state-offline">未连接</span>
-  <span id="session-state" class="state">空闲</span>
-  <span id="ext-status-slot" hx-get="/ui/extensions/status" hx-trigger="load, every 5s" hx-swap="innerHTML"></span>
-</header>
-<main class="app-shell">
-  <aside class="sidebar"
-         hx-get="/ui/sessions"
-         hx-trigger="load, every 10s"
-         hx-swap="innerHTML">
-    <p class="muted">正在加载会话…</p>
+<a class="skip-link" href="#prompt">跳到消息输入框</a>
+<div class="app-shell" id="workbench">
+  <aside class="sidebar" id="sidebar" aria-label="会话侧栏">
+    <div class="sidebar-brand"><span class="brand-mark" aria-hidden="true">π</span><strong>Pi</strong><span class="tag">工作台</span><button class="icon-btn mobile-only" data-action="sidebar" aria-label="关闭侧栏">×</button></div>
+    <button class="btn new-session" data-action="new"><span aria-hidden="true">＋</span> 新建会话 <kbd>⌘ K</kbd></button>
+    <label class="search-box"><span aria-hidden="true">⌕</span><input id="session-search" type="search" placeholder="搜索会话" aria-label="搜索会话" autocomplete="off"></label>
+    <div class="section-label">会话 <span id="session-count"></span><button class="icon-btn" data-action="refresh-sessions" aria-label="刷新会话">↻</button></div>
+    <nav id="session-list" aria-label="会话列表" hx-get="/ui/sessions" hx-trigger="sessions-refresh from:body" hx-swap="innerHTML"><p class="empty-note">连接后显示本地会话</p></nav>
+    <footer class="sidebar-footer"><button class="btn btn-quiet" data-action="settings">⚙ 设置与扩展</button><span id="conn-state" class="state state-offline" role="status">连接中</span></footer>
   </aside>
-
-  <section class="conversation">
-    {{/* 翻页哨兵的挂载点。它必须在 #turns 之外，
-         否则 afterbegin 会把新哨兵一起插入并立刻再次触发。 */}}
-    <div id="older-slot"></div>
-
-    <div id="turns"
-         hx-get="/ui/sessions/{{.SessionID}}/history"
-         hx-trigger="load"
-         hx-swap="innerHTML">
-      <p class="muted">正在加载历史…</p>
+  <div class="sidebar-resizer" role="separator" aria-label="调整侧栏宽度" aria-orientation="vertical" tabindex="0"></div>
+  <main class="conversation" id="main">
+    <header class="topbar">
+      <button class="icon-btn" data-action="sidebar" aria-label="切换侧栏" aria-controls="sidebar" aria-expanded="true">☰</button>
+      <div class="session-heading"><h1 id="session-title">新会话</h1><span id="session-cwd" class="muted">选择工作目录，开始对话</span></div>
+      <span id="session-state" class="state" role="status">就绪</span>
+      <button class="icon-btn" data-action="session-menu" aria-label="会话操作">···</button>
+      <button class="icon-btn" data-action="workspace" aria-label="打开工作区面板" aria-controls="workspace-panel" aria-expanded="false">▤</button>
+    </header>
+    <div id="connection-notice" class="notice" role="status" hidden></div>
+    <div id="chat-scroll" class="chat-scroll" tabindex="0" role="region" aria-label="对话历史">
+      <div id="welcome" class="welcome"><div class="welcome-mark" aria-hidden="true">π</div><h2>从一个想法开始</h2><p>你的代码、会话和工具，都在本地。</p><div class="welcome-hints"><span>选定工作目录</span><span>选择模型</span><span>开始协作</span></div></div>
+      <div id="older-slot"></div>
+      <h2 class="sr-only">对话内容</h2>
+      <div id="turns" hx-swap="innerHTML"></div>
+      <div id="live" class="live" hidden><div id="live-user" class="bubble live-user"></div><details id="live-process" class="turn-process"><summary>正在处理…</summary><pre id="live-thinking"></pre><div id="live-tools"></div></details><div id="live-text" class="bubble streaming-text"></div></div>
     </div>
-
-    <div id="live" class="live" hidden></div>
-
-    {{/* 扩展对话挂载点：Pi 推来 select/confirm/input/editor 时由 WS 层填充 */}}
-    <div id="ext-dialog-slot"
-         hx-get="/ui/extensions/dialogs?sessionId={{.SessionID}}"
-         hx-trigger="load, ext-dialog from:body"
-         hx-swap="innerHTML"></div>
-
-    <form id="composer"
-          hx-post="/ui/sessions/{{.SessionID}}/prompt"
-          hx-target="#live"
-          hx-swap="none"
-          hx-on::after-request="if(event.detail.successful) this.reset()">
-      <textarea name="text" rows="3" placeholder="输入消息，Enter 发送，Shift+Enter 换行"></textarea>
-      <div class="composer-actions">
-        <select name="model" hx-get="/ui/models" hx-trigger="load" hx-swap="innerHTML">
-          <option value="">加载模型中…</option>
-        </select>
-        <button type="submit" class="btn btn-primary">发送</button>
-        <button type="button" class="btn" hx-post="/ui/sessions/{{.SessionID}}/abort" hx-swap="none">中止</button>
-      </div>
-    </form>
-  </section>
-</main>
+    <button id="jump-latest" class="btn jump-latest" data-action="latest" hidden>↓ 回到最新</button>
+    <div class="composer-wrap">
+      <div id="ext-widgets-before" class="ext-widgets"></div>
+      <form id="composer" autocomplete="off">
+        <label class="sr-only" for="prompt">消息</label>
+        <textarea id="prompt" name="text" rows="3" placeholder="描述任务，或输入 / 选择命令…" maxlength="200000"></textarea>
+        <div id="command-menu" class="command-menu" hidden></div>
+        <div class="composer-actions">
+          <label class="select-label"><span class="sr-only">模型</span><select id="model-select" name="model" aria-label="模型" hx-get="/ui/models" hx-trigger="models-refresh from:body"><option value="">Pi 默认模型</option></select></label>
+          <label class="select-label"><span class="sr-only">思考强度</span><select id="thinking-select" aria-label="思考强度" disabled><option value="">默认思考</option></select></label>
+          <select id="queue-mode" aria-label="运行中发送方式" hidden><option value="steer">插入指令</option><option value="followUp">完成后追加</option></select>
+          <div class="spacer"></div><button class="icon-btn" type="button" data-action="commands" aria-label="查看斜杠命令">/</button>
+          <button id="abort-button" type="button" class="btn" data-action="abort" hidden>■ 中止</button><button id="send-button" type="submit" class="btn btn-primary" disabled>发送 ↑</button>
+        </div>
+      </form>
+      <div class="composer-footnote"><span id="ext-status-slot"></span><span id="usage"></span><span>Enter 发送 · Shift+Enter 换行</span></div>
+      <div id="ext-widgets-after" class="ext-widgets"></div>
+    </div>
+  </main>
+  <aside id="workspace-panel" class="workspace-panel" aria-label="工作区面板" hidden>
+    <header class="panel-header"><strong>工作区</strong><button class="icon-btn" data-action="workspace" aria-label="关闭工作区面板">×</button></header>
+    <div class="panel-tabs" role="tablist" aria-label="工作区内容"><button role="tab" id="tab-files" aria-controls="panel-files" aria-selected="true" data-panel="files">文件</button><button role="tab" id="tab-git" aria-controls="panel-git" aria-selected="false" data-panel="git">变更</button><button role="tab" id="tab-terminal" aria-controls="panel-terminal" aria-selected="false" data-panel="terminal">终端</button></div>
+    <section id="panel-files" role="tabpanel" aria-labelledby="tab-files"><div class="path-bar"><button class="icon-btn" data-action="files-up" aria-label="上一级目录">↑</button><span id="file-path"></span><button class="icon-btn" data-action="files-refresh" aria-label="刷新文件">↻</button></div><div id="file-list"></div><div id="file-preview" hidden><div class="panel-header"><strong id="file-name"></strong><button class="icon-btn" data-action="file-close" aria-label="关闭文件">×</button></div><pre><code id="file-content"></code></pre></div></section>
+    <section id="panel-git" role="tabpanel" aria-labelledby="tab-git" hidden><button class="btn" data-action="git-refresh">刷新变更</button><div id="git-status"></div><div id="git-diff"></div></section>
+    <section id="panel-terminal" role="tabpanel" aria-labelledby="tab-terminal" hidden><div class="terminal-actions"><button class="btn" data-action="terminal-open">启动终端</button><button class="btn" data-action="terminal-close">关闭终端</button></div><p id="terminal-notice" class="empty-note">终端仅在启动后占用资源。</p><div id="terminal-mount"></div></section>
+  </aside>
+</div>
+<button class="sidebar-backdrop" data-action="sidebar" aria-label="收起侧栏" tabindex="-1" hidden></button>
+<dialog id="auth-dialog" class="app-dialog"><form id="auth-form"><h2>连接本地桥</h2><p class="muted">输入桥启动时配置的访问令牌。令牌只用于换取当前浏览器的登录 Cookie。</p><label for="bridge-token">访问令牌</label><input id="bridge-token" type="password" autocomplete="current-password" required><p id="auth-error" class="form-error" role="alert"></p><button class="btn btn-primary" type="submit">连接</button></form></dialog>
+<dialog id="new-dialog" class="app-dialog"><form id="new-form"><h2>新建会话</h2><label for="cwd-input">工作目录</label><input id="cwd-input" type="text" list="workspace-roots" placeholder="允许根内的绝对路径" required><datalist id="workspace-roots"></datalist><p class="muted">浏览页面不会启动 Pi；发送第一条消息时才创建工作进程。</p><div class="dialog-actions"><button class="btn" type="button" data-close-dialog>取消</button><button class="btn btn-primary" type="submit">使用此目录</button></div></form></dialog>
+<dialog id="settings-dialog" class="app-dialog settings-dialog"><header class="panel-header"><h2>设置与扩展</h2><button class="icon-btn" data-close-dialog aria-label="关闭设置">×</button></header><label for="theme-select">外观</label><select id="theme-select"><option value="system">跟随系统</option><option value="light">浅色</option><option value="dark">深色</option><option value="mist">雾蓝</option><option value="rose">蔷薇</option><option value="pine">松绿</option></select><h3>模型配置</h3><p class="muted">模型和凭据保留在桥所在的机器。切换当前模型使用输入框下方的选择器。</p><button class="btn" data-action="models-refresh">重新读取模型</button><h3>插件与技能包</h3><div id="packages-slot" hx-get="/ui/packages" hx-trigger="packages-refresh from:body">打开时读取已安装清单。</div></dialog>
+<dialog id="session-dialog" class="app-dialog"><header class="panel-header"><h2>会话操作</h2><button class="icon-btn" data-close-dialog aria-label="关闭会话操作">×</button></header><label for="session-name">会话名称</label><input id="session-name" type="text" maxlength="200"><div class="session-action-grid"><button class="btn" data-action="rename">保存名称</button><button class="btn" data-action="compact">压缩上下文</button><button class="btn" data-action="clone">克隆会话</button><button class="btn" data-action="stop">释放工作进程</button><button class="btn danger" data-action="delete">删除会话…</button></div></dialog>
+<div id="ext-dialog-slot"></div>
+<div id="toast-root" class="toast-root" aria-live="polite" aria-atomic="false"></div>
 {{range .JS}}<script type="module" src="/assets/{{.}}"></script>{{end}}
 </body>
 </html>

@@ -1,40 +1,24 @@
-// Markdown 渲染。marked + DOMPurify。
-// DOMPurify 不是可选的：模型输出与文件内容都不可信，marked 不过滤 HTML。
-//
-// 这条模块被 entry 静态引用，但 marked/dompurify 通过动态 import 加载，
-// Vite 会把它们拆成独立 chunk，首屏只含一个极小的加载器。
-
-let pipeline: Promise<{
-  parse(src: string): string;
-  sanitize(html: string): string;
-}> | null = null;
-
-function load(): Promise<{ parse(src: string): string; sanitize(html: string): string }> {
-  if (pipeline) return pipeline;
-  pipeline = Promise.all([import("marked"), import("dompurify")]).then(([markedMod, purifyMod]) => {
-    const DOMPurify = purifyMod.default;
-    return {
-      parse: (src: string) => markedMod.parse(src, { async: false, gfm: true, breaks: false }),
-      sanitize: (html: string) => DOMPurify.sanitize(html, { USE_PROFILES: { html: true } }),
-    };
-  });
+// 模型输出是非可信文本，不能带入可触发桥命令的属性或控件。
+let pipeline: Promise<{ parse(source: string): string; sanitize(html: string): string }> | null = null;
+async function load() {
+  if (!pipeline) pipeline = Promise.all([import('marked'), import('dompurify')]).then(([marked, purify]) => ({
+    parse: (source: string) => marked.parse(source, { async: false, gfm: true }),
+    sanitize: (html: string) => purify.default.sanitize(html, { USE_PROFILES: { html: true }, ALLOW_DATA_ATTR: false, FORBID_TAGS: ['form','input','button','textarea','select','style'], FORBID_ATTR: ['style','id','name'] }),
+  })).catch((error: unknown) => { pipeline = null; throw error; });
   return pipeline;
 }
-
-const RENDERED = "data-rendered";
-
-/** 只渲染未处理过的节点；重复渲染会丢光标并造成闪烁。 */
-export function mountMarkdown(root: ParentNode = document): void {
-  const nodes = root.querySelectorAll<HTMLElement>(`.markdown:not([${RENDERED}])`);
-  if (nodes.length === 0) return;
-  void load()
-    .then(({ parse, sanitize }) => {
-      for (const el of nodes) {
-        el.innerHTML = sanitize(parse(el.textContent ?? ""));
-        el.setAttribute(RENDERED, "1");
-      }
-    })
-    .catch((err: unknown) => {
-      console.warn("[markdown]", err instanceof Error ? err.message : err);
-    });
+export async function safeMarkdown(source: string): Promise<string> { const engine = await load(); return engine.sanitize(engine.parse(source)); }
+export async function mountMarkdown(root: ParentNode = document): Promise<void> {
+  const nodes = Array.from(root.querySelectorAll<HTMLElement>('.markdown:not([data-rendered])'));
+  if (!nodes.length) return;
+  for (const node of nodes) node.dataset.rendered = 'pending';
+  try {
+    const engine = await load();
+    for (const node of nodes) {
+      if (!node.isConnected) continue;
+      node.innerHTML = engine.sanitize(engine.parse(node.textContent ?? ''));
+      for (const link of node.querySelectorAll('a')) link.rel = 'noopener noreferrer';
+      node.dataset.rendered = '1';
+    }
+  } catch (error) { for (const node of nodes) delete node.dataset.rendered; throw error; }
 }

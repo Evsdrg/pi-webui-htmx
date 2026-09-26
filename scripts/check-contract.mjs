@@ -1,98 +1,61 @@
 #!/usr/bin/env node
-// 校验 UI 包是否满足 docs/contract.md 的要求。
-// 桥在启动时做等价校验；这里是 UI 仓的自检，两边规则必须一致。
-import { readFileSync, existsSync, statSync } from "node:fs";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
-import { execSync } from "node:child_process";
-
-const root = dirname(dirname(fileURLToPath(import.meta.url)));
-const srcRoot = join(root, "src");
-let failed = 0;
-
-const fail = (msg) => { console.error(`✗ ${msg}`); failed++; };
-const ok = (msg) => console.log(`✓ ${msg}`);
-
-// ---- manifest 基本字段 ----
-const manifest = JSON.parse(readFileSync(join(root, "ui-manifest.json"), "utf8"));
-for (const field of ["uiVersion", "protocolVersion", "piBaseline", "templates", "routes", "requiredMethods", "extensionChannel", "build", "assets"]) {
-  if (manifest[field] === undefined) fail(`manifest 缺少字段 ${field}`);
-  else ok(`manifest.${field}`);
+// 检查模板结构与生产产物；交互接线由 tests/unit 和浏览器验收负责。
+import { readFileSync, existsSync } from 'node:fs';
+import { dirname, resolve, sep } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { gzipSync } from 'node:zlib';
+const root=dirname(dirname(fileURLToPath(import.meta.url)));
+let failed=0;
+const fail=message=>{console.error(`✗ ${message}`);failed++;};
+const ok=message=>console.log(`✓ ${message}`);
+const manifest=JSON.parse(readFileSync(resolve(root,'ui-manifest.json'),'utf8'));
+for(const field of ['uiVersion','protocolVersion','piBaseline','templates','routes','requiredMethods','extensionChannel','build','assets']){if(manifest[field]===undefined)fail(`manifest 缺少 ${field}`);}
+for(const [name,relative] of Object.entries(manifest.templates??{})){
+ if(name.startsWith('_'))continue;
+ const path=resolve(root,'src',relative);
+ if(!path.startsWith(resolve(root,'src')+sep)||!existsSync(path)){fail(`模板路径无效: ${name}`);continue;}
+ const body=readFileSync(path,'utf8');
+ if(name!=='shell'&&/<!doctype|<(?:html|head|body)[\s>]/i.test(body))fail(`片段 ${name} 包含完整文档结构`);
+ if(name!=='shell'&&/<script[\s>]/i.test(body))fail(`片段 ${name} 含脚本`);
+ if(/style="[^"]*\{\{/.test(body))fail(`模板 ${name} 含动态内联样式`);
+ if(name==='extDialog'&&(!body.includes('data-dialog-id')||!body.includes('data-extension-form')))fail('扩展对话缺少回执表单标记');
+ ok(`模板 ${name}`);
 }
-
-// ---- 模板存在且是片段 ----
-for (const [name, rel] of Object.entries(manifest.templates ?? {})) {
-  if (name.startsWith("_")) continue;
-  const p = join(srcRoot, rel);
-  if (!existsSync(p)) { fail(`模板 ${name} -> ${rel} 不存在`); continue; }
-  ok(`模板 ${name}`);
-  const body = readFileSync(p, "utf8");
-  if (name === "shell") continue;
-  for (const [label, re] of [["<!DOCTYPE", /<!DOCTYPE/i], ["<html", /<html[\s>]/i], ["<head", /<head[\s>]/i], ["<body", /<body[\s>]/i]]) {
-    if (re.test(body)) fail(`${name} 含 ${label}，片段模板不得输出完整文档`);
-  }
-  if (/<script/i.test(body)) fail(`${name} 内联了 <script>，违反 CSP 约束`);
-  if (/style="[^"]*\{\{/.test(body)) fail(`${name} 的 style 属性含插值，应改用 class`);
+const seen=new Set();
+for(const group of ['fireAndForget','needsResponse','unsupportedByRpc']){
+ const methods=manifest.extensionChannel?.[group];
+ if(!Array.isArray(methods)){fail(`缺少扩展方法集合 ${group}`);continue;}
+ for(const method of methods){if(seen.has(method))fail(`扩展方法分类重复: ${method}`);seen.add(method);}
 }
-
-// ---- 扩展通道三集合 ----
-const ch = manifest.extensionChannel ?? {};
-for (const key of ["fireAndForget", "needsResponse", "unsupportedByRpc"]) {
-  if (!Array.isArray(ch[key])) fail(`extensionChannel.${key} 缺失或不是数组`);
-  else ok(`extensionChannel.${key} (${ch[key].length})`);
+const output=resolve(root,manifest.build.outputDir);
+const manifestPath=resolve(root,manifest.build.viteManifest);
+if(!existsSync(manifestPath)){fail('构建产物不存在，请先运行 pnpm build');}
+else {
+ const chunks=JSON.parse(readFileSync(manifestPath,'utf8'));
+ const entry=manifest.build.entry??'src/entry/app.ts';
+ const visited=new Set();const files=new Set();
+ function visit(key){
+  if(visited.has(key))return;visited.add(key);
+  const chunk=chunks[key];if(!chunk){fail(`缺少静态依赖 ${key}`);return;}
+  files.add(chunk.file);for(const css of chunk.css??[])files.add(css);
+  for(const dependency of chunk.imports??[])visit(dependency);
+ }
+ visit(entry);
+ let bytes=0;
+ for(const relative of files){
+  const file=resolve(output,relative);
+  if(!file.startsWith(output+sep)||!existsSync(file)){fail(`产物路径无效: ${relative}`);continue;}
+  const data=readFileSync(file);bytes+=gzipSync(data,{level:9}).length;
+  if(/(?:katex|mermaid|cytoscape|xterm)/i.test(relative))fail(`重库进入首屏静态依赖: ${relative}`);
+ }
+ const budget=manifest.build.firstLoadBudgetGzipKB;
+ if(!Number.isFinite(budget)||bytes>budget*1024)fail(`首屏 gzip ${(bytes/1024).toFixed(2)} KiB 超出预算 ${budget} KiB`);
+ else ok(`首屏 ${files.size} 个 JS/CSS 文件，gzip ${(bytes/1024).toFixed(2)} KiB / ${budget} KiB`);
+ // 所有动态分块也必须能在部署包中找到，不能靠裸包名绕过 Vite。
+ for(const [key,chunk] of Object.entries(chunks)){
+  for(const dependency of [...(chunk.imports??[]),...(chunk.dynamicImports??[])])if(!chunks[dependency])fail(`${key} 引用不存在的分块 ${dependency}`);
+  for(const relative of [chunk.file,...(chunk.css??[]),...(chunk.assets??[])]){const file=resolve(output,relative);if(!file.startsWith(output+sep)||!existsSync(file))fail(`缺少分块产物 ${relative}`);}
+ }
 }
-const overlap = (ch.needsResponse ?? []).filter((m) => (ch.fireAndForget ?? []).includes(m));
-if (overlap.length) fail(`两类方法重叠: ${overlap.join(", ")}`);
-else ok("两类扩展方法无重叠");
-
-// ---- 对话框回执接线 ----
-const dialogRel = manifest.templates?.extDialog;
-if (dialogRel) {
-  const p = join(srcRoot, dialogRel);
-  if (existsSync(p)) {
-    const body = readFileSync(p, "utf8");
-    if (!body.includes("data-dialog-id")) fail("extDialog 缺少 data-dialog-id");
-    else ok("extDialog 带 data-dialog-id");
-    if (!body.includes("session.ui_response") && !body.includes("/ui-response")) fail("extDialog 未接线 session.ui_response");
-    else ok("extDialog 已接线回执");
-  }
-}
-
-// ---- 产物体积预算（仅当 dist/ 存在时检查）----
-const budget = manifest.build?.firstLoadBudgetGzipKB ?? 32;
-const viteManifest = join(root, manifest.build?.viteManifest ?? "dist/.vite/manifest.json");
-if (existsSync(viteManifest)) {
-  ok("构建产物存在，检查首屏预算");
-  const vm = JSON.parse(readFileSync(viteManifest, "utf8"));
-  const entry = Object.values(vm).find((v) => v.isEntry);
-  if (!entry) {
-    fail("Vite manifest 中找不到入口");
-  } else {
-    const files = [entry.file, ...(entry.css ?? [])].map((f) => join(root, manifest.build.outputDir, f));
-    let total = 0;
-    for (const f of files) {
-      if (!existsSync(f)) { fail(`入口文件缺失: ${f}`); continue; }
-      total += parseInt(execSync(`gzip -9c ${JSON.stringify(f)} | wc -c`).toString().trim(), 10);
-    }
-    const kb = Math.round(total / 1024);
-    if (kb > budget) fail(`首屏 gzip ${kb} KB 超过预算 ${budget} KB`);
-    else ok(`首屏 gzip ${kb} KB，预算 ${budget} KB`);
-  }
-
-  // 重库不得进入首屏 chunk。
-  const entrySrc = readFileSync(join(root, manifest.build.outputDir, entry.file), "utf8");
-  for (const lib of ["katex", "mermaid", "cytoscape", "xterm"]) {
-    // 只查代码特征，不查 import 说明字符串。
-    const patterns = { katex: "katex.renderToString", mermaid: "mermaid.render", cytoscape: "cytoscape(", xterm: "new Terminal" };
-    if (entrySrc.includes(patterns[lib])) fail(`首屏包含 ${lib} 的实现代码，应拆为惰性 chunk`);
-    else ok(`首屏不含 ${lib} 实现`);
-  }
-} else {
-  console.log("· 未构建，跳过产物体积检查（pnpm vite build 后可用）");
-}
-
-if (failed) {
-  console.error(`\n${failed} 项不满足契约`);
-  process.exit(1);
-}
-console.log("\nUI 包契约校验通过");
+if(failed){console.error(`${failed} 项检查失败`);process.exit(1);}
+console.log('UI 包契约与产物校验通过');

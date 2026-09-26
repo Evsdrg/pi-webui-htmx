@@ -7,7 +7,7 @@ Pi Bridge 的 htmx 前端。模板与静态资源归本仓，桥只提供数据�
 
 ## 工具链
 
-pnpm + Vite 7 + TypeScript 5 + Tailwind v4。
+pnpm + Vite 8 + TypeScript 7 + Tailwind v4。
 
 用户的要求是「工具链可以重，最终产物足够轻」，因此选了完整栈，
 产物侧由契约强制约束：
@@ -51,14 +51,53 @@ HTML——逐 token 重渲染会丢光标、闪烁。用 `textContent` 追加，
 `agent_settled` 后整轮重取权威结果。
 
 **4. 重库全部惰性。** katex / mermaid / xterm 通过间接动态 import 隔离成
-独立 chunk，只在出现对应节点时下载。首屏预算 32 KB gzip 写死在 manifest 里，
-`pnpm check` 超预算即失败。
+独立 chunk，只在出现对应节点时下载。首屏预算写死在 manifest 里，
+`pnpm check` 超预算即失败，且会递归统计入口的全部静态依赖——
+只算入口文件会漏掉被静态引用的子 chunk（实际发生过：漏算时 24 KB，
+算全后 33 KB）。
+
+**5. TypeScript 7 的严格检查当扫帚。** TS 7 新增 TS6192（整个 import 语句
+都未使用），抓出过 `terminal.ts` 整套 60 行封装从未被调用、
+`notifyFromPiEvent` 从未被调用——「看起来接了其实没接」比没有更糟。
+
+## 测试
+
+```bash
+pnpm test   # vitest，31 项
+```
+
+覆盖四类容易出静默错误的地方：
+
+- **协议与回执**（`workbench.test.ts`）：requestId 关联、超时不重发、
+  断线不伪造结果、状态轮询不替换正在编辑的扩展对话
+- **滚动锚点**（`scroll.test.ts`）：`isAtBottom` / `captureDistance` /
+  `restoreDistance`，翻页后视口内容零位移
+- **内容净化**（`content.test.ts`）：Markdown 经 DOMPurify，脚本与
+  `javascript:` URL 一律剥掉
+- **终端资源**（`terminal.test.ts`）：连续按键合并为一次请求、
+  断线时暂停输入且不宣称服务端资源已释放
+
+浏览器侧行为（滚动、扩展对话、终端关闭后的服务端残留）用 agent-browser
+实测，不靠断言代替。
 
 ## 体积
 
 | | gzip |
 |---|---:|
-| 首屏（app.js + app.css） | **27 KB** |
+| 首屏（app.js + app.css） | **34 KB** |
 | 惰性 chunk 合计 | 2.4 MB（按需） |
 
-对照 Pi Web 首屏 gzip 0.91 MiB / 解码 2.93 MiB。
+首屏预算 40 KB。对照 Pi Web 首屏 gzip 0.91 MiB / 解码 2.93 MiB。
+
+## 已验证的浏览器行为
+
+隔离环境（真实 Go 桥 + `tests/fixtures/pi-rpc.mjs` 假 Pi，不调用付费模型）：
+
+- 浏览历史不启动 Pi；翻页零重复，阅读锚点位移 0 px
+- 发送 → 流式增量 → `agent_settled` 后整轮重取，代码块全部高亮
+- 扩展 `confirm` 对话：WS 推来 → 对话框渲染 → 回执 → 状态回就绪
+- `setStatus` / `setWidget` / `notify` 三类只读通道均正确呈现
+- 文件浏览与预览（按扩展名给 hljs 语言提示，Markdown 不再被猜成 Python）
+- 终端打开、输入、关闭后服务端注册表归零
+- 桥重启后自动重连并重新同步，不自动重发命令
+- 390px 视口无横向溢出；axe WCAG 2A/2AA 违例为 0
