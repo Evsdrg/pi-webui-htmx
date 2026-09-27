@@ -77,7 +77,14 @@ func (s *Store) scanFile(ctx context.Context, f *os.File, size int64, id, cwd st
 			if len(nodes) >= s.limits.Entries {
 				return nil, "", protocol.E("limit_exceeded", "历史索引条目数超过上限")
 			}
-			nodes[item.ID] = node{parent, offset, n}
+			modelID := ""
+			if parent != "" {
+				modelID = nodes[parent].lastModelID
+			}
+			if item.Type == "model_change" {
+				modelID = item.ID
+			}
+			nodes[item.ID] = node{parent: parent, offset: offset, size: n, lastModelID: modelID}
 			last = item.ID
 			offset += int64(n)
 			continue
@@ -104,7 +111,14 @@ func (s *Store) scanFile(ctx context.Context, f *os.File, size int64, id, cwd st
 		if len(nodes) >= s.limits.Entries {
 			return nil, "", protocol.E("limit_exceeded", "历史索引条目数超过上限")
 		}
-		nodes[head.ID] = node{parent, offset, n}
+		modelID := ""
+		if parent != "" {
+			modelID = nodes[parent].lastModelID
+		}
+		if head.Type == "model_change" {
+			modelID = head.ID
+		}
+		nodes[head.ID] = node{parent: parent, offset: offset, size: n, lastModelID: modelID}
 		last = head.ID
 		offset += int64(n)
 	}

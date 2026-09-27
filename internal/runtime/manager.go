@@ -63,7 +63,7 @@ type State struct {
 		ID       string `json:"id"`
 		Name     string `json:"name"`
 		Provider string `json:"provider"`
-	} `json:"model,omitempty"`
+	} `json:"model"`
 }
 
 // Info 描述受管工作进程，供列表与订阅确认返回。

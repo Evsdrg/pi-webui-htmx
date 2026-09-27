@@ -486,11 +486,12 @@ type ThinkingBlock struct {
 
 // HistoryData 驱动历史模板。
 type HistoryData struct {
-	SessionID     string
-	LeafID        string
-	Turns         []Turn
-	HasMore       bool
-	OldestEntryID string
+	SessionID       string
+	LeafID          string
+	Turns           []Turn
+	HasMore         bool
+	OldestEntryID   string
+	HistoricalModel *sessions.ModelRef
 }
 
 // thinkingBlocks 把某个条目的思考块转成自带归属的占位符列表。
@@ -558,11 +559,12 @@ func GroupTurns(entries []sessions.Entry) []Turn {
 // RenderHistory 渲染一页历史片段。
 func (r *Renderer) RenderHistory(sessionID string, page sessions.Page) (string, error) {
 	return r.execute("history.html", HistoryData{
-		SessionID:     sessionID,
-		LeafID:        page.LeafID,
-		Turns:         GroupTurns(sessions.ProjectEntries(page.Entries)),
-		HasMore:       page.HasMore,
-		OldestEntryID: page.OldestEntryID,
+		SessionID:       sessionID,
+		LeafID:          page.LeafID,
+		Turns:           GroupTurns(sessions.ProjectEntries(page.Entries)),
+		HasMore:         page.HasMore,
+		OldestEntryID:   page.OldestEntryID,
+		HistoricalModel: page.HistoricalModel,
 	})
 }
 

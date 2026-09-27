@@ -95,6 +95,53 @@ func TestHistory按分支从叶子向上分页(t *testing.T) {
 	}
 }
 
+func TestHistory模型按所选分支且翻页不回退(t *testing.T) {
+	cwd := t.TempDir()
+	store, dir := newStore(t, cwd)
+	id := writeSession(t, dir, "models", cwd,
+		`{"type":"model_change","id":"m1","parentId":null,"provider":"old","modelId":"old-model"}`,
+		entryRole("u1", "m1", "user"),
+		`{"type":"message","id":"a1","parentId":"u1","message":{"role":"assistant","provider":"old","model":"old-model","content":[{"type":"text","text":"旧回复"}]}}`,
+		`{"type":"model_change","id":"m2","parentId":"a1","provider":"new","modelId":"new-model"}`,
+		entryRole("u2", "m2", "user"),
+		`{"type":"message","id":"a2","parentId":"u2","message":{"role":"assistant","provider":"new","model":"new-model","content":[{"type":"text","text":"新回复"}]}}`,
+		`{"type":"model_change","id":"m3","parentId":"a1","provider":"branch","modelId":"branch-model"}`,
+		entryRole("u3", "m3", "user"),
+	)
+	for _, tc := range []struct {
+		leaf, before, provider, model string
+	}{
+		{"a2", "", "new", "new-model"},
+		{"a2", "u2", "new", "new-model"},
+		{"", "", "branch", "branch-model"},
+		{"a1", "", "old", "old-model"},
+	} {
+		page, err := store.History(context.Background(), id, tc.leaf, tc.before, 2)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if page.HistoricalModel == nil || page.HistoricalModel.Provider != tc.provider || page.HistoricalModel.ID != tc.model {
+			t.Fatalf("leaf=%q before=%q: 历史模型错误: %+v", tc.leaf, tc.before, page.HistoricalModel)
+		}
+	}
+}
+
+func TestHistory无切换记录时从助手消息提取模型(t *testing.T) {
+	cwd := t.TempDir()
+	store, dir := newStore(t, cwd)
+	id := writeSession(t, dir, "legacy", cwd,
+		entryRole("u1", "", "user"),
+		`{"type":"message","id":"a1","parentId":"u1","message":{"role":"assistant","provider":"fallback","model":"from-message","content":[{"type":"text","text":"回复"}]}}`,
+	)
+	page, err := store.History(context.Background(), id, "", "", 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if page.HistoricalModel == nil || page.HistoricalModel.Provider != "fallback" || page.HistoricalModel.ID != "from-message" {
+		t.Fatalf("缺少助手消息里的历史模型: %+v", page.HistoricalModel)
+	}
+}
+
 func TestHistory分页游标与体积上限(t *testing.T) {
 	cwd := t.TempDir()
 	store, sessionDir := newStore(t, cwd)

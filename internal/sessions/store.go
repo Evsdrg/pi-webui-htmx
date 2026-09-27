@@ -137,14 +137,21 @@ func messageRoleAndText(raw json.RawMessage) (string, string) {
 	return role, text
 }
 
+// ModelRef 是会话文件记录的历史模型标识，不代表当前仍可用。
+type ModelRef struct {
+	Provider string `json:"provider"`
+	ID       string `json:"id"`
+}
+
 // Page 是一页按祖先到后代排序的历史记录。
 type Page struct {
-	SessionID     string            `json:"sessionId"`
-	LeafID        string            `json:"leafId"`
-	LeafSource    string            `json:"leafSource"`
-	Entries       []json.RawMessage `json:"entries"`
-	OldestEntryID string            `json:"oldestEntryId"`
-	HasMore       bool              `json:"hasMore"`
+	SessionID       string            `json:"sessionId"`
+	LeafID          string            `json:"leafId"`
+	LeafSource      string            `json:"leafSource"`
+	Entries         []json.RawMessage `json:"entries"`
+	OldestEntryID   string            `json:"oldestEntryId"`
+	HasMore         bool              `json:"hasMore"`
+	HistoricalModel *ModelRef         `json:"historicalModel,omitempty"`
 }
 
 // Listing 是会话目录分页结果。
@@ -229,9 +236,10 @@ func (s *Store) Path(h Header) string { return filepath.Join(s.dir, filepath.Fro
 
 // node 记录一条历史记录在文件中的位置与父节点，用于按分支反向取页。
 type node struct {
-	parent string
-	offset int64
-	size   int
+	parent      string
+	offset      int64
+	size        int
+	lastModelID string
 }
 
 // History 读取所选分支上的一页历史。
@@ -323,7 +331,61 @@ func (s *Store) History(ctx context.Context, id, leaf, before string, limit int)
 	if len(selected) > 0 {
 		page.OldestEntryID = selected[len(selected)-1]
 	}
+	page.HistoricalModel, err = historicalModel(ctx, f, nodes, leaf, before, page.Entries)
+	if err != nil {
+		return Page{}, err
+	}
 	return page, nil
+}
+
+// historicalModel 优先使用当前叶子最近一次模型切换；首页若有更新的助手回复，
+// 也可恢复没有显式 model_change 的旧会话。历史标识不代表当前模型仍可用。
+func historicalModel(ctx context.Context, f *os.File, nodes map[string]node, leaf, before string, entries []json.RawMessage) (*ModelRef, error) {
+	modelID := ""
+	if leaf != "" {
+		modelID = nodes[leaf].lastModelID
+	}
+	if before == "" {
+		for i := len(entries) - 1; i >= 0; i-- {
+			raw := entries[i]
+			if !bytes.Contains(raw, []byte(`"provider"`)) || !bytes.Contains(raw, []byte(`"model"`)) {
+				continue
+			}
+			var item struct {
+				ID      string `json:"id"`
+				Message struct {
+					Role     string `json:"role"`
+					Provider string `json:"provider"`
+					Model    string `json:"model"`
+				} `json:"message"`
+			}
+			if json.Unmarshal(raw, &item) == nil && item.Message.Role == "assistant" && item.Message.Provider != "" && item.Message.Model != "" && nodes[item.ID].lastModelID == modelID {
+				return &ModelRef{Provider: item.Message.Provider, ID: item.Message.Model}, nil
+			}
+		}
+	}
+	if modelID == "" {
+		return nil, nil
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	n := nodes[modelID]
+	raw := make([]byte, n.size)
+	if _, err := f.ReadAt(raw, n.offset); err != nil {
+		return nil, protocol.E("conflict", "读取期间历史文件发生变化")
+	}
+	var change struct {
+		Provider string `json:"provider"`
+		ModelID  string `json:"modelId"`
+	}
+	if json.Unmarshal(raw, &change) != nil {
+		return nil, protocol.E("conflict", "读取期间历史文件发生变化")
+	}
+	if change.Provider != "" && change.ModelID != "" {
+		return &ModelRef{Provider: change.Provider, ID: change.ModelID}, nil
+	}
+	return nil, nil
 }
 
 // alignToTurn 把分页边界对齐到「完整的一轮」。
