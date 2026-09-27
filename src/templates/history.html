@@ -12,7 +12,7 @@
   {{if $turn.HasProcess}}<details class="turn-process"><summary>查看过程 · {{len $turn.Steps}} 步</summary><ol>
     {{range $step := $turn.Steps}}<li><span class="step-kind">{{$step.Kind}}</span><pre class="step-detail">{{$step.Detail}}</pre>{{if and $step.EntryID $step.Images}}{{range $step.Images}}<button class="lazy-block" data-lazy="tool-image" data-entry-id="{{$step.EntryID}}" data-block-index="{{.}}">查看工具图片</button>{{end}}{{end}}</li>{{end}}
   </ol></details>{{end}}
-  {{if and $turn.AssistantEntryID $turn.Thinking}}{{range $turn.Thinking}}<button class="lazy-block" data-lazy="thinking" data-entry-id="{{$turn.AssistantEntryID}}" data-block-index="{{.}}">查看思考过程</button>{{end}}{{end}}
+  {{if $turn.Thinking}}{{range $turn.Thinking}}<button class="lazy-block" data-lazy="thinking" data-entry-id="{{.EntryID}}" data-block-index="{{.BlockIndex}}">查看思考过程</button>{{end}}{{end}}
   {{if $turn.AssistantText}}<div class="turn-assistant"><span class="role" role="img" aria-label="Pi 助手">π</span><div class="bubble markdown">{{$turn.AssistantText}}</div></div>{{end}}
   <div class="turn-actions"><button class="icon-btn" data-action="copy-turn" aria-label="复制此回合内容">复制</button>{{if $turn.UserText}}<button class="icon-btn" data-action="fork" data-entry-id="{{$turn.ID}}">从此处分支</button>{{end}}</div>
 </article>
