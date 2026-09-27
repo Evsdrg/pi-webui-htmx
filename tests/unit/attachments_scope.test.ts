@@ -36,3 +36,15 @@ describe('附件额度', () => {
     expect(rejected.join()).toContain('big.png');
   });
 });
+
+describe('附件总体积预算', () => {
+  // U05：旧实现只按单张判断，8 张 8 MB 图片的 base64 远超桥的 WS 读限，
+  // 发送时超限帧会直接断开连接，而不是给出可读提示。
+  it('导出与桥读限一致的总体积预算', async () => {
+    const { limits } = await import('@/modules/attachments');
+    // 与桥的 wsReadLimit 对齐：8 × 12 MiB。
+    expect(limits.WIRE_BUDGET).toBe(limits.MAX_IMAGES * 12 * 1024 * 1024);
+    // 单张上限 × 张数不应超过总体预算，否则永远发不出满额附件。
+    expect(limits.MAX_BYTES * limits.MAX_IMAGES).toBeLessThanOrEqual(limits.WIRE_BUDGET);
+  });
+});

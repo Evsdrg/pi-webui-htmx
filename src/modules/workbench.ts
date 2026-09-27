@@ -1,7 +1,7 @@
 import { BridgeClient, BridgeError } from './bridge';
 import { LiveView, EventCursor, record, text, runStateAfter, type RunState } from './stream';
 import { closeMobileSidebar, readDraft, saveDraft } from './layout';
-import { addFiles, toWire, formatSize } from './attachments';
+import { addFiles, toWire, formatSize, WIRE_BUDGET } from './attachments';
 import type { Attachment } from './attachments';
 import type { Capabilities, EventMessage, Message, Method, WorkerInfo } from '@/types/protocol';
 import { closeDialog, el, openDialog } from './dom';
@@ -287,6 +287,12 @@ export class Workbench {
         this.live.begin(message); this.setRun('running'); el('welcome').hidden = true;
       }
       const images = this.attachments;
+      // 发送前按 base64 总量校验：超出预算时超限帧会直接断开 WS 连接，
+      // 那比一条可读的错误提示糟得多（U05）。
+      const wireBytes = images.reduce((sum, item) => sum + item.data.length, 0);
+      if (wireBytes > WIRE_BUDGET) {
+        throw new Error(`附件总体积超过 ${Math.floor(WIRE_BUDGET / 1024 / 1024)} MB，请减少图片或压缩后重试。`);
+      }
       // 目标会话固定为发起时那一个：等待期间切换也不改投（U13）。
       if (busy && queuedKind) await this.sendQueued(message, queuedKind, images, scope);
       else await this.request('session.prompt', { text: message, ...(images.length ? { images: toWire(images) } : {}) }, scope.sessionId);

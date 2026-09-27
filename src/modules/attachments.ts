@@ -6,6 +6,15 @@
 const MAX_IMAGES = 8;
 const MAX_BYTES = 8 * 1024 * 1024;
 const ALLOWED = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp']);
+/**
+ * WIRE_BUDGET 是整条消息的图片 base64 预算。
+ *
+ * 必须与桥的 WS 读上限对齐（pi.MaxImages × pi.MaxImageDataLen + 封套余量）。
+ * 旧实现只按「单张」判断，8 张 8 MB 图片编成 base64 后约 96 MB，
+ * 远超桥的读限——不仅发不出去，超限帧还会直接把连接断开（U05）。
+ * 在发送前按总量拦一次，让失败是可读的提示而不是断线。
+ */
+export const WIRE_BUDGET = MAX_IMAGES * 12 * 1024 * 1024;
 
 export interface Attachment { name: string; mimeType: string; data: string; size: number }
 
@@ -49,4 +58,4 @@ export function formatSize(bytes: number): string {
   return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
 }
 
-export const limits = { MAX_IMAGES, MAX_BYTES };
+export const limits = { MAX_IMAGES, MAX_BYTES, WIRE_BUDGET };
