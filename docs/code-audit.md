@@ -27,7 +27,7 @@
 | B11 | 中 | Bridge/UI | 多个 assistant entry 的 thinking 占位符关联错 entry：较早思考块不可取回，后续块可能重复出现。 | `pi-bridge-go/internal/presentation/` |
 | B12 | 中 | Bridge | scan cache 仅以 path/size/mtime 验证；同路径、同长度、保留 mtime 的原子替换可命中旧索引，叶子 ID 与实际记录不一致。 | `pi-bridge-go/internal/sessions/cache.go` |
 | B13 | 中 | Bridge | 快速历史扫描可放过完整且已换行、但正文损坏的旧记录，与“完整损坏行显式报错”的契约不符。 | `pi-bridge-go/internal/sessions/scan.go` |
-| B14 | 高 | Tunnel | 退订仅从连接 map 删除订阅 ID，底层 worker subscription goroutine 未关闭；重复订阅会耗尽配额。 | `pi-bridge-go/internal/transport/tunnel.go` |
+| B14 | ✅ 已修 | Tunnel | **修复：** subs 改为保存真实订阅句柄，退订与重复订阅都先 Close 旧订阅。回归做 12 轮订阅/退订后核对 worker 订阅数归零（反例下为 8，即上限）。 | `internal/transport/tunnel.go`；`tunnel_test.go` |
 | B15 | ✅ 已修 | Tunnel | **修复：** 隧道命令与本地 WS 共用 `admit` 与全局 `operations` 预算。原问题：隧道路径完全绕过桥级并发上限。 | `internal/transport/tunnel.go`；`claims.go` |
 | B16 | 中 | Bridge | `UIResponse` 在参数校验之前就删除 pending dialog；非法回执或 Notify 队列已满时，合法重试会变成 not_found，对话可能一直等待。 | `pi-bridge-go/internal/runtime/dialogs.go` |
 | U01 | 高 | UI | 切换会话时 `selectSession()` 不清理全局附件数组；异步 `FileReader` 结果也没有会话 generation 归属，上一会话图片会留在或追加到新会话附件并可被发送。 | `pi-webui-htmx/src/modules/workbench.ts`；`src/modules/attachments.ts` |

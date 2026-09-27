@@ -392,6 +392,13 @@ func (w *Worker) Subscribe() (*Subscription, Info, error) {
 	return s, w.infoLocked(), nil
 }
 
+// SubscriberCount 返回当前订阅者数量，供测试与诊断核对配额是否被释放。
+func (w *Worker) SubscriberCount() int {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return len(w.subs)
+}
+
 // publishLocked 向所有订阅者投递事件；慢订阅者会被摘除并关闭，绝不阻塞 Pi 输出。
 func (w *Worker) publishLocked(event string, data any) {
 	w.seq++

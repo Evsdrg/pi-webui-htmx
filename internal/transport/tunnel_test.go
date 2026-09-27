@@ -3,7 +3,10 @@ package transport
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"strconv"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -201,4 +204,120 @@ func waitFrames(t *testing.T, mu *sync.Mutex, sent *[][]byte, want int) {
 		time.Sleep(5 * time.Millisecond)
 	}
 	t.Fatalf("等待 %d 帧超时", want)
+}
+
+// Test隧道发送失败后不再复用死连接 覆盖 B57：
+// pump 因发送失败退出后，连接以前仍留在映射里，同一 clientId 重连
+// 会复用它，响应入队却无人发送。
+func Test隧道发送失败后不再复用死连接(t *testing.T) {
+	s, _, cwd := newTestServer(t)
+	fail := atomic.Bool{}
+	bridge := NewTunnelBridge(s, func(frame []byte) error {
+		if fail.Load() {
+			return errors.New("隧道已断开")
+		}
+		return nil
+	}, 4, 5*time.Minute)
+	s.SetTunnelBridge(bridge)
+	t.Cleanup(bridge.Close)
+
+	first := mustFrame(t, map[string]any{
+		"version": 1, "kind": "command", "requestId": "d1",
+		"method": "session.start", "params": map[string]any{"cwd": cwd},
+	})
+	if !bridge.HandleFrame(context.Background(), wrapFrom(t, "tab-1", first)) {
+		t.Fatal("隧道帧未被处理")
+	}
+	// 让隧道进入失败状态，迫使 pump 退出。
+	fail.Store(true)
+	waitFor(t, func() bool {
+		bridge.mu.Lock()
+		defer bridge.mu.Unlock()
+		_, ok := bridge.virtual["tab-1"]
+		return !ok
+	})
+
+	// 同一 clientId 再次来访：必须拿到新连接，响应能真的发出去。
+	fail.Store(false)
+	second := mustFrame(t, map[string]any{
+		"version": 1, "kind": "command", "requestId": "d2", "method": "worker.list",
+	})
+	if !bridge.HandleFrame(context.Background(), wrapFrom(t, "tab-1", second)) {
+		t.Fatal("重连后的隧道帧未被处理")
+	}
+	waitFor(t, func() bool {
+		bridge.mu.Lock()
+		defer bridge.mu.Unlock()
+		c, ok := bridge.virtual["tab-1"]
+		return ok && !c.dead.Load()
+	})
+}
+
+// Test隧道退订释放订阅配额 覆盖 B14：
+// 退订以前只从 map 删 ID，底层订阅不关，反复订阅会耗尽 worker 配额。
+func Test隧道退订释放订阅配额(t *testing.T) {
+	s, _, cwd := newTestServer(t)
+	bridge := NewTunnelBridge(s, func(frame []byte) error { return nil }, 4, 5*time.Minute)
+	s.SetTunnelBridge(bridge)
+	t.Cleanup(bridge.Close)
+
+	start := mustFrame(t, map[string]any{
+		"version": 1, "kind": "command", "requestId": "u1",
+		"method": "session.start", "params": map[string]any{"cwd": cwd},
+	})
+	if !bridge.HandleFrame(context.Background(), wrapFrom(t, "tab-1", start)) {
+		t.Fatal("隧道帧未被处理")
+	}
+	// 等 worker 真正起来，否则后面的会话 ID 取不到。
+	waitFor(t, func() bool { return len(s.manager.List()) == 1 })
+	workers := s.manager.List()
+	sessionID := workers[0].SessionID
+	if sessionID == "" {
+		t.Fatalf("启动响应缺少 sessionId: %+v", workers[0])
+	}
+
+	// 反复订阅/退订：每次退订都必须真正释放 worker 侧配额。
+	for i := 0; i < 12; i++ {
+		id := "u-sub-" + strconv.Itoa(i)
+		sub := mustFrame(t, map[string]any{
+			"version": 1, "kind": "command", "requestId": id, "sessionId": sessionID,
+			"method": "session.subscribe",
+		})
+		if !bridge.HandleFrame(context.Background(), wrapFrom(t, "tab-1", sub)) {
+			t.Fatalf("第 %d 次订阅未被处理", i)
+		}
+		unsub := mustFrame(t, map[string]any{
+			"version": 1, "kind": "command", "requestId": id + "-x", "sessionId": sessionID,
+			"method": "session.unsubscribe",
+		})
+		if !bridge.HandleFrame(context.Background(), wrapFrom(t, "tab-1", unsub)) {
+			t.Fatalf("第 %d 次退订未被处理", i)
+		}
+	}
+	waitFor(t, func() bool {
+		bridge.mu.Lock()
+		defer bridge.mu.Unlock()
+		c, ok := bridge.virtual["tab-1"]
+		return ok && len(c.subs) == 0
+	})
+	w, err := s.manager.Get(sessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n := w.SubscriberCount(); n != 0 {
+		t.Fatalf("退订后 worker 订阅数应为 0，实际 %d", n)
+	}
+}
+
+// waitFor 轮询等待条件成立，避免测试依赖固定睡眠。
+func waitFor(t *testing.T, cond func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if cond() {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatal("等待条件超时")
 }

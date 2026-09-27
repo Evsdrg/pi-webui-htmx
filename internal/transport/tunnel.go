@@ -9,6 +9,7 @@ import (
 
 	"pi-bridge-go/internal/protocol"
 	"pi-bridge-go/internal/relay"
+	"pi-bridge-go/internal/runtime"
 	"pi-bridge-go/internal/terminal"
 )
 
@@ -35,11 +36,15 @@ type virtualConn struct {
 	ctx     context.Context
 	cancel  context.CancelFunc
 	lastUse time.Time
-	// subs 只记录「这个虚拟连接订了哪些会话」，用于关闭时核对；
-	// 真正的有界队列在 worker 侧，慢订阅者由那里摘除。
-	subs  map[string]struct{}
+	// subs 记录每个会话的真实订阅句柄。只存标记不够：
+	// 退订时必须 Close 掉底层订阅，否则 worker 的订阅配额会被
+	// 反复订阅/退订耗尽（B14）。
+	subs  map[string]*runtime.Subscription
 	terms map[string]*terminal.Subscription
 	seen  map[string]bool
+	// dead 表示 pump 已退出（隧道发送失败）。死连接必须从映射移除，
+	// 否则同一 clientId 重连会复用它，响应入队却无人发送（B57）。
+	dead atomic.Bool
 }
 
 // NewTunnelBridge 构造隧道接入层。
@@ -145,7 +150,15 @@ func (t *TunnelBridge) acquire(id string) *virtualConn {
 		return nil
 	}
 	if c, ok := t.virtual[id]; ok {
-		return c
+		// 死连接的 pump 已退出，不能再复用：同一 clientId 重连时
+		// 响应会静静堆在队列里。换成新连接。
+		if c.dead.Load() {
+			delete(t.virtual, id)
+			c.cancel()
+			c.releaseAll()
+		} else {
+			return c
+		}
 	}
 	if len(t.virtual) >= t.max {
 		// 达到上限时淘汰最久未用的一个，保证状态有界。
@@ -164,7 +177,7 @@ func (t *TunnelBridge) acquire(id string) *virtualConn {
 	c := &virtualConn{
 		id: id, bridge: t, out: make(chan []byte, 64),
 		ctx: ctx, cancel: cancel, lastUse: time.Now(),
-		subs: map[string]struct{}{}, terms: map[string]*terminal.Subscription{},
+		subs: map[string]*runtime.Subscription{}, terms: map[string]*terminal.Subscription{},
 		seen: map[string]bool{},
 	}
 	t.virtual[id] = c
@@ -181,6 +194,7 @@ func (c *virtualConn) touch() {
 // pump 把响应帧经隧道发回对应浏览器。
 func (c *virtualConn) pump() {
 	if c.bridge.sender == nil {
+		c.markDead()
 		return
 	}
 	for {
@@ -194,9 +208,49 @@ func (c *virtualConn) pump() {
 				continue
 			}
 			if err := c.bridge.sender(wrapped); err != nil {
+				// 发送失败说明隧道已断：这条虚拟连接不能再用于回包。
+				// 必须标记死亡并从映射摘除，否则同 clientId 重连会复用它。
+				c.markDead()
 				return
 			}
 		}
+	}
+}
+
+// markDead 标记连接已死并把它从桥的映射里摘除，
+// 同时释放已占用的订阅与终端，避免资源滞留到空闲回收才生效。
+func (c *virtualConn) markDead() {
+	if c.dead.Swap(true) {
+		return
+	}
+	c.bridge.mu.Lock()
+	if cur, ok := c.bridge.virtual[c.id]; ok && cur == c {
+		delete(c.bridge.virtual, c.id)
+	}
+	c.bridge.mu.Unlock()
+	c.cancel()
+	c.releaseAll()
+}
+
+// releaseAll 关闭该虚拟连接持有的全部订阅与终端。
+func (c *virtualConn) releaseAll() {
+	c.bridge.mu.Lock()
+	subs := make([]*runtime.Subscription, 0, len(c.subs))
+	for _, sub := range c.subs {
+		subs = append(subs, sub)
+	}
+	c.subs = map[string]*runtime.Subscription{}
+	terms := make([]*terminal.Subscription, 0, len(c.terms))
+	for _, sub := range c.terms {
+		terms = append(terms, sub)
+	}
+	c.terms = map[string]*terminal.Subscription{}
+	c.bridge.mu.Unlock()
+	for _, sub := range subs {
+		sub.Close()
+	}
+	for _, sub := range terms {
+		sub.Close()
 	}
 }
 
@@ -285,14 +339,15 @@ func (c *virtualConn) subscribe(r protocol.Request) (any, error) {
 			}
 		}
 	}
-	if _, ok := c.subs[r.SessionID]; ok {
-		delete(c.subs, r.SessionID)
-	}
+	// 重复订阅同一会话必须先关掉旧订阅，否则旧 goroutine 仍占用配额。
+	c.dropSubscription(r.SessionID)
 	sub, info, err := w.Subscribe()
 	if err != nil {
 		return nil, err
 	}
-	c.subs[r.SessionID] = struct{}{}
+	c.bridge.mu.Lock()
+	c.subs[r.SessionID] = sub
+	c.bridge.mu.Unlock()
 	c.reply(protocol.Reply(r.RequestID, map[string]any{"subscribed": true, "epoch": info.Epoch, "seq": info.Seq, "replay": true}, nil))
 	go func() {
 		defer sub.Close()
@@ -316,8 +371,22 @@ func (c *virtualConn) unsubscribe(r protocol.Request) (any, error) {
 	if err := protocol.Decode(r.Params, &struct{}{}); err != nil {
 		return nil, err
 	}
-	delete(c.subs, r.SessionID)
+	c.dropSubscription(r.SessionID)
 	return map[string]bool{"subscribed": false}, nil
+}
+
+// dropSubscription 关闭并移除某个会话的订阅。
+// 只从 map 删除不够：底层订阅不关，worker 的订阅配额不会被释放（B14）。
+func (c *virtualConn) dropSubscription(sessionID string) {
+	c.bridge.mu.Lock()
+	sub, ok := c.subs[sessionID]
+	if ok {
+		delete(c.subs, sessionID)
+	}
+	c.bridge.mu.Unlock()
+	if ok {
+		sub.Close()
+	}
 }
 
 // send 实现 connSink。
