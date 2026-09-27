@@ -104,7 +104,7 @@
 | B54 | 高 | Product | HTMX `BridgeClient` 固定连当前站点 `/api/v1/ws`，不实现 relay `/client` 登录、设备选择或路由封装；云端 UI 与本地桥的承诺部署链尚未连通。 | `pi-webui-htmx/src/modules/workbench.ts`；`pi-bridge-go/internal/relay/server.go` |
 | B55 | 中 | Relay | relay 默认状态目录为系统临时目录 `/tmp/pi-relay`；设备注册表在重启/清理临时目录后丢失，长期部署必须显式指定持久 `--state-dir`。 | `cmd/pi-relay/main.go` |
 | B56 | ✅ 已修 | Workspace | **修复：** stderr 限 32 KiB、不回显；取消进程组的真实后代测试通过。桥 SIGKILL 的整树保证仍属 B40/P7。原问题：`gitOutputLimited` 仅限制 stdout，stderr 使用无界 `bytes.Buffer`；同时 `CommandContext` 只回收 Git 直接子进程，仓库配置触发的外部命令后代可能存活。 | `internal/workspace/git.go` |
-| B57 | 高 | Tunnel | tunnel sender 写失败后 `virtualConn.pump` 退出，但连接仍留在 `virtual` 映射；同一 `clientId` 重连复用死连接，后续响应入队却无人发送。定向测试复现。 | `internal/transport/tunnel.go`；`tunnel-pump-probe.log` |
+| B57 | ✅ 已修 | Tunnel | **修复：** pump 发送失败即标记 dead 并从映射摘除，同时释放订阅与终端；`acquire` 遇到死连接会替换。回归验证重连后拿到新连接且能收到响应。 | `internal/transport/tunnel.go`；`tunnel_test.go` |
 | B58 | ✅ 已修 | Storage | **修复：** 打开追加句柄前把日志截回最后一个完整换行。回归模拟崩溃半行后追加并重开，校验每一行均可解析。 | `internal/storage/receipts.go`；`receipts_test.go` |
 | B59 | 中 | Management | `npm:@scope/pkg@version` 的版本后缀未从 npm 包名剥离；已安装版本读取路径错误，registry URL 也把版本约束当包名。锁定版本夹具复现读取为空。 | `internal/management/packages.go`；`pinned-package-probe.log` |
 | B60 | ✅ 已修 | HTTP | **修复：** 解析 qvalue，省略视为 1，未列出且无 `*` 视为不可接受，同名重复取最严格，非法 q 视为禁用。回归覆盖 `*`、`*;q=0`、`br;q=0`、同名重复与畸形 q。原问题：忽略 qvalue，`br;q=0` 仍选 br。 | `internal/presentation/presentation.go`；`compress_test.go` |
