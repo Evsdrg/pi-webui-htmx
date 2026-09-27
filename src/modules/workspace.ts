@@ -117,10 +117,12 @@ export class Workspace {
   }
   private async git(): Promise<void> {
     const cwd = this.cwd;
-    const status = await this.bridge.request<{branch:string;clean:boolean;files:{path:string;status:string}[]}>('git.status', '', { path: cwd });
+    const status = await this.bridge.request<{branch:string;clean:boolean;truncated?:boolean;files:{path:string;status:string}[]}>('git.status', '', { path: cwd });
     if (cwd !== this.cwd) return;
     const list = el('git-status'); list.replaceChildren();
-    const heading = document.createElement('p'); heading.textContent = `${status.branch} · ${status.clean ? '工作区干净' : `${status.files.length} 个变更`}`; list.append(heading);
+    const truncated = status.truncated === true || status.files.length > 500;
+    const label = truncated ? `${Math.min(status.files.length, 500)} 个已列出变更（列表已截断）` : status.clean ? '工作区干净' : `${status.files.length} 个变更`;
+    const heading = document.createElement('p'); heading.textContent = `${status.branch} · ${label}`; list.append(heading);
     for (const file of status.files.slice(0, 500)) { const row = document.createElement('div'); row.className = 'file-item'; row.textContent = `${file.status}  ${file.path}`; list.append(row); }
     await window.htmx.ajax('get', `/ui/diff?path=${encodeURIComponent(cwd)}`, { target: '#git-diff', swap: 'innerHTML' });
   }
