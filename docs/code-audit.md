@@ -44,10 +44,10 @@
 |---|---|---|---|---|
 | B17 | ✅ 已修 | Bridge | 供应商请求使用拒绝重定向的独立 client；两个本地服务器的回归确认目标不接收凭据。并拒绝超限正文、禁止错误正文回显秘密。 | `management/discovery.go`；`discovery_safety_test.go` |
 | B18 | ✅ 已修 | Bridge | **修复：** 统一 runner 清理环境、禁用已知 helper，转换过滤器明确拒绝；五类标记脚本回归通过。这不是任意 Git/恶意本机进程的 OS 沙箱。原问题：Git 查询执行仓库配置中的外部命令：`git status` 触发 `core.fsmonitor`，`git diff` 触发 `diff.external`。两个本地标记脚本探针均复现；Pi Web 的 status 路径也调用普通 `git status`，但它的 diff 明确带 `--no-ext-diff`。 | `workspace/git.go`；`pi-web/lib/git-changes.ts`；`git-probe.log`；`git-diff-probe.log` |
-| B19 | 高 | Relay | `--add-user`/`--add-device` 在一次性 CLI 进程的内存 `Users` 表中添加后即退出；服务进程重建 `Users` 时表为空，故刚发出的用户 token 与设备预共享密钥无法认证。重启反例已复现。 | `cmd/pi-relay/main.go`；`internal/relay/users.go`；`relay-probes.log` |
-| B20 | 高 | Relay | `ClaimTTL` 只作为 `expiresInSeconds` 返回，`Registry.Claim` 不检查配对码年龄；未被使用的配对码过期后仍可领取。 | `internal/relay/registry.go`；`internal/relay/server.go` |
-| B21 | 中 | Relay | 配对尝试表按用户提交的 code 分桶；清理只删已过期项，没有活跃项硬上限。10000 个不同 code 的本地探针使 map 增长到 10000。 | `internal/relay/registry.go`；`relay-probes.log` |
-| B22 | 高 | Relay | `persist()` 解锁后仍序列化 `[]*Device` 指向的共享对象；并发 `SetOnline` 会与 JSON marshal 读写同一字段。`go test -race` 定向压力探针报告数据竞争。 | `internal/relay/registry.go`；`relay-probes.log` |
+| B19 | ✅ 已修 | Relay | **修复：** 用户表落盘到 `state-dir/users.json`（原子替换、只存哈希），`NewUsers` 启动时加载；文件损坏明确报错而非静默清空。 | `internal/relay/users.go`；`cmd/pi-relay/main.go` |
+| B20 | ✅ 已修 | Relay | **修复：** `Claim` 校验 `PairingAt` 与 `ClaimTTL`，过期即作废并拒绝；`PairingAt` 仅存内存，重启后未使用码一律失效。 | `internal/relay/registry.go`；`registry_safety_test.go` |
+| B21 | ✅ 已修 | Relay | **修复：** 尝试表先清理过期项再查活跃硬上限（1024），超出即拒绝，不再依赖滚动驱逐兜底。 | `internal/relay/registry.go` |
+| B22 | ✅ 已修 | Relay | **修复：** `persist` 在持锁状态下完成序列化，解锁后只做文件写入；`-race` 竞争探针已验证。 | `internal/relay/registry.go` |
 | B23 | 中 | Relay | `/client` 可为同一 owner 的任意不同 `clientId` 建立 WS，`s.clients` 没有总连接数/每用户上限；公网 relay 可被认证用户用大量连接耗尽 goroutine 与内存。 | `internal/relay/server.go`；`cmd/pi-relay/main.go` |
 | B24 | 高 | Tunnel | 设备长期 token 放在 `/tunnel?deviceId=...&token=...` 查询串，容易进入反向代理访问日志；桥也接受明文 `ws://` 到非环回 relay，token 会以明文出网。 | `internal/tunnel/client.go`；`internal/relay/server.go`；`cmd/pi-bridge/main.go` |
 | B25 | ✅ 已修 | Bridge | **修复：** porcelain -z 同时读取分支与状态；空仓库、特殊文件名、重命名回归通过。原问题：合法的 unborn/空 Git 仓库没有 `HEAD`；`GitStatus` 先执行 `rev-parse --abbrev-ref HEAD` 并把失败作为整次查询失败。空仓库本地探针复现。 | `internal/workspace/git.go`；`git-probe.log` |
@@ -71,7 +71,7 @@
 | B43 | 中 | Bridge | 全文搜索最多遍历 200 个文件、单文件 16 MiB；超大文件会标截断但不计入 `scanned`，因此实际 I/O 可越过文件数预算；`ctx` 只在文件之间检查，单文件扫描期间取消不生效。并发搜索可放大磁盘与 CPU 消耗。 | `internal/sessions/search.go` |
 | B44 | ✅ 已修 | Build | **修复：** 终端平台差异收敛到 `proc_lin.go`/`proc_oth.go`，非 Linux 显式报错。linux/darwin/windows 三平台 `go build` 与 `go vet` 均通过。 | `internal/terminal/{terminal,proc_lin,proc_oth}.go` |
 | B45 | 中 | Bridge | Pi Web 为 Pi 导出的 HTML 把 `sortChildren/mapNodes/markActive` 改为迭代实现，专门修复 5000+ 深树栈溢出；桥直接透传 Pi `export_html` 文件，没有同等处理，长线性会话导出后浏览器仍可能栈溢出。 | `internal/runtime/session_ops.go`；`pi-web/app/api/sessions/[id]/export/route.ts` |
-| B46 | 中 | Relay | `AddUser` 不限制 owner 字符；用户名包含 `.` 时 `SignCookie` 产出的 `exp.owner.sig` 被 `CheckCookie(strings.Split(...))` 拆成多段，浏览器 cookie 永远认证失败。句点用户名探针已复现。 | `internal/relay/users.go`；`relay-owner-cookie-probe.log` |
+| B46 | ✅ 已修 | Relay | **修复：** Cookie 属主改 base64url 编码，彻底消除 '.' 分隔符冲突；同时限定 owner/deviceId 字符集（拒绝控制字符与空白，允许 '.'）。 | `internal/relay/users.go`；`users_persist_test.go` |
 | T01 | ✅ 已修 | Tests | 假 Pi 改为每个测试进程独占临时目录；sync.Once 仅复用进程内产物，runtime/transport/testutil 在 TestMain 统一清理。并发构建及编译失败清理测试通过，恢复旧固定路径后反例按预期失败。 | `internal/testutil/fakepi.go`；三个包的 `main_test.go`/`TestMain`；P0 |
 | U06 | 中 | UI | 文件列表在 htmx swap **之后**才检查 generation；文本 `files.read` 等待后完全未检查。定向 Vitest 以延迟旧文件响应复现：新文件已展示后又被旧内容覆盖。 | `pi-webui-htmx/src/modules/workspace.ts`；`ui-workspace-file-probe.log` |
 | U07 | 低 | UI | 惰性图片使用 `URL.createObjectURL`，替换/卸载图片时没有 `URL.revokeObjectURL`；长会话多次展开后 blob URL 保留至页面释放。 | `pi-webui-htmx/src/modules/lazy.ts` |

@@ -21,7 +21,7 @@ func newRelayServer(t *testing.T) (*Server, *Registry, *Users) {
 		t.Fatal(err)
 	}
 	t.Cleanup(registry.Close)
-	users, err := NewUsers(testRelaySecret)
+	users, err := NewUsers(testRelaySecret, "")
 	if err != nil {
 		t.Fatal(err)
 	}

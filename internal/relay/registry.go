@@ -19,15 +19,18 @@ import (
 
 // Device 是一台已配对或待配对的本地桥。
 type Device struct {
-	DeviceID    string    `json:"deviceId"`
-	Name        string    `json:"name,omitempty"`
-	Owner       string    `json:"owner,omitempty"`
-	PairingCode string    `json:"-"`
-	ClaimedAt   time.Time `json:"claimedAt,omitempty"`
-	CreatedAt   time.Time `json:"createdAt"`
-	LastSeen    time.Time `json:"lastSeen"`
-	Online      bool      `json:"online"`
-	TokenHash   string    `json:"tokenHash,omitempty"`
+	DeviceID    string `json:"deviceId"`
+	Name        string `json:"name,omitempty"`
+	Owner       string `json:"owner,omitempty"`
+	PairingCode string `json:"-"`
+	// PairingAt 是配对码的签发时间，仅存内存、不落盘：
+	// 进程重启后所有未使用的配对码一律失效，比持久化时间更安全。
+	PairingAt time.Time `json:"-"`
+	ClaimedAt time.Time `json:"claimedAt,omitempty"`
+	CreatedAt time.Time `json:"createdAt"`
+	LastSeen  time.Time `json:"lastSeen"`
+	Online    bool      `json:"online"`
+	TokenHash string    `json:"tokenHash,omitempty"`
 }
 
 // tokenMatches 常量时间比对令牌哈希。
@@ -52,6 +55,11 @@ type Limits struct {
 	PairWindow      time.Duration
 	PersistInterval time.Duration
 }
+
+// maxPairAttempts 是配对尝试表的活跃项硬上限。
+// 按 code 分桶，且 code 由客户端提交：没有硬上限时，
+// 一批各不相同的 code 可以把表撑到任意大小（B21）。
+const maxPairAttempts = 1024
 
 // DefaultLimits 给出默认限额。
 func DefaultLimits() Limits {
@@ -161,10 +169,11 @@ func (r *Registry) persist() error {
 	for _, d := range r.devices {
 		list = append(list, d)
 	}
+	// 必须在锁内序列化：list 里是 *Device 指针，解锁后 SetOnline
+	// 会与 marshal 并发读写同一字段（B22，-race 已复现）。
+	b, err := json.MarshalIndent(list, "", "  ")
 	r.dirty = false
 	r.mu.Unlock()
-
-	b, err := json.MarshalIndent(list, "", "  ")
 	if err != nil {
 		return err
 	}
@@ -224,11 +233,12 @@ func (r *Registry) Register(deviceID, name string) (string, error) {
 		}
 		now := time.Now().UTC()
 		r.devices[deviceID] = &Device{
-			DeviceID: deviceID, Name: name, PairingCode: code, CreatedAt: now, LastSeen: now,
+			DeviceID: deviceID, Name: name, PairingCode: code, PairingAt: now, CreatedAt: now, LastSeen: now,
 		}
 	} else {
 		// 已归属的设备重新登记时保留归属，只重置配对码。
 		existing.PairingCode = code
+		existing.PairingAt = time.Now().UTC()
 		existing.Name = name
 		existing.LastSeen = time.Now().UTC()
 	}
@@ -244,14 +254,17 @@ func (r *Registry) allowAttempt(code string) bool {
 	now := time.Now()
 	a, ok := r.attempts[code]
 	if !ok || now.Sub(a.windowStart) > r.limits.PairWindow {
-		r.attempts[code] = &attemptWindow{count: 1, windowStart: now}
-		if len(r.attempts) > 4096 {
-			for k, v := range r.attempts {
-				if now.Sub(v.windowStart) > r.limits.PairWindow {
-					delete(r.attempts, k)
-				}
+		// 先清理过期项，再看活跃上限。旧实现只在超限后清理，
+		// 于是一批各不相同的 code 可以把表撑到 4096 才滚动驱逐（B21）。
+		for k, v := range r.attempts {
+			if now.Sub(v.windowStart) > r.limits.PairWindow {
+				delete(r.attempts, k)
 			}
 		}
+		if len(r.attempts) >= maxPairAttempts {
+			return false
+		}
+		r.attempts[code] = &attemptWindow{count: 1, windowStart: now}
 		return true
 	}
 	a.count++
@@ -284,6 +297,14 @@ func (r *Registry) Claim(owner, code string) (*Device, string, error) {
 	}
 	if target == nil {
 		return nil, "", protocol.E("not_found", "配对码无效或已使用")
+	}
+	// ClaimTTL 必须在服务端生效，不能只作为 expiresInSeconds 告知客户端：
+	// 过期后仍未使用的配对码必须失效，否则泄露的码可被无限期领取（B20）。
+	if r.limits.ClaimTTL > 0 && time.Since(target.PairingAt) > r.limits.ClaimTTL {
+		target.PairingCode = ""
+		target.PairingAt = time.Time{}
+		r.dirty = true
+		return nil, "", protocol.E("not_found", "配对码已过期")
 	}
 	token, err := randomID("dev_", 24)
 	if err != nil {

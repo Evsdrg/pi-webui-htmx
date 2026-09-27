@@ -41,7 +41,9 @@ func serve() error {
 	if len(secret) < 32 {
 		return errors.New("请设置 PI_RELAY_SECRET，至少 32 个随机字符")
 	}
-	users, err := relay.NewUsers(secret)
+	// 用户表落盘到 state-dir：--add-user/--add-device 是一次性 CLI 进程，
+	// 不持久化的话服务进程重建后刚签发的凭据全部失效（B19）。
+	users, err := relay.NewUsers(secret, filepath.Join(*stateDir, "users.json"))
 	if err != nil {
 		return err
 	}
