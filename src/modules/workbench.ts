@@ -505,11 +505,11 @@ export class Workbench {
   // refreshQueueState 反映 Pi 可读回的排队模式与自动压缩。
   // 自动重试没有读回字段，只在用户本次操作时更新，不清空。
   private refreshQueueState(state: State): void {
-    const steering = document.querySelector<HTMLInputElement>('input[name="queue-kind"][value="steer"]');
+    const steering = document.querySelector<HTMLInputElement>('input[name="queue-kind"][value="steering"]');
     const followUp = document.querySelector<HTMLInputElement>('input[name="queue-kind"][value="followUp"]');
     if (steering && followUp) {
-      const kind = state.steeringMode === 'one-at-a-time' ? 'followUp' : 'steer';
-      (kind === 'steer' ? steering : followUp).checked = true;
+      const kind = state.steeringMode === 'one-at-a-time' ? 'followUp' : 'steering';
+      (kind === 'steering' ? steering : followUp).checked = true;
     }
     const compaction = el<HTMLInputElement>('auto-compaction');
     if (state.autoCompactionEnabled !== undefined) compaction.checked = state.autoCompactionEnabled;
@@ -594,13 +594,15 @@ export class Workbench {
   private saveCurrentDraft(): void { saveDraft(this.draftKey(), el<HTMLTextAreaElement>('prompt').value); }
   private setConnection(online: boolean): void { el('conn-state').textContent = online ? '已连接' : '未连接'; el('conn-state').className = `state state-${online ? 'online' : 'offline'}`; if (online) this.notice(''); this.updateControls(); }
   private setRun(state: RunState): void { this.run = state; el('session-state').textContent = {idle:'就绪',running:'运行中',retrying:'重试中',compacting:'压缩中',waiting_input:'等待确认'}[state]; this.updateControls(); }
-  private updateControls(): void { el<HTMLButtonElement>('send-button').disabled = !this.bridge.connected || this.sending || !el<HTMLTextAreaElement>('prompt').value.trim(); el('abort-button').hidden = this.run === 'idle'; const hint = el('queue-hint'); const busy = this.run !== 'idle'; hint.hidden = !busy; if (busy) hint.textContent = this.queueKind() === 'steer' ? '本轮结束后插入指令' : '排到队列末尾，本轮完成后追加'; el<HTMLSelectElement>('model-select').disabled = busy; el<HTMLSelectElement>('thinking-select').disabled = busy || !this.sessionId; }
+  private updateControls(): void { el<HTMLButtonElement>('send-button').disabled = !this.bridge.connected || this.sending || !el<HTMLTextAreaElement>('prompt').value.trim(); el('abort-button').hidden = this.run === 'idle'; const hint = el('queue-hint'); const busy = this.run !== 'idle'; hint.hidden = !busy; if (busy) hint.textContent = this.queueKind() === 'steering' ? '本轮结束后插入指令' : '排到队列末尾，本轮完成后追加'; el<HTMLSelectElement>('model-select').disabled = busy; el<HTMLSelectElement>('thinking-select').disabled = busy || !this.sessionId; }
   // queueKind 读会话对话框里的 radio；缺省 steer，与 Pi 的默认一致。
-  private queueKind(): 'steer' | 'followUp' { return document.querySelector<HTMLInputElement>('input[name="queue-kind"]:checked')?.value === 'followUp' ? 'followUp' : 'steer'; }
+  // queueKind 读会话对话框里的 radio；缺省 steering，与 Pi 的默认一致。
+  // 取值必须与桥的协议一致：steering/followUp，不是 steer。
+  private queueKind(): 'steering' | 'followUp' { return document.querySelector<HTMLInputElement>('input[name="queue-kind"]:checked')?.value === 'followUp' ? 'followUp' : 'steering'; }
   // sendQueued 在运行中发送：先把模式同步给桥，再带 streamingBehavior 提交。
   // 不先同步的话，用户改了 radio 但桥仍是旧模式，行为与界面显示不一致。
-  private async sendQueued(text: string, kind: 'steer' | 'followUp', images: Attachment[]): Promise<void> {
-    await this.request('session.set_queue_mode', { kind, mode: kind === 'steer' ? 'all' : 'one-at-a-time' });
+  private async sendQueued(text: string, kind: 'steering' | 'followUp', images: Attachment[]): Promise<void> {
+    await this.request('session.set_queue_mode', { kind, mode: kind === 'steering' ? 'all' : 'one-at-a-time' });
     await this.request('session.prompt', { text, streamingBehavior: kind, ...(images.length ? { images: toWire(images) } : {}) });
   }
   private notice(message: string): void { el('connection-notice').textContent = message; el('connection-notice').hidden = !message; }

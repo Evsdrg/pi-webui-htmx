@@ -25,10 +25,10 @@ function mount() {
  document.body.innerHTML = `<form id=auth-form><input id=bridge-token><button>连接</button></form><dialog id=auth-dialog></dialog><div id=auth-error></div>
  <form id=composer><textarea id=prompt></textarea><div id=attachments hidden></div><p id=composer-drop hidden></p><input id=attach-input type=file><button id=send-button></button><button id=abort-button></button><select id=model-select></select><select id=thinking-select></select></form>
  <form id=new-form><input id=cwd-input></form><dialog id=new-dialog></dialog><datalist id=workspace-roots></datalist><input id=session-search>
- <dialog id=session-dialog><input id=session-name><div class=session-action-grid><button data-action=rename>保存名称</button><button data-action=compact>压缩</button><button data-action=clone>克隆</button><button data-action=export>导出</button><button data-action=stop>释放</button><button data-action=delete>删除</button></div>
+ <button class=icon-btn data-action=session-menu aria-label=会话操作>···</button><dialog id=session-dialog><input id=session-name><div class=session-action-grid><button data-action=rename>保存名称</button><button data-action=compact>压缩</button><button data-action=clone>克隆</button><button data-action=export>导出</button><button data-action=stop>释放</button><button data-action=delete>删除</button></div>
  <label class=switch><input type=checkbox id=auto-compaction><span>自动压缩</span></label><label class=switch><input type=checkbox id=auto-retry><span>自动重试</span></label>
  <button data-action=abort-retry>中止重试</button>
- <fieldset class=queue-modes><label class=switch><input type=radio name=queue-kind value=steer checked><span>插入指令</span></label><label class=switch><input type=radio name=queue-kind value=followUp><span>完成后追加</span></label></fieldset></dialog>
+ <fieldset class=queue-modes><label class=switch><input type=radio name=queue-kind value=steering checked><span>插入指令</span></label><label class=switch><input type=radio name=queue-kind value=followUp><span>完成后追加</span></label></fieldset></dialog>
  <div class=queue-hint id=queue-hint hidden></div>
  <dialog id=models-dialog><p id=models-status></p><textarea id=models-editor></textarea><input id=discover-url><input id=discover-api><input id=discover-key><textarea id=discover-headers></textarea><div id=discover-result></div><button data-action=models-edit>编辑</button><button data-action=models-reload>重读</button><button data-action=models-save>保存</button><button data-action=models-discover>发现</button><button data-action=models-test>测试</button></dialog>`;
  for(const id of ['live','conn-state','connection-notice','session-state','session-title','session-cwd','session-list','session-count','turns','older-slot','chat-scroll','welcome','command-menu','ext-status-slot','ext-widgets-before','ext-widgets-after','ext-dialog-slot','usage','toast-root']) {const node=document.createElement('div');node.id=id;document.body.append(node);}
@@ -239,5 +239,35 @@ describe('@ 菜单与 Enter 的按键归属', () => {
     prompt.value = '普通消息';
     prompt.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }));
     await vi.waitFor(() => expect(fake.request).toHaveBeenCalledWith('session.prompt', 's1', { text: '普通消息' }, 30_000));
+  });
+});
+
+it('默认排队模式用协议一致的 steering，不是 steer', async () => {
+  // B03：前端曾经发送 kind=steer，桥只接受 steering/followUp，
+  // 运行中的「插入指令」因此被整体拒绝。这里锁定默认取值。
+  busy = true; emit('agent_start');
+  expect(document.querySelector<HTMLInputElement>('input[name="queue-kind"]:checked')!.value).toBe('steering');
+  (document.getElementById('prompt') as HTMLTextAreaElement).value = '插入一条';
+  document.querySelector<HTMLFormElement>('#composer')!.requestSubmit();
+  await vi.waitFor(() => expect(fake.request).toHaveBeenCalledWith('session.set_queue_mode', 's1', { kind: 'steering', mode: 'all' }, 30_000));
+  // 旧值必须不再出现。
+  for (const call of vi.mocked(fake.request).mock.calls) {
+    expect((call[2] as { kind?: string } | undefined)?.kind).not.toBe('steer');
+  }
+  // 读回状态时必须能按协议值定位到对应 radio；模板值若与协议不一致，
+  // refreshQueueState 会静默失选，用户看到的勾选与实际发送的模式脱节。
+  // 打开会话对话框会触发 refreshState，从而走到 refreshQueueState。
+  fake.request.mockResolvedValueOnce({ sessionId: 's1', isStreaming: true, steeringMode: 'all', followUpMode: 'one-at-a-time' });
+  document.querySelector<HTMLElement>('[data-action="session-menu"]')!.click();
+  await vi.waitFor(() => {
+    const steering = document.querySelector<HTMLInputElement>('input[name="queue-kind"][value="steering"]');
+    expect(steering).not.toBeNull();
+    expect(steering!.checked).toBe(true);
+  });
+  // 反向：Pi 报 one-at-a-time 时必须选中 followUp。
+  fake.request.mockResolvedValueOnce({ sessionId: 's1', isStreaming: true, steeringMode: 'one-at-a-time', followUpMode: 'one-at-a-time' });
+  document.querySelector<HTMLElement>('[data-action="session-menu"]')!.click();
+  await vi.waitFor(() => {
+    expect(document.querySelector<HTMLInputElement>('input[name="queue-kind"][value="followUp"]')!.checked).toBe(true);
   });
 });
