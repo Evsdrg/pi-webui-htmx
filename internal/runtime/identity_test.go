@@ -239,9 +239,21 @@ func TestReplay环在身份变更后失效(t *testing.T) {
 	if _, err := w.Fork(ctx, "e"); err != nil {
 		t.Fatal(err)
 	}
-	// 身份变化后 seq 归零，旧游标大于新序号时不应谎报可补。
-	if items, ok := w.Replay(epoch, 999); !ok || len(items) != 0 {
-		t.Fatalf("身份变更后旧游标应无效: %v %v", items, ok)
+	// 身份变更必须换 epoch：旧 epoch 一律拒绝，让调用方重新同步。
+	// 只把 seq 归零不够——旧 epoch 配旧 seq 仍会被接受，
+	// 客户端会读到新会话的事件却以为还在旧游标上（B65）。
+	if items, ok := w.Replay(epoch, 0); ok {
+		t.Fatalf("身份变更后旧 epoch 应失效: items=%d ok=%v", len(items), ok)
+	}
+	if items, ok := w.Replay(epoch, 999); ok {
+		t.Fatalf("身份变更后旧 epoch 的任何游标都应失效: items=%d", len(items))
+	}
+	fresh := w.Info().Epoch
+	if fresh == epoch {
+		t.Fatal("身份变更后 epoch 未更换")
+	}
+	if _, ok := w.Replay(fresh, 0); !ok {
+		t.Fatal("新 epoch 应可补发")
 	}
 }
 

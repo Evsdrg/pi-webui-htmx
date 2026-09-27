@@ -2,6 +2,8 @@ package runtime
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"path/filepath"
 	"strings"
@@ -182,10 +184,18 @@ func (w *Worker) Clone(ctx context.Context) (string, error) {
 }
 
 // resetReplay 让补发环失效；会话身份变化后旧序号不再有意义。
+// 必须同时更换 epoch：只把 seq 归零的话，旧 epoch 配旧 seq 仍会被
+// Replay 接受，客户端会读到新会话的事件却以为还在旧游标上（B65）。
 func (w *Worker) resetReplay() {
+	epoch := make([]byte, 16)
+	if _, err := rand.Read(epoch); err != nil {
+		// 取不到随机数时也不能沿用旧 epoch：旧游标必须失效。
+		epoch = []byte(time.Now().UTC().Format(time.RFC3339Nano))
+	}
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	w.seq = 0
+	w.epoch = hex.EncodeToString(epoch)
 	w.replay = newReplayRing(w.cfg)
 }
 

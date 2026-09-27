@@ -112,7 +112,7 @@
 | B62 | 中 | Sessions | `trash` 命令存在但执行失败时，`Delete` 回退到 `os.Remove` 永久删除；用户无法恢复。故障脚本探针复现。 | `internal/sessions/delete.go`；`delete-trash-probe.log` |
 | B63 | 高 | Relay | 非环回 `--listen` 配合默认空 `--host` 仍可启动；空 host 会同时跳过 Host/Origin 校验，且 HTTP listener 不强制 TLS，误部署可明文暴露认证令牌与 Cookie。 | `cmd/pi-relay/main.go`；`internal/relay/server.go` |
 | B64 | 高 | Runtime | `SwitchSession` 先令 Pi 切到目标文件，再调用 `Rebind` 检查目标 worker 冲突；若目标会话已活跃，冲突发生时 Pi 已切换，旧键下的 worker 仍可 `Prompt`，可能形成双写。 | `internal/runtime/identity.go`；`internal/runtime/manager.go` |
-| B65 | 高 | Events | `Rebind` 身份变更将 `seq` 归零但不更换 `epoch`；旧 epoch/seq 仍被 Replay 接受。直接 Rebind 的反例复现，现有测试未覆盖活跃 worker 该路径。 | `internal/runtime/identity.go`；`internal/runtime/manager.go`；`rebind-epoch-probe.log` |
+| B65 | ✅ 已修 | Events | **修复：** `resetReplay` 同时更换 epoch；旧 epoch 一律拒绝并强制重新同步，不再用「返回空」假装已同步。new/switch/fork/clone 四条路径都经 `Rebind`，覆盖完整。反例（只归零 seq）验证通过。 | `internal/runtime/identity.go`；`identity_test.go` |
 | B66 | 高 | Runtime/UI | Go 端所有命令统一由 `Manager.Timeout()`（默认 30 秒）取消；前端虽给 `session.compact` 设 120 秒等待，服务器仍在 30 秒结束调用，长压缩被报告为未知结果。 | `internal/transport/server.go`；`internal/runtime/manager.go`；`pi-webui-htmx/src/modules/bridge.ts` |
 | B67 | 高 | Runtime | 超过 `EventBytes` 的 `extension_ui_request` 在登记 pending dialog 之前直接省略；Pi 仍在等回执，桥也未发 cancelled，扩展可永久等待。 | `internal/runtime/manager.go`；`internal/runtime/dialogs.go` |
 | B68 | ✅ 已修 | Runtime/Security | **修复：** Pi/PTY/Git 共用服务环境过滤；真实 spawn/PTY 测试和反向验证通过。保留正常 API、代理及 Pi 环境，不等同同 UID 的 OS 隔离。原问题：Pi 与 PTY 子进程直接继承桥的完整 `os.Environ()`，包括 `PI_BRIDGE_TOKEN`、`PI_BRIDGE_DEVICE_TOKEN`；agent bash、项目扩展或终端命令可读出桥/设备凭据。 | `internal/runtime/manager.go`；`internal/terminal/terminal.go` |
