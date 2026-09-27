@@ -3,6 +3,8 @@ package runtime
 import (
 	"context"
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 )
@@ -268,4 +270,72 @@ func indexOf(s, sub string) int {
 		}
 	}
 	return -1
+}
+
+// Test切换到已占用会话被提前拒绝 覆盖 B64：
+// Rebind 的冲突检查以前发生在 Pi 切换之后，那时 Pi 已经改了写入目标，
+// 旧键下的 worker 仍可 Prompt，形成双写。守卫必须在切换之前就能拒绝。
+func Test切换到已占用会话被提前拒绝(t *testing.T) {
+	m, cwd := newTestManager(t)
+	ctx := context.Background()
+	w, err := m.Start(ctx, "", cwd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	target := w.Info().SessionID
+
+	// 让目标 ID 被另一个 worker 占用（fixture 只会发固定身份，直接占用表项）。
+	other := &Worker{id: target + "-occupant", cfg: m.cfg, done: make(chan struct{})}
+	m.mu.Lock()
+	m.workers[target] = other
+	m.mu.Unlock()
+	defer func() {
+		m.mu.Lock()
+		if m.workers[target] == other {
+			delete(m.workers, target)
+		}
+		m.mu.Unlock()
+	}()
+
+	if err := m.CheckRebindTarget(w, target); err == nil {
+		t.Fatal("切换到已占用会话应被拒绝")
+	}
+	// 拒绝之后 w 的身份不能被动过，占用方也不能被顶掉。
+	if w.Info().SessionID != target {
+		t.Fatal("守卫拒绝后发起方身份被改动")
+	}
+	if got := m.workers[target]; got != other {
+		t.Fatal("守卫拒绝后占用方被替换")
+	}
+	// 对自己当前身份的重复绑定不算冲突。
+	if err := m.CheckRebindTarget(other, target); err != nil {
+		t.Fatalf("同 worker 的当前身份不应冲突: %v", err)
+	}
+}
+
+// Test同worker重复绑定目标不冲突 覆盖反向边界：
+// worker 重绑定到自己当前身份时不能误报冲突。
+func Test同worker重复绑定目标不冲突(t *testing.T) {
+	m, cwd := newTestManager(t)
+	ctx := context.Background()
+	w, err := m.Start(ctx, "", cwd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := m.CheckRebindTarget(w, w.Info().SessionID); err != nil {
+		t.Fatalf("同 worker 的当前身份不应冲突: %v", err)
+	}
+}
+
+// writeTestSession 在管理器的会话目录里写一个最小会话文件，供按 ID 恢复使用。
+func writeTestSession(t *testing.T, m *Manager, cwd, id string) {
+	t.Helper()
+	if err := os.MkdirAll(m.cfg.Store.Dir(), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	body := `{"type":"session","version":3,"id":"` + id + `","timestamp":"2026-01-01T00:00:00.000Z","cwd":"` + cwd + `"}` + "\n" +
+		`{"type":"message","id":"a","parentId":null,"timestamp":"2026-01-01T00:00:01.000Z","message":{"role":"user","content":"hi"}}` + "\n"
+	if err := os.WriteFile(filepath.Join(m.cfg.Store.Dir(), id+".jsonl"), []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
 }

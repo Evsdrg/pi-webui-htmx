@@ -102,6 +102,12 @@ func (w *Worker) SwitchSession(ctx context.Context, sessionPath string) (string,
 	if want := w.store.Path(mustFind(ctx, w.store, id)); filepath.Clean(want) != clean {
 		return "", protocol.E("forbidden", "sessionPath 不在受管会话目录内")
 	}
+	// 必须在让 Pi 切换之前检查目标冲突：Rebind 是在切换之后才调的，
+	// 若目标会话已有活跃 worker，冲突被发现时 Pi 已经切换，
+	// 旧键下的 worker 仍可 Prompt，形成双写（B64）。
+	if err := w.owner.CheckRebindTarget(w, id); err != nil {
+		return "", err
+	}
 	raw, err := w.call(ctx, "switch_session", map[string]any{"sessionPath": clean}, true)
 	if err != nil {
 		return "", err

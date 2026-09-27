@@ -124,6 +124,30 @@ func (m *Manager) Get(id string) (*Worker, error) {
 	return w, nil
 }
 
+// CheckRebindTarget 在身份切换之前检查目标会话是否已被其他 worker 占用。
+// 放在切换前才能避免「Pi 已切换、冲突才被发现」的半套状态（B64）。
+func (m *Manager) CheckRebindTarget(w *Worker, targetID string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if existing := m.workers[targetID]; existing != nil && existing != w {
+		return protocol.E("conflict", "目标会话已有工作进程")
+	}
+	return nil
+}
+
+// StopSession 停止某个会话的工作进程（若在运行），返回是否真的停掉了一个。
+// 删除会话文件前必须调用：否则 Pi 仍持有写入路径，文件被删后它还会继续写。
+func (m *Manager) StopSession(id string) (bool, error) {
+	w := m.workers[id]
+	if w == nil {
+		return false, nil
+	}
+	if err := w.Stop(false); err != nil {
+		return true, err
+	}
+	return true, nil
+}
+
 // List 返回当前受管工作进程状态。
 func (m *Manager) List() []Info {
 	m.mu.Lock()

@@ -45,11 +45,14 @@ func (s *Store) Delete(ctx context.Context, id string) (DeleteResult, error) {
 	trashed := false
 	if _, lookErr := exec.LookPath("trash"); lookErr == nil {
 		cmd := exec.CommandContext(ctx, "trash", path)
-		if err := cmd.Run(); err == nil {
-			trashed = true
+		if runErr := cmd.Run(); runErr != nil {
+			// trash 存在却执行失败时绝不能退回 os.Remove：那会把本可恢复的
+			// 删除变成永久删除，用户没有任何补救机会（B62）。
+			return DeleteResult{}, protocol.E("pi_error", "回收站不可用，已取消删除以避免永久丢失")
 		}
-	}
-	if !trashed {
+		trashed = true
+	} else {
+		// 系统没有 trash：这是明确的无回收站环境，由调用方知情决定。
 		if err := os.Remove(path); err != nil {
 			return DeleteResult{}, protocol.E("pi_error", "删除会话文件失败")
 		}

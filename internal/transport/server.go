@@ -1259,11 +1259,38 @@ func (s *Server) dispatchCommon(ctx context.Context, r protocol.Request, sink co
 	case "sessions.delete":
 		var p struct {
 			SessionID string `json:"sessionId"`
+			Force     bool   `json:"force"`
 		}
 		if err := protocol.Decode(r.Params, &p); err != nil {
 			return nil, err
 		}
-		return s.store.Delete(ctx, p.SessionID)
+		// 删除前先停掉该会话的工作进程：Pi 仍持有写入路径时删文件，
+		// 它会在删除后继续写入，造成幽灵会话与双写（B08）。
+		// force 只影响「是否强制停止忙中的 worker」，不跳过协调本身。
+		stopped, err := s.manager.StopSession(p.SessionID)
+		if err != nil {
+			if !p.Force {
+				return nil, protocol.E("busy", "该会话仍在运行且停止失败，请确认后带 force 重试")
+			}
+			// force 下仍需尽力再停一次，避免明知会双写还继续删。
+			if _, ferr := s.manager.StopSession(p.SessionID); ferr != nil {
+				return nil, ferr
+			}
+		}
+		result, derr := s.store.Delete(ctx, p.SessionID)
+		if derr != nil {
+			return nil, derr
+		}
+		if stopped {
+			// 让前端知道这次删除连带停掉了一个运行中的会话。
+			return map[string]any{
+				"sessionId":     result.SessionID,
+				"trashed":       result.Trashed,
+				"path":          result.Path,
+				"stoppedWorker": true,
+			}, nil
+		}
+		return result, nil
 	case "session.export_html":
 		var p struct {
 			FileName string `json:"fileName"`
