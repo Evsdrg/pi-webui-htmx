@@ -24,7 +24,10 @@ func Read(r *bufio.Reader, limit int) ([]byte, int, error) {
 		part, err := r.ReadSlice('\n')
 		n += len(part)
 		if n > limit {
-			return nil, n, ErrTooLarge
+			// 超限也返回已读到的内容：调用方需要这段头部定位记录身份，
+			// 再把剩余部分丢弃以保持流对齐。
+			out = append(out, part...)
+			return out, n, ErrTooLarge
 		}
 		out = append(out, part...)
 		if err == nil {
@@ -37,5 +40,24 @@ func Read(r *bufio.Reader, limit int) ([]byte, int, error) {
 			return nil, n, ErrIncomplete
 		}
 		return nil, n, err
+	}
+}
+
+// SkipLine 丢弃当前记录的剩余部分，直到并包括下一个 LF。
+// 与 Read 的 ErrTooLarge 分支配合使用：Read 已返回记录头部，
+// 这里只负责把行尾吞掉，保证后续帧不会被半条记录污染。
+func SkipLine(r *bufio.Reader) error {
+	for {
+		_, err := r.ReadSlice('\n')
+		if err == nil {
+			return nil
+		}
+		if errors.Is(err, bufio.ErrBufferFull) {
+			continue
+		}
+		if errors.Is(err, io.EOF) {
+			return ErrIncomplete
+		}
+		return err
 	}
 }

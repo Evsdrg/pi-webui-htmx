@@ -3,6 +3,7 @@ package pi
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -20,6 +21,10 @@ var ErrClosed = errors.New("Pi RPC 连接已关闭")
 
 // ErrLimit 表示在途命令数量达到上限。
 var ErrLimit = errors.New("Pi RPC 在途命令数量已达上限")
+
+// ErrFrameTooLarge 表示 Pi 的回复单帧超过上限。
+// 这是单条命令的失败，不是连接故障：连接保持可用，后续命令不受影响。
+var ErrFrameTooLarge = errors.New("Pi 回复超过单帧上限")
 
 // UnknownOutcome 表示命令可能已被 Pi 收到，但结果未知，调用方不得自动重试。
 type UnknownOutcome struct{ Cause error }
@@ -96,6 +101,57 @@ func (c *Client) fail(err error) {
 }
 
 // Call 发送一条命令并等待响应。ctx 只约束等待时长，不会取消浏览器任务。
+// frameID 从帧头部提取 id，用于把超限错误回报给具体等待方。
+// 超限时拿到的头部是被截断的 JSON，不能直接用 Unmarshal；
+// 只在开头一段里扫描 "id" 键并取出随后的字符串值。
+func frameID(head []byte) string {
+	const window = 512
+	if len(head) > window {
+		head = head[:window]
+	}
+	key := []byte(`"id"`)
+	at := bytes.Index(head, key)
+	if at < 0 {
+		return ""
+	}
+	rest := head[at+len(key):]
+	colon := bytes.IndexByte(rest, ':')
+	if colon < 0 {
+		return ""
+	}
+	rest = rest[colon+1:]
+	quote := bytes.IndexByte(rest, '"')
+	if quote < 0 {
+		return ""
+	}
+	rest = rest[quote+1:]
+	end := bytes.IndexByte(rest, '"')
+	if end < 0 {
+		return ""
+	}
+	id := string(rest[:end])
+	// id 只含安全字符，避免把截断处的乱码当成标识。
+	for _, ch := range id {
+		if !(ch >= 'a' && ch <= 'z' || ch >= 'A' && ch <= 'Z' || ch >= '0' && ch <= '9' || ch == '-' || ch == '_') {
+			return ""
+		}
+	}
+	return id
+}
+
+// rejectPending 给某个等待中的调用方回报错误，不影响连接本身。
+func (c *Client) rejectPending(id string, cause error) {
+	c.mu.Lock()
+	ch, ok := c.pending[id]
+	if ok {
+		delete(c.pending, id)
+	}
+	c.mu.Unlock()
+	if ok {
+		ch <- result{err: &RPCError{Message: cause.Error()}}
+	}
+}
+
 func (c *Client) Call(ctx context.Context, typ string, fields map[string]any) (json.RawMessage, error) {
 	id := fmt.Sprintf("rpc-%d", c.next.Add(1))
 	cmd := map[string]any{"type": typ, "id": id}
@@ -265,6 +321,20 @@ func (c *Client) read() {
 	r := bufio.NewReader(c.out)
 	for {
 		b, _, err := jsonl.Read(r, c.maxFrame)
+		if errors.Is(err, jsonl.ErrTooLarge) {
+			// 超限帧不能杀死与 Pi 的连接：那会让同一个 worker 上后续所有
+			// 命令都变成 worker_exited（B06）。用已读到的头部定位调用方，
+			// 吞掉行尾保持流对齐，只让这一条命令失败。
+			id := frameID(b)
+			if serr := jsonl.SkipLine(r); serr != nil && !errors.Is(serr, jsonl.ErrIncomplete) {
+				c.fail(serr)
+				return
+			}
+			if id != "" {
+				c.rejectPending(id, ErrFrameTooLarge)
+			}
+			continue
+		}
 		if err != nil {
 			c.fail(err)
 			return

@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -1132,4 +1133,96 @@ func replyCode(m map[string]any) string {
 	errObj, _ := m["error"].(map[string]any)
 	code, _ := errObj["code"].(string)
 	return code
+}
+
+// TestB07大文件读取不断线 覆盖 B07：
+// 桥接受 600 KiB 文件读取，但 JSON 响应超过 WS 帧上限后旧实现直接取消连接，
+// 常规文件预览会让整个会话断线。这里验证读取与连接都保持可用。
+func TestB07大文件读取不断线(t *testing.T) {
+	// newTestServer 的工作区根就是它自己那个 cwd，必须用同一个。
+	s, _, cwd := newTestServer(t)
+	big := strings.Repeat("a", 600<<10)
+	if err := os.WriteFile(filepath.Join(cwd, "big.txt"), []byte(big), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewUnstartedServer(s)
+	s.host = srv.Listener.Addr().String()
+	srv.Start()
+	defer srv.Close()
+	url := "ws" + strings.TrimPrefix(srv.URL, "http") + "/api/v1/ws"
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	header := http.Header{}
+	header.Set("Authorization", "Bearer "+testToken)
+	conn, _, err := websocket.Dial(ctx, url, &websocket.DialOptions{HTTPHeader: header})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.CloseNow()
+	// 客户端默认 32 KiB 读限，这里要收的是被桥截断后的整段文本。
+	conn.SetReadLimit(1 << 20)
+	send := func(id, method string, params map[string]any) map[string]any {
+		t.Helper()
+		body, _ := json.Marshal(map[string]any{"version": 1, "kind": "command", "requestId": id, "method": method, "params": params})
+		if err := conn.Write(ctx, websocket.MessageText, body); err != nil {
+			t.Fatalf("发送失败: %v", err)
+		}
+		_, raw, err := conn.Read(ctx)
+		if err != nil {
+			t.Fatalf("读取响应失败（连接可能已被取消）: %v", err)
+		}
+		var m map[string]any
+		_ = json.Unmarshal(raw, &m)
+		return m
+	}
+	m := send("r1", "files.read", map[string]any{"path": filepath.Join(cwd, "big.txt")})
+	if m["ok"] != true {
+		t.Fatalf("大文件读取应成功: %v", m)
+	}
+	// 必须显式标记截断：调用方需要知道这不是完整内容。
+	data, _ := m["data"].(map[string]any)
+	if data["truncated"] != true {
+		t.Fatalf("超出 WS 预算时应标记 truncated: %v", data)
+	}
+	// 连接必须仍可用。
+	if m := send("r2", "worker.list", map[string]any{}); m["ok"] != true {
+		t.Fatalf("大文件读取后连接不可用: %v", m)
+	}
+}
+
+// TestHTTP文件文本端点返回完整内容 覆盖 B07 的另一半：
+// WS 只给截断预览，完整内容必须能经 HTTP 取到，否则大文件永远看不全。
+func TestHTTP文件文本端点返回完整内容(t *testing.T) {
+	s, _, cwd := newTestServer(t)
+	content := strings.Repeat("b", 600<<10)
+	if err := os.WriteFile(filepath.Join(cwd, "full.txt"), []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewUnstartedServer(s)
+	s.host = srv.Listener.Addr().String()
+	srv.Start()
+	defer srv.Close()
+	req := httptest.NewRequest(http.MethodGet, "/ui/file-text?path="+url.QueryEscape(filepath.Join(cwd, "full.txt")), nil)
+	req.Host = s.host
+	req.Header.Set("Authorization", "Bearer "+testToken)
+	rec := httptest.NewRecorder()
+	s.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("状态码 %d: %s", rec.Code, rec.Body.String())
+	}
+	if got := rec.Header().Get("X-Truncated"); got != "" {
+		t.Fatalf("未超预算不应标记截断: %q", got)
+	}
+	if rec.Body.Len() != len(content) {
+		t.Fatalf("HTTP 端点应返回完整内容: %d != %d", rec.Body.Len(), len(content))
+	}
+	// 不支持的路径仍要被拒绝，不能借这个端点绕过沙箱。
+	bad := httptest.NewRequest(http.MethodGet, "/ui/file-text?path="+url.QueryEscape("/etc/passwd"), nil)
+	bad.Host = s.host
+	bad.Header.Set("Authorization", "Bearer "+testToken)
+	rec2 := httptest.NewRecorder()
+	s.ServeHTTP(rec2, bad)
+	if rec2.Code == http.StatusOK {
+		t.Fatal("越界路径不应通过 HTTP 端点读取")
+	}
 }

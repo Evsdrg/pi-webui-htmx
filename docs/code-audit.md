@@ -19,8 +19,8 @@
 | B03 | ✅ 已修 | Bridge/UI | **修复：** 模板 radio 值、`queueKind()` 与 `refreshQueueState` 选择器统一为协议值 `steering`/`followUp`；桥对旧值 `steer` 给出可操作提示。回归同时锁定 wire 值与回读定位，两个反例均稳定失败。 | `pi-webui-htmx/src/{templates/shell.html,modules/workbench.ts}`；`internal/runtime/session_ops.go` |
 | B04 | ✅ 已修 | Bridge | **修复：** 桥级 claim 注册表 + 命令指纹，本地 WS 与隧道虚拟连接共用同一 `admit`。64 并发压测验证只有一个放行；在途登记绝不被淘汰。原问题：`seen` 只在单连接内，两连接可同时执行同一 requestId。 | `internal/transport/claims.go`；`methods_test.go` |
 | B05 | ✅ 已修 | Bridge | **修复：** `SubscribeWithReplay` 在单次持锁内完成「取快照 + 注册订阅」，并把 WS 与隧道两条入口的订阅逻辑收敛成一个共用实现。回归断言「快照末序号 == 注册序号」，反例（拆成两次加锁）5/5 稳定失败。 | `internal/runtime/manager.go`；`internal/transport/server.go`；`manager_test.go` |
-| B06 | 高 | Bridge | 大 `get_tree` 的端到端请求后，后续状态返回 `worker_exited`。源码确认桥默认 `MaxFrame=8 MiB`，`Client.read()` 在超限时 fail 并关闭 stdin/stdout；原约 9 MiB 探针只能证明此链路失效，不能归因成 Pi 自身约 9 MiB 限制。 | `internal/runtime/manager.go:Defaults`；`internal/pi/client.go:read`；`internal/runtime/session_ops.go` |
-| B07 | 高 | Bridge/UI | 桥接受 600 KiB 文件读取，但 JSON 响应超过 WS 帧上限并取消连接；常规文件预览会断线。 | `pi-bridge-go/internal/transport/server.go` |
+| B06 | ✅ 已修 | Bridge | **修复：** 超限帧不再杀死与 Pi 的连接——用已读头部定位调用方、吞掉行尾保持流对齐，只让那一条命令失败并返回明确错误。回归用回环 fake 验证第二条命令仍成功；反例（超限即 fail）稳定失败。原 9 MiB 探针的归因已按源码纠正为桥自身 8 MiB 帧上限。 | `internal/pi/client.go`；`internal/jsonl/reader.go`；`client_test.go` |
+| B07 | ✅ 已修 | Bridge/UI | **修复：** 大内容改走 HTTP `/ui/file-text`（不依赖 UI 包、支持压缩）；WS 版 `files.read` 加 448 KiB 安全预算，超限截断并标记 `truncated`，不再把超限帧交给连接层。前端优先 HTTP、失败才退回 WS 预览。 | `internal/transport/server.go`；`pi-webui-htmx/src/modules/workspace.ts` |
 | B08 | ✅ 已修 | Bridge | **修复：** 删除前先 `StopSession` 停掉该会话 worker，失败时非 force 明确拒绝、force 下仍尽力再停；结果带 `stoppedWorker`。原问题：worker 忙时也能删文件，Pi writer 仍存活。 | `internal/runtime/manager.go`；`internal/transport/server.go` |
 | B09 | 中 | Bridge | `SwitchSession` 从 basename 直接解析 ID，不能识别 Pi 的 `timestamp_ID.jsonl` 标准命名。 | `pi-bridge-go/internal/runtime/identity.go` |
 | B10 | 中 | Bridge | fork/clone 重绑定后停止的 Pi 进程仍可留在 manager 注册表。 | `pi-bridge-go/internal/runtime/manager.go`；`internal/runtime/identity.go` |

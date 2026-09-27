@@ -60,6 +60,11 @@ var SupportedMethods = []string{
 	"git.status", "git.diff",
 }
 
+// wsTextBudget 是 WS 响应里文本内容的安全预算。
+// 连接层单帧上限是 512 KiB，这里留出 JSON 封套与转义余量；
+// 超出即截断并标记 truncated，绝不把超限帧交给连接层。
+const wsTextBudget = 448 << 10
+
 // Server 是 HTTP 与 WebSocket 入口，只做接入、鉴权与限额。
 type Server struct {
 	manager      *run.Manager
@@ -219,6 +224,17 @@ func (s *Server) handleUiResponse(w http.ResponseWriter, r *http.Request) {
 //   - 流式对话不走这里，走 WS（见 wsHandler）
 func (s *Server) serveUI(w http.ResponseWriter, r *http.Request) bool {
 	encoding := presentation.PickEncoding(r.Header.Get("Accept-Encoding"))
+	// 文件全文是桥能力，不依赖 UI 包：大内容走 HTTP，
+	// WS 只留控制帧与截断预览（B07）。
+	if r.URL.Path == "/ui/file-text" {
+		text, truncated, _, ferr := s.files.Read(r.URL.Query().Get("path"))
+		if ferr != nil {
+			writeError(w, encoding, 400, ferr)
+			return true
+		}
+		writeText(w, encoding, text, truncated)
+		return true
+	}
 	if s.ui == nil {
 		// 未配置 UI 包时 UI 路由整体不存在，回 404 让调用方继续。
 		if r.URL.Path == "/" || strings.HasPrefix(r.URL.Path, "/assets/") || strings.HasPrefix(r.URL.Path, "/ui/") {
@@ -707,6 +723,22 @@ func writeHTML(w http.ResponseWriter, encoding, html string) {
 	// 这里若仍然标 Content-Encoding，客户端会按该编码解压明文并失败。
 	// 浏览器表现为 fetch 直接 reject（"Failed to fetch"），任何小于 1 KB
 	// 的 HTML 片段——历史分页、扩展对话框、包清单——全都换不进去。
+	if presentation.ShouldCompress(body, encoding) {
+		w.Header().Set("Content-Encoding", encoding)
+	}
+	w.WriteHeader(200)
+	_, _ = presentation.Compress(w, body, encoding)
+}
+
+// writeText 输出纯文本文件内容。截断标记放在响应头里，
+// 让前端能区分「文件就这么长」和「桥做了预算截断」。
+func writeText(w http.ResponseWriter, encoding, text string, truncated bool) {
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.Header().Set("Vary", "Accept-Encoding")
+	if truncated {
+		w.Header().Set("X-Truncated", "1")
+	}
+	body := []byte(text)
 	if presentation.ShouldCompress(body, encoding) {
 		w.Header().Set("Content-Encoding", encoding)
 	}
@@ -1563,6 +1595,13 @@ func (s *Server) dispatchCommon(ctx context.Context, r protocol.Request, sink co
 		text, truncated, size, err := s.files.Read(p.Path)
 		if err != nil {
 			return nil, err
+		}
+		// WS 单帧有上限：超预算时必须在这里截断并告知，
+		// 而不是把超限帧发给连接层——那会直接断开整条连接（B07）。
+		// 需要完整内容的调用方应改用 HTTP 的 /ui/file-text。
+		if len(text) > wsTextBudget {
+			text = text[:wsTextBudget]
+			truncated = true
 		}
 		return map[string]any{"text": text, "truncated": truncated, "size": size}, nil
 	case "files.image":

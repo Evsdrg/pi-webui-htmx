@@ -1,6 +1,7 @@
 package pi
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
@@ -411,6 +412,67 @@ func Test控制帧队列独立于命令队列(t *testing.T) {
 	select {
 	case <-c.Done():
 		t.Fatal("队列满不得关闭连接")
+	default:
+	}
+}
+
+// Test超限帧不杀死连接 覆盖 B06：
+// Pi 回复超过 maxFrame 时，旧实现直接 fail 并关闭 stdin/stdout，
+// 同一个 worker 上后续所有命令都变成 worker_exited。
+// 这里验证：超限只让那一条命令失败，连接与后续命令不受影响。
+func Test超限帧不杀死连接(t *testing.T) {
+	big := strings.Repeat("x", 4096)
+	inR, inW := io.Pipe()
+	outR, outW := io.Pipe()
+	c := New(inW, outR, 1024, nil)
+	c.Start()
+	defer c.Close()
+
+	// 回环 fake：读到一条命令，按 id 回一条响应。第一条超限，第二条正常。
+	go func() {
+		r := bufio.NewReader(inR)
+		for {
+			line, err := r.ReadString('\n')
+			if err != nil {
+				return
+			}
+			var cmd struct {
+				ID string `json:"id"`
+			}
+			if json.Unmarshal([]byte(line), &cmd) != nil {
+				continue
+			}
+			body := `{"type":"response","id":"` + cmd.ID + `","success":true,"data":{"ok":true}}`
+			if cmd.ID == "rpc-1" {
+				body = `{"type":"response","id":"rpc-1","success":true,"data":{"blob":"` + big + `"}}`
+			}
+			if _, err := io.WriteString(outW, body+"\n"); err != nil {
+				return
+			}
+		}
+	}()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	// 第一条：超限，必须明确失败。
+	_, err := c.Call(ctx, "get_state", map[string]any{})
+	if err == nil {
+		t.Fatal("超限帧应让该命令失败")
+	}
+	if strings.Contains(err.Error(), "未知") {
+		t.Fatalf("超限应给出明确错误而不是 unknown: %v", err)
+	}
+	// 连接必须还活着，第二条命令应正常返回。
+	data, err := c.Call(ctx, "get_state", map[string]any{})
+	if err != nil {
+		t.Fatalf("超限帧之后的命令应成功: %v", err)
+	}
+	if !strings.Contains(string(data), "ok") {
+		t.Fatalf("第二条响应内容异常: %s", data)
+	}
+	select {
+	case <-c.Done():
+		t.Fatal("超限帧把连接关掉了")
 	default:
 	}
 }
