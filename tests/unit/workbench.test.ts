@@ -17,13 +17,13 @@ let workbench: Workbench;
 let pending: string[];
 let busy: boolean;
 let sequence: number;
-const methods = ['session.start','session.prompt','session.subscribe','worker.list','session.state','session.thinking_levels','session.pending_dialogs','session.ui_response','session.stats','session.set_queue_mode','session.set_auto_compaction','session.set_auto_retry','session.abort_retry','session.export_html','config.models.raw','config.models.write','config.models.discover','config.models.test'];
+const methods = ['session.start','session.prompt','session.subscribe','session.set_model','worker.list','session.state','session.thinking_levels','session.pending_dialogs','session.ui_response','session.stats','session.set_queue_mode','session.set_auto_compaction','session.set_auto_retry','session.abort_retry','session.export_html','config.models.raw','config.models.write','config.models.discover','config.models.test'];
 function emit(type: string, extra: Record<string, unknown> = {}) {
  fake.instance!.dispatchEvent(new CustomEvent('message', { detail: { version:1,kind:'event',event:'pi.event',sessionId:'s1',epoch:'test',seq:++sequence,data:{type,...extra} } }));
 }
 function mount() {
  document.body.innerHTML = `<form id=auth-form><input id=bridge-token><button>连接</button></form><dialog id=auth-dialog></dialog><div id=auth-error></div>
- <form id=composer><textarea id=prompt></textarea><div id=attachments hidden></div><p id=composer-drop hidden></p><input id=attach-input type=file><button id=send-button></button><button id=abort-button></button><select id=model-select></select><select id=thinking-select></select></form>
+ <form id=composer><textarea id=prompt></textarea><div id=attachments hidden></div><p id=composer-drop hidden></p><input id=attach-input type=file><button id=send-button></button><button id=abort-button></button><select id=model-select><option value="">Pi 默认模型</option></select><select id=thinking-select></select></form>
  <form id=new-form><input id=cwd-input></form><dialog id=new-dialog></dialog><datalist id=workspace-roots></datalist><input id=session-search>
  <button class=icon-btn data-action=session-menu aria-label=会话操作>···</button><dialog id=session-dialog><input id=session-name><div class=session-action-grid><button data-action=rename>保存名称</button><button data-action=compact>压缩</button><button data-action=clone>克隆</button><button data-action=export>导出</button><button data-action=stop>释放</button><button data-action=delete>删除</button></div>
  <label class=switch><input type=checkbox id=auto-compaction><span>自动压缩</span></label><label class=switch><input type=checkbox id=auto-retry><span>自动重试</span></label>
@@ -272,6 +272,79 @@ it('默认排队模式用协议一致的 steering，不是 steer', async () => {
   });
 });
 
+describe('历史模型与当前可用模型', () => {
+  const missingModel = { provider: 'unknown', id: 'unknown', name: 'unknown' };
+
+  it('离线历史只显示所选分支的历史模型，不启动 worker', () => {
+    const turns = document.getElementById('turns')!;
+    turns.innerHTML = '<span hidden data-history-model-provider="CPA-Responses" data-history-model-id="deepseek-flash"></span>';
+    fake.request.mockClear();
+    document.dispatchEvent(new CustomEvent('htmx:afterSwap', { detail: {
+      target: turns, xhr: { responseURL: `${location.origin}/ui/sessions/s1/history` },
+    } }));
+    const selected = (document.getElementById('model-select') as HTMLSelectElement).selectedOptions[0];
+    expect(selected.textContent).toContain('deepseek-flash');
+    expect(selected.textContent).toContain('历史');
+    expect(selected.dataset.provider).toBeUndefined();
+    expect(fake.request.mock.calls.some((c) => c[0] === 'session.start')).toBe(false);
+  });
+
+  it('Pi 无法恢复模型时不呈现 unknown 选项且不允许误发', async () => {
+    fake.request.mockImplementation(async (method: string) => {
+      if (method === 'worker.list') return [{ sessionId: 's1', cwd: '/fixture', busy: false }];
+      if (method === 'session.state') return { sessionId: 's1', isStreaming: false, isCompacting: false, model: missingModel };
+      if (method === 'session.thinking_levels') return ['off'];
+      if (method === 'session.pending_dialogs') return { ids: [] };
+      return {};
+    });
+    await workbench.reconcile();
+    const selected = (document.getElementById('model-select') as HTMLSelectElement).selectedOptions[0];
+    expect(selected.textContent).toContain('不可用');
+    expect(selected.textContent).not.toContain('unknown');
+    expect(selected.dataset.provider).toBeUndefined();
+    (document.getElementById('prompt') as HTMLTextAreaElement).value = '不会投到未知模型';
+    document.getElementById('prompt')!.dispatchEvent(new Event('input'));
+    expect((document.getElementById('send-button') as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it('Pi 无法恢复模型时保留草稿并拒绝直接提交', async () => {
+    fake.request.mockImplementation(async (method: string) => {
+      if (method === 'session.start') return { sessionId: 's1', cwd: '/fixture' };
+      if (method === 'session.state') return { sessionId: 's1', model: { provider: 'unknown', id: 'unknown', name: 'unknown' } };
+      if (method === 'session.thinking_levels') return ['off'];
+      return {};
+    });
+    const input = document.getElementById('prompt') as HTMLTextAreaElement;
+    input.value = '未发出的草稿';
+    document.querySelector<HTMLFormElement>('#composer')!.requestSubmit();
+    await vi.waitFor(() => expect(document.getElementById('connection-notice')?.textContent).toContain('没有可用模型'));
+    expect(fake.request.mock.calls.some((c) => c[0] === 'session.prompt')).toBe(false);
+    expect(input.value).toBe('未发出的草稿');
+  });
+
+  it('启动期间的 unknown 状态不能覆盖发送前选定的模型', async () => {
+    fake.request.mockImplementation(async (method: string) => {
+      if (method === 'session.start') return { sessionId: 's1', cwd: '/fixture' };
+      if (method === 'session.state') return { sessionId: 's1', model: missingModel };
+      if (method === 'session.set_model') return { provider: 'CPA-Responses', id: 'deepseek-flash', name: 'DeepSeek Flash' };
+      if (method === 'session.thinking_levels') return ['off'];
+      if (method === 'session.pending_dialogs') return { ids: [] };
+      return {};
+    });
+    const select = document.getElementById('model-select') as HTMLSelectElement;
+    const option = new Option('DeepSeek Flash · CPA-Responses', 'CPA-Responses/deepseek-flash');
+    option.dataset.provider = 'CPA-Responses'; option.dataset.modelId = 'deepseek-flash'; select.add(option);
+    select.value = option.value;
+    (document.getElementById('prompt') as HTMLTextAreaElement).value = '用我选的模型';
+    document.querySelector<HTMLFormElement>('#composer')!.requestSubmit();
+    await vi.waitFor(() => expect(fake.request.mock.calls.some((c) => c[0] === 'session.prompt')).toBe(true));
+    expect(fake.request).toHaveBeenCalledWith('session.set_model', 's1', { provider: 'CPA-Responses', modelId: 'deepseek-flash' }, 30_000);
+    expect(select.selectedOptions[0].textContent).not.toContain('unknown');
+    const order = fake.request.mock.calls.map((c) => c[0]);
+    expect(order.lastIndexOf('session.set_model')).toBeLessThan(order.lastIndexOf('session.prompt'));
+  });
+});
+
 describe('等待期间切换会话的归属', () => {
   // U03/U13：发送与 command 以前在 await 之后读 this.sessionId，
   // 等待期间切会话会把操作投到新会话上。
@@ -303,6 +376,7 @@ describe('等待期间切换会话的归属', () => {
     const gate = new Promise<void>((resolve) => { release = resolve; });
     fake.request.mockImplementation(async (method: string) => {
       if (method === 'session.state') await gate;
+      if (method === 'session.thinking_levels') return ['off', 'high'];
       if (method === 'session.start') return { sessionId: 's1', cwd: '/fixture' };
       return {};
     });

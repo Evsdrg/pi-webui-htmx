@@ -104,6 +104,7 @@ history、branch、fork_messages、gotoLeaf、扩展对话、文件列表/预览
 | follow-up 投递模式 | all 或 one-at-a-time，kind=followUp |
 | 自动压缩 | Pi get_state 的已知字段 |
 | 自动重试 | 无可靠 Pi 读回；unknown 或当前 worker 本地确认值 |
+| 模型选择 | 历史页的 `historicalModel` 仅标记磁盘分支上的历史选择；当前模型以 worker 的 `session.state.model` 为准，`null` 或 `unknown/unknown` 不可作为发送目标。发送前显式选定的模型在启动 worker 后仍必须被应用；失败保留草稿。 |
 
 destination 与 mode 不能互相推导；不因发送一条消息就隐式覆盖队列设置。自动重试不跨会话复用一个 checkbox，不把未勾选当“Pi 确认关闭”。状态区区分连接在线、命令已受理、agent 运行、对话等待与未知结果。
 

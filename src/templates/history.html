@@ -4,6 +4,7 @@
  hx-get="/ui/sessions/{{.SessionID}}/history?before={{.OldestEntryID}}&amp;leafId={{.LeafID}}"
  hx-target="#turns" hx-swap="afterbegin" hx-sync="this:drop" hx-disabled-elt="this">↑ 加载更早的消息</button></div>{{end}}
 </div>
+<span hidden data-history-model-provider="{{if .HistoricalModel}}{{.HistoricalModel.Provider}}{{end}}" data-history-model-id="{{if .HistoricalModel}}{{.HistoricalModel.ID}}{{end}}"></span>
 {{/* 用显式变量而不是 $：$ 在 Go 模板里始终指向最外层数据（HistoryData），
      range 内层取不到 Turn 的字段，会直接渲染失败。 */}}
 {{range $turn := .Turns}}

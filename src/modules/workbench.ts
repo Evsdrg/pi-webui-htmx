@@ -9,7 +9,12 @@ import { SessionScope } from './scope';
 import type { Scope } from './scope';
 
 const DIALOGS = new Set(['select','confirm','input','editor']);
-interface State { sessionId: string; sessionName?: string; isStreaming: boolean; isCompacting: boolean; thinkingLevel?: string; model?: { id: string; provider: string; name: string }; pendingMessageCount?: number; steeringMode?: string; followUpMode?: string; autoCompactionEnabled?: boolean }
+interface State { sessionId: string; sessionName?: string; isStreaming: boolean; isCompacting: boolean; thinkingLevel?: string; model?: { id: string; provider: string; name: string } | null; pendingMessageCount?: number; steeringMode?: string; followUpMode?: string; autoCompactionEnabled?: boolean }
+type ModelChoice = { provider: string; id: string; name: string };
+
+function knownModel(model: State['model']): model is ModelChoice {
+  return !!model?.provider && !!model.id && model.provider.toLowerCase() !== 'unknown' && model.id.toLowerCase() !== 'unknown';
+}
 
 export class Workbench {
   readonly bridge = new BridgeClient(`${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}/api/v1/ws`);
@@ -55,7 +60,10 @@ export class Workbench {
   private models: import('./models').ModelsEditor | undefined;
   private branch: import('./branch').BranchNavigator | undefined;
   private mention: import('./mention').FileCompleter | undefined;
-  private currentModel: { provider: string; id: string; name: string } | undefined;
+  private currentModel: ModelChoice | undefined;
+  private historicalModel: { provider: string; id: string } | undefined;
+  private modelIntent: { provider: string; id: string } | undefined;
+  private modelUnavailable = false;
 
   constructor(private readonly bottom: () => void) {}
   start(): void {
@@ -136,12 +144,22 @@ export class Workbench {
       if (detail.target?.id === 'ext-dialog-slot' && response.searchParams.get('sessionId') !== this.sessionId) detail.shouldSwap = false;
     }, { signal });
     document.addEventListener('htmx:afterSwap', (event) => {
-      const target = (event as CustomEvent).detail?.target as HTMLElement | undefined;
+      const detail = (event as CustomEvent).detail as { target?: HTMLElement; xhr?: XMLHttpRequest };
+      const target = detail?.target;
       if (target?.id === 'session-list') this.markSelected();
       if (target?.id === 'ext-dialog-slot') this.openExtensionDialog();
-      // 模型片段是异步到达的，可能晚于 reconcile 动态补出的当前模型选项；
-      // 换入后必须重新应用，否则下拉会回落到「默认模型」。
-      if (target?.id === 'model-select') { const model = this.currentModel; if (model) this.selectModel(model.provider, model.id, model.name); }
+      if (target?.id === 'turns') {
+        const url = detail.xhr?.responseURL ? new URL(detail.xhr.responseURL) : undefined;
+        if (url && (url.pathname !== `/ui/sessions/${encodeURIComponent(this.sessionId)}/history` || url.searchParams.has('before'))) return;
+        const marker = target.querySelector<HTMLElement>('[data-history-model-provider]');
+        if (marker) {
+          const provider = marker.dataset.historyModelProvider ?? '';
+          const id = marker.dataset.historyModelId ?? '';
+          this.historicalModel = provider && id ? { provider, id } : undefined;
+          this.renderModel();
+        }
+      }
+      if (target?.id === 'model-select') this.renderModel();
     }, { signal });
     document.addEventListener('htmx:responseError', (event) => {
       const xhr = (event as CustomEvent).detail?.xhr as XMLHttpRequest | undefined;
@@ -227,7 +245,7 @@ export class Workbench {
     try { state = await this.request<State>('session.state'); } catch { return; }
     if (!scope.alive()) return;
     if (state.sessionName) el('session-title').textContent = state.sessionName;
-    if (state.model) { this.currentModel = { provider: state.model.provider, id: state.model.id, name: state.model.name }; this.selectModel(state.model.provider, state.model.id, state.model.name); }
+    this.applyStateModel(state);
     await this.refreshThinking(state.thinkingLevel);
     this.refreshQueueState(state);
   }
@@ -248,7 +266,10 @@ export class Workbench {
     const workers = await this.request<WorkerInfo[]>('worker.list', undefined, '');
     if (!scope.alive()) return;
     const worker = workers.find((w) => w.sessionId === this.sessionId);
-    if (!worker) { this.setRun('idle'); return; }
+    if (!worker) {
+      this.currentModel = undefined; this.modelUnavailable = false; this.renderModel();
+      this.setRun('idle'); return;
+    }
     this.cwd = worker.cwd; el('session-cwd').textContent = this.cwd;
     await this.subscribe();
     const stateSeq = this.cursor.seq;
@@ -258,7 +279,7 @@ export class Workbench {
     const busy = state.isStreaming || state.isCompacting || (state.pendingMessageCount ?? 0) > 0;
     this.setRun(busy ? (state.isCompacting ? 'compacting' : 'running') : 'idle');
     if (state.sessionName) el('session-title').textContent = state.sessionName;
-    if (state.model) { this.currentModel = { provider: state.model.provider, id: state.model.id, name: state.model.name }; this.selectModel(state.model.provider, state.model.id, state.model.name); }
+    this.applyStateModel(state);
     if (wasBusy && !busy) await this.settled();
     await this.refreshThinking(state.thinkingLevel);
     this.refreshQueueState(state);
@@ -271,6 +292,10 @@ export class Workbench {
     this.saveCurrentDraft(); const previous = this.sessionId; this.scope.switchTo(id);
     if (previous && this.bridge.connected) void this.request('session.unsubscribe', undefined, previous).catch(() => {});
     this.sessionId = id; this.subscribed = ''; this.cwd = cwd; this.diskSession = !!id; this.cursor.reset(); this.live.clear();
+    this.currentModel = undefined; this.historicalModel = undefined; this.modelIntent = undefined; this.modelUnavailable = false;
+    const modelSelect = el<HTMLSelectElement>('model-select');
+    modelSelect.querySelectorAll('option[data-runtime-model]').forEach((option) => option.remove());
+    this.renderModel();
     this.statuses.clear(); this.widgets.clear(); this.renderExtensions(); this.commands = [];
     el('turns').replaceChildren(); el('older-slot').replaceChildren(); el('ext-dialog-slot').replaceChildren();
     el('welcome').hidden = !!id; el('session-title').textContent = title; el('session-cwd').textContent = cwd || '选择工作目录，开始对话';
@@ -302,6 +327,7 @@ export class Workbench {
     // 而刷新会把单选按钮重置成 Pi 的当前值，晚一步读就丢了用户的选择。
     const busy = this.run !== 'idle';
     const queuedKind = busy ? this.queueKind() : undefined;
+    const selectedModel = this.selectedModel();
     try {
       await this.ensureWorker(scope);
       if (!scope.alive()) {
@@ -310,8 +336,14 @@ export class Workbench {
         throw new Error('会话已切换，本条消息未发送；内容已保留，请手动重发。');
       }
       if (!busy) {
-        const choice = el<HTMLSelectElement>('model-select').selectedOptions[0];
-        if (choice?.dataset.provider && choice.dataset.modelId) await this.request('session.set_model', { provider: choice.dataset.provider, modelId: choice.dataset.modelId }, scope.sessionId);
+        if (selectedModel) {
+          await this.request('session.set_model', { provider: selectedModel.provider, modelId: selectedModel.id }, scope.sessionId);
+          if (!scope.alive()) throw new Error('会话已切换，本条消息未发送；内容已保留，请手动重发。');
+          this.modelIntent = undefined; this.modelUnavailable = false;
+          this.selectModel(selectedModel.provider, selectedModel.id);
+        } else if (this.modelUnavailable) {
+          throw new Error('当前会话没有可用模型。请配置模型或从列表中选一个可用模型后重试；消息仍保留在输入框。');
+        }
         this.live.begin(message); this.setRun('running'); el('welcome').hidden = true;
       }
       const images = this.attachments;
@@ -429,17 +461,60 @@ export class Workbench {
     const current = selected ?? select.value; select.replaceChildren(...levels.map((level) => new Option(level, level)));
     if (levels.includes(current)) select.value = current; select.disabled = this.run !== 'idle' || !levels.length;
   }
+  private selectedModel(): { provider: string; id: string } | undefined {
+    const option = el<HTMLSelectElement>('model-select').selectedOptions[0];
+    return option?.dataset.provider && option.dataset.modelId ? { provider: option.dataset.provider, id: option.dataset.modelId } : undefined;
+  }
+  private applyStateModel(state: State): void {
+    if (!('model' in state)) return;
+    this.currentModel = knownModel(state.model) ? { ...state.model, name: state.model.name || state.model.id } : undefined;
+    this.modelUnavailable = !this.currentModel;
+    this.renderModel();
+  }
+  private renderModel(): void {
+    const select = el<HTMLSelectElement>('model-select');
+    select.querySelectorAll('option[data-model-status]').forEach((option) => option.remove());
+    if (this.modelIntent) {
+      const option = Array.from(select.options).find((item) => item.dataset.provider === this.modelIntent?.provider && item.dataset.modelId === this.modelIntent?.id);
+      if (option) { select.value = option.value; select.title = option.textContent?.trim() ?? ''; this.updateControls(); return; }
+    }
+    if (this.currentModel) {
+      this.selectModel(this.currentModel.provider, this.currentModel.id, this.currentModel.name);
+    } else if (this.historicalModel || this.modelUnavailable) {
+      const model = this.historicalModel;
+      const label = model ? `${model.id} · ${model.provider}（${this.modelUnavailable ? '历史模型，当前不可用' : '历史模型，待启动确认'}）` : '当前模型不可用';
+      const option = new Option(label, '__model-status__');
+      option.disabled = true; option.dataset.modelStatus = 'true'; select.insertBefore(option, select.firstChild);
+      select.value = option.value;
+    } else {
+      select.value = '';
+    }
+    select.title = select.selectedOptions[0]?.textContent?.trim() ?? '';
+    this.updateControls();
+  }
   private selectModel(provider: string, id: string, name = id): void {
     this.currentModel = { provider, id, name };
     const select = el<HTMLSelectElement>('model-select');
     let option = Array.from(select.options).find((item) => item.dataset.provider === provider && item.dataset.modelId === id);
-    if (!option) { option = new Option(`${name} · ${provider}`, `${provider}/${id}`); option.dataset.provider = provider; option.dataset.modelId = id; select.add(option); }
+    if (!option) { option = new Option(`${name} · ${provider}`, `${provider}/${id}`); option.dataset.provider = provider; option.dataset.modelId = id; option.dataset.runtimeModel = 'true'; select.add(option); }
     select.value = option.value;
+    select.title = option.textContent?.trim() ?? '';
   }
   private async changeModel(): Promise<void> {
-    if (!this.sessionId) return;
-    const option = el<HTMLSelectElement>('model-select').selectedOptions[0];
-    if (option?.dataset.provider && option.dataset.modelId) { await this.command('session.set_model', { provider: option.dataset.provider, modelId: option.dataset.modelId }); await this.refreshThinking(); }
+    const selected = this.selectedModel();
+    this.modelIntent = selected;
+    if (!selected || !this.sessionId) { this.renderModel(); return; }
+    const scope = this.scope.current$();
+    try {
+      await this.command('session.set_model', { provider: selected.provider, modelId: selected.id }, scope);
+      if (!scope.alive()) return;
+      this.modelIntent = undefined; this.modelUnavailable = false;
+      this.selectModel(selected.provider, selected.id);
+      await this.refreshState(scope);
+    } catch (error) {
+      if (scope.alive()) { this.modelIntent = undefined; this.renderModel(); }
+      throw error;
+    }
   }
   private extension(event: Record<string, unknown>): void {
     const method = text(event.method);
@@ -684,7 +759,7 @@ export class Workbench {
   private saveCurrentDraft(): void { saveDraft(this.draftKey(), el<HTMLTextAreaElement>('prompt').value); }
   private setConnection(online: boolean): void { el('conn-state').textContent = online ? '已连接' : '未连接'; el('conn-state').className = `state state-${online ? 'online' : 'offline'}`; if (online) this.notice(''); this.updateControls(); }
   private setRun(state: RunState): void { this.run = state; el('session-state').textContent = {idle:'就绪',running:'运行中',retrying:'重试中',compacting:'压缩中',waiting_input:'等待确认'}[state]; this.updateControls(); }
-  private updateControls(): void { el<HTMLButtonElement>('send-button').disabled = !this.bridge.connected || this.sending || !el<HTMLTextAreaElement>('prompt').value.trim(); el('abort-button').hidden = this.run === 'idle'; const hint = el('queue-hint'); const busy = this.run !== 'idle'; hint.hidden = !busy; if (busy) hint.textContent = this.queueKind() === 'steering' ? '本轮结束后插入指令' : '排到队列末尾，本轮完成后追加'; el<HTMLSelectElement>('model-select').disabled = busy; el<HTMLSelectElement>('thinking-select').disabled = busy || !this.sessionId; }
+  private updateControls(): void { el<HTMLButtonElement>('send-button').disabled = !this.bridge.connected || this.sending || !el<HTMLTextAreaElement>('prompt').value.trim() || (this.modelUnavailable && !this.selectedModel()); el('abort-button').hidden = this.run === 'idle'; const hint = el('queue-hint'); const busy = this.run !== 'idle'; hint.hidden = !busy; if (busy) hint.textContent = this.queueKind() === 'steering' ? '本轮结束后插入指令' : '排到队列末尾，本轮完成后追加'; el<HTMLSelectElement>('model-select').disabled = busy; el<HTMLSelectElement>('thinking-select').disabled = busy || !this.sessionId; }
   // queueKind 读会话对话框里的 radio；缺省 steering，与 Pi 的默认一致。
   // 取值必须与桥的协议一致：steering/followUp，不是 steer。
   private queueKind(): 'steering' | 'followUp' { return document.querySelector<HTMLInputElement>('input[name="queue-kind"]:checked')?.value === 'followUp' ? 'followUp' : 'steering'; }

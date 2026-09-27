@@ -90,7 +90,7 @@ kbd { font-size:10px; color:var(--text-dim); margin-left:auto; }
 #composer:focus-within { border-color:color-mix(in srgb,var(--accent) 50%,var(--border)); }
 #prompt { display:block; width:100%; min-height:62px; max-height:210px; resize:none; overflow:auto; border:0; outline:0; background:transparent; padding:0 4px; }
 .composer-actions { display:flex; align-items:center; gap:7px; padding-top:10px; flex-wrap:wrap; }
-.select-label select { font-size:11px; max-width:220px; padding:4px 6px; background:var(--bg); }
+.select-label select { font-size:11px; max-width:300px; padding:4px 6px; background:var(--bg); }
 .composer-footnote { display:flex; align-items:center; justify-content:space-between; gap:10px; color:var(--text-dim); font-size:10px; padding:6px 5px 0; }
 #ext-status-slot { flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .ext-widgets { font-size:12px; max-height:160px; overflow:auto; }
@@ -175,7 +175,7 @@ input,select,textarea { background:var(--bg); border:1px solid var(--border); bo
   .mobile-only { display:inline-flex; margin-left:auto; }
   .topbar { padding:10px 12px; gap:6px; min-height:55px; }
   .chat-scroll { padding:18px 14px; } .composer-wrap { padding:6px 10px max(8px,env(safe-area-inset-bottom)); }
-  .composer-actions { gap:4px; } .select-label select { max-width:150px; }
+  .composer-actions { gap:4px; } .select-label select { max-width:min(220px,calc(100vw - 150px)); }
   .composer-footnote>span:last-child { display:none; }
   .workspace-panel { position:fixed; inset:0 0 0 auto; width:100%; z-index:25; }
   .welcome h2 { font-size:23px; } .jump-latest { right:16px; }
