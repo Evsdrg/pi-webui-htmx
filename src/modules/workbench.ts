@@ -36,6 +36,12 @@ export class Workbench {
    * 只看 URL 无法覆盖 A→B→A（U17/U18）。
    */
   private pendingHistory: { sessionId: string; epoch: number } = { sessionId: '', epoch: 0 };
+  /**
+   * autoRetryBySession 按会话记录自动重试偏好。
+   * Pi 的 RPC 没有 auto-retry 读回字段，桥也无从得知；因此这是本地偏好，
+   * 不是 Pi 的实时状态——界面必须这样说，不能让未勾选看起来像「已确认关闭」。
+   */
+  private autoRetryBySession = new Map<string, boolean>();
   private statuses = new Map<string, string>();
   private widgets = new Map<string, { lines: string[]; placement: string }>();
   private commands: { name: string; description: string }[] = [];
@@ -103,6 +109,9 @@ export class Workbench {
     el('auto-retry').addEventListener('change', () => {
       const enabled = el<HTMLInputElement>('auto-retry').checked;
       // Pi 没有自动重试的读回字段，失败时把勾选还原，避免界面停在假状态。
+      // 偏好按会话记忆：Pi 不提供 auto-retry 的读回字段，
+      // 跨会话共用一个 DOM 状态会把上一会话的选择带到新会话（U14）。
+      this.autoRetryBySession.set(this.scope.current || '', enabled);
       void this.command('session.set_auto_retry', { enabled }).then(() => this.notify(enabled ? '已开启自动重试。' : '已关闭自动重试。')).catch((err) => { this.fail(err); el<HTMLInputElement>('auto-retry').checked = !enabled; });
     }, { signal });
     el('thinking-select').addEventListener('change', () => { const level = el<HTMLSelectElement>('thinking-select').value; void this.command('session.set_thinking', { level }).catch((err) => this.fail(err)); }, { signal });
@@ -269,6 +278,8 @@ export class Workbench {
     // 用户要能在这里继续重发（U13）。其余情况照常载入目标会话草稿。
     // 附件按会话隔离：上一会话的图片不能留在新会话里被发送出去（U01）。
     this.clearAttachments();
+    // 自动重试是本地偏好：切换会话时套用该会话上次的选择，默认关闭。
+    el<HTMLInputElement>('auto-retry').checked = this.autoRetryBySession.get(id) ?? false;
     if (!this.sending) el<HTMLTextAreaElement>('prompt').value = readDraft(this.draftKey());
     document.body.dataset.sessionId = id; this.setRun('idle'); this.notice(''); closeMobileSidebar();
     if (push) history.pushState(null, '', id ? `/?session=${encodeURIComponent(id)}` : '/');

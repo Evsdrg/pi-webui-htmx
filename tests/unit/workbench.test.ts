@@ -431,3 +431,27 @@ describe('历史响应的代次守卫', () => {
     expect(fresh.detail.shouldSwap).toBe(true);
   });
 });
+
+describe('自动重试偏好按会话隔离', () => {
+  // U14：Pi 没有 auto-retry 读回字段，跨会话共用一个 DOM 状态
+  // 会把上一会话的选择带到新会话。
+  it('切换会话后套用该会话的偏好，默认关闭', async () => {
+    const box = document.getElementById('auto-retry') as HTMLInputElement;
+    // 在 s1 打开自动重试。
+    workbench.selectSession('s1', '/tmp/a', 'A');
+    await vi.waitFor(() => expect(document.body.dataset.sessionId).toBe('s1'));
+    box.checked = true;
+    box.dispatchEvent(new Event('change', { bubbles: true }));
+    await vi.waitFor(() => expect(box.checked).toBe(true));
+
+    // 切到 s2：没有记录过，必须是默认关闭。
+    workbench.selectSession('s2', '/tmp/b', 'B');
+    await vi.waitFor(() => expect(document.body.dataset.sessionId).toBe('s2'));
+    expect(box.checked).toBe(false);
+
+    // 切回 s1：应恢复上一次的选择。
+    workbench.selectSession('s1', '/tmp/a', 'A');
+    await vi.waitFor(() => expect(document.body.dataset.sessionId).toBe('s1'));
+    expect(box.checked).toBe(true);
+  });
+});
