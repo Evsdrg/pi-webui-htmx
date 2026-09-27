@@ -9,6 +9,7 @@
      range 内层取不到 Turn 的字段，会直接渲染失败。 */}}
 {{range $turn := .Turns}}
 <article class="turn" data-turn-id="{{$turn.ID}}">
+  {{range $turn.EntryIDs}}<span hidden data-search-entry-id="{{.}}"></span>{{end}}
   {{if $turn.UserText}}<div class="turn-user"><div class="bubble">{{$turn.UserText}}</div></div>{{end}}
   {{if $turn.HasProcess}}<details class="turn-process"><summary>查看过程 · {{len $turn.Steps}} 步</summary><ol>
     {{range $step := $turn.Steps}}<li><span class="step-kind">{{$step.Kind}}</span><pre class="step-detail">{{$step.Detail}}</pre>{{if and $step.EntryID $step.Images}}{{range $step.Images}}<button class="lazy-block" data-lazy="tool-image" data-entry-id="{{$step.EntryID}}" data-block-index="{{.}}">查看工具图片</button>{{end}}{{end}}</li>{{end}}

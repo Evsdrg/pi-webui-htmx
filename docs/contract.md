@@ -43,8 +43,8 @@ tests/fixtures/             可控假 Pi
 | shell / ShellData | SessionID；JS、CSS 字符串列表 |
 | sessions / SessionsData | Items、Selected、HasMore、NextOffset |
 | SessionRow | ID、Title、Modified、Cwd |
-| history / HistoryData | SessionID、LeafID、Turns、HasMore、OldestEntryID |
-| Turn | ID、UserText、AssistantText、Steps、HasProcess、AssistantEntryID、Thinking |
+| history / HistoryData | SessionID、LeafID、Turns、HasMore、OldestEntryID、HistoricalModel |
+| Turn | ID、EntryIDs、UserText、AssistantText、Steps、HasProcess、Thinking |
 | Step | Kind、Detail、EntryID、Images |
 | models / ModelsData | Models、Current；ModelRow 为 ID、Name、Provider |
 | packages / PackagesData | Packages；每行为 Name、Source、Version、Latest、HasUpdate、Disabled、Error |
@@ -57,7 +57,7 @@ tests/fixtures/             可控假 Pi
 
 body 的 data-session-id 是当前显示目标，不得在长异步链中反复读它来决定已发起命令的目标。模型 Current 使用 provider/id。URL 中的参数仍要正确编码，不能因为路径已授权就跳过 URL 编码。
 
-**B11 的目标修改：** 惰性块各自持有 entryId+blockIndex，不能用 Turn.AssistantEntryID 为整轮所有 Thinking 代言。新投影和模板必须配套发布；不是先改模板字段再让旧桥默默给空值。
+**已实现：** 思考占位符各自持有 entryId+blockIndex，不再用整轮的单一 AssistantEntryID 代表不同助手条目。搜索命中也能凭 Turn.EntryIDs 找到 user、assistant、tool 所属的回合；从搜索结果进入时只读展示截至命中条目的历史，并提供返回最新入口，发送仍沿会话当前分支继续。
 
 ## 4. 历史与滚动
 

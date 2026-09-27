@@ -41,6 +41,7 @@ export class Workbench {
    * 只看 URL 无法覆盖 A→B→A（U17/U18）。
    */
   private pendingHistory: { sessionId: string; epoch: number } = { sessionId: '', epoch: 0 };
+  private searchFocus: { sessionId: string; entryId: string; epoch: number } | undefined;
   /**
    * autoRetryBySession 按会话记录自动重试偏好。
    * Pi 的 RPC 没有 auto-retry 读回字段，桥也无从得知；因此这是本地偏好，
@@ -151,12 +152,24 @@ export class Workbench {
       if (target?.id === 'turns') {
         const url = detail.xhr?.responseURL ? new URL(detail.xhr.responseURL) : undefined;
         if (url && (url.pathname !== `/ui/sessions/${encodeURIComponent(this.sessionId)}/history` || url.searchParams.has('before'))) return;
+        el('history-scope').hidden = !url?.searchParams.has('leafId');
         const marker = target.querySelector<HTMLElement>('[data-history-model-provider]');
         if (marker) {
           const provider = marker.dataset.historyModelProvider ?? '';
           const id = marker.dataset.historyModelId ?? '';
           this.historicalModel = provider && id ? { provider, id } : undefined;
           this.renderModel();
+        }
+        const focus = this.searchFocus;
+        if (focus && focus.sessionId === this.sessionId && focus.epoch === this.scope.epoch && url?.searchParams.get('leafId') === focus.entryId) {
+          const entry = Array.from(target.querySelectorAll<HTMLElement>('[data-search-entry-id]'))
+            .find((node) => node.dataset.searchEntryId === focus.entryId);
+          const turn = entry?.closest<HTMLElement>('[data-turn-id]');
+          if (turn) {
+            turn.classList.add('search-target'); turn.tabIndex = -1;
+            turn.focus({ preventScroll: true }); turn.scrollIntoView?.({ block: 'center' });
+          }
+          this.searchFocus = undefined;
         }
       }
       if (target?.id === 'model-select') this.renderModel();
@@ -286,11 +299,12 @@ export class Workbench {
     this.refreshQueueState(state);
     await this.refreshDialogs();
   }
-  private selectSession(id: string, cwd: string, title: string, push = true): void {
+  private selectSession(id: string, cwd: string, title: string, push = true, entryId = ''): void {
     // 注意：这里刻意不重置 pendingHistory。它记录的是「最近一次发起的历史
     // 请求」的归属，切换会话后代次已变，迟到的旧响应会被 beforeSwap 拒绝；
     // 若在这里改写成当前值，就识别不出「切换前发起、切换后才到达」的响应。
     this.saveCurrentDraft(); const previous = this.sessionId; this.scope.switchTo(id);
+    this.searchFocus = entryId ? { sessionId: id, entryId, epoch: this.scope.epoch } : undefined;
     if (previous && this.bridge.connected) void this.request('session.unsubscribe', undefined, previous).catch(() => {});
     this.sessionId = id; this.subscribed = ''; this.cwd = cwd; this.diskSession = !!id; this.cursor.reset(); this.live.clear();
     this.currentModel = undefined; this.historicalModel = undefined; this.modelIntent = undefined; this.modelUnavailable = false;
@@ -299,6 +313,7 @@ export class Workbench {
     this.renderModel();
     this.statuses.clear(); this.widgets.clear(); this.renderExtensions(); this.commands = [];
     el('turns').replaceChildren(); el('older-slot').replaceChildren(); el('ext-dialog-slot').replaceChildren();
+    el('history-scope').hidden = true;
     el('welcome').hidden = !!id; el('session-title').textContent = title; el('session-cwd').textContent = cwd || '选择工作目录，开始对话';
     // 发送进行中不覆盖输入框：那条消息还没发出去，切换会话后
     // 用户要能在这里继续重发（U13）。其余情况照常载入目标会话草稿。
@@ -310,7 +325,7 @@ export class Workbench {
     document.body.dataset.sessionId = id; this.setRun('idle'); this.notice(''); closeMobileSidebar();
     if (push) history.pushState(null, '', id ? `/?session=${encodeURIComponent(id)}` : '/');
     this.markSelected(); el('chat-scroll').dataset.resetScroll = 'true';
-    if (id) void this.refreshHistory();
+    if (id) void this.refreshHistory(entryId);
     if (this.bridge.connected) void this.reconcile().catch((err) => this.fail(err));
     this.workspace?.setCwd(cwd);
   }
@@ -424,12 +439,13 @@ export class Workbench {
       closeDialog('branch-dialog');
     } catch (error) { this.fail(error); }
   }
-  private async refreshHistory(): Promise<void> {
+  private async refreshHistory(leafId = ''): Promise<void> {
     if (!this.sessionId || !this.diskSession || this.historyLoading === this.sessionId) return;
     const id = this.sessionId; this.historyLoading = id;
     // 归属随请求一起登记，beforeSwap 才能拒绝旧代次的响应（U17/U18）。
     this.pendingHistory = { sessionId: id, epoch: this.scope.epoch };
-    try { await window.htmx.ajax('get', `/ui/sessions/${encodeURIComponent(id)}/history`, { target: '#turns', swap: 'innerHTML' }); }
+    const query = leafId ? `?leafId=${encodeURIComponent(leafId)}` : '';
+    try { await window.htmx.ajax('get', `/ui/sessions/${encodeURIComponent(id)}/history${query}`, { target: '#turns', swap: 'innerHTML' }); }
     finally { if (this.historyLoading === id) this.historyLoading = ''; }
   }
   private refreshSessions(): void { window.htmx.trigger(document.body, 'sessions-refresh'); }
@@ -449,7 +465,14 @@ export class Workbench {
       const list = el('session-list'); list.replaceChildren();
       for (const value of rows) {
         const item = record(value); const id = text(item.sessionId) || text(item.id); if (!id) continue;
-        const link = document.createElement('a'); link.className = 'session-item'; link.href = `/?session=${encodeURIComponent(id)}`; link.dataset.session = id; link.dataset.title = text(item.name) || id; link.textContent = text(item.snippet) || text(item.text) || text(item.name) || id; list.append(link);
+        const title = text(item.title) || '未命名会话';
+        const cwd = text(item.cwd); const entryId = text(item.entryId);
+        const link = document.createElement('a'); link.className = 'session-item'; link.href = `/?session=${encodeURIComponent(id)}`;
+        link.dataset.session = id; link.dataset.title = title; link.dataset.cwd = cwd; link.dataset.entryId = entryId;
+        const heading = document.createElement('span'); heading.className = 'session-title'; heading.textContent = title;
+        const path = document.createElement('span'); path.className = 'session-meta'; path.textContent = cwd;
+        const excerpt = document.createElement('span'); excerpt.className = 'search-snippet'; excerpt.textContent = text(item.snippet);
+        link.append(heading, path, excerpt); list.append(link);
       }
       if (!list.children.length) list.textContent = '没有匹配的会话';
     } catch (error) { this.fail(error); }
@@ -582,7 +605,7 @@ export class Workbench {
   private onClick(event: MouseEvent): void {
     const target = event.target as Element;
     const link = target.closest<HTMLElement>('[data-session]');
-    if (link) { event.preventDefault(); this.selectSession(link.dataset.session ?? '', link.dataset.cwd ?? '', link.dataset.title ?? '会话'); return; }
+    if (link) { event.preventDefault(); this.selectSession(link.dataset.session ?? '', link.dataset.cwd ?? '', link.dataset.title ?? '会话', true, link.dataset.entryId ?? ''); return; }
     const command = target.closest<HTMLElement>('[data-command]');
     if (command) { el<HTMLTextAreaElement>('prompt').value = `/${command.dataset.command} `; el('command-menu').hidden = true; el('prompt').focus(); return; }
     const button = target.closest<HTMLElement>('[data-action]');

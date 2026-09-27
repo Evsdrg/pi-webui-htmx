@@ -17,13 +17,14 @@ let workbench: Workbench;
 let pending: string[];
 let busy: boolean;
 let sequence: number;
-const methods = ['session.start','session.prompt','session.subscribe','session.set_model','worker.list','session.state','session.thinking_levels','session.pending_dialogs','session.ui_response','session.stats','session.set_queue_mode','session.set_auto_compaction','session.set_auto_retry','session.abort_retry','session.export_html','config.models.raw','config.models.write','config.models.discover','config.models.test'];
+const methods = ['session.start','session.prompt','session.subscribe','session.set_model','sessions.search','worker.list','session.state','session.thinking_levels','session.pending_dialogs','session.ui_response','session.stats','session.set_queue_mode','session.set_auto_compaction','session.set_auto_retry','session.abort_retry','session.export_html','config.models.raw','config.models.write','config.models.discover','config.models.test'];
 function emit(type: string, extra: Record<string, unknown> = {}) {
  fake.instance!.dispatchEvent(new CustomEvent('message', { detail: { version:1,kind:'event',event:'pi.event',sessionId:'s1',epoch:'test',seq:++sequence,data:{type,...extra} } }));
 }
 function mount() {
  document.body.innerHTML = `<form id=auth-form><input id=bridge-token><button>连接</button></form><dialog id=auth-dialog></dialog><div id=auth-error></div>
  <form id=composer><textarea id=prompt></textarea><div id=attachments hidden></div><p id=composer-drop hidden></p><input id=attach-input type=file><button id=send-button></button><button id=abort-button></button><select id=model-select><option value="">Pi 默认模型</option></select><select id=thinking-select></select></form>
+ <div id=history-scope hidden><button type=button data-action=branch-current>返回最新</button></div>
  <form id=new-form><input id=cwd-input></form><dialog id=new-dialog></dialog><datalist id=workspace-roots></datalist><input id=session-search>
  <button class=icon-btn data-action=session-menu aria-label=会话操作>···</button><dialog id=session-dialog><input id=session-name><div class=session-action-grid><button data-action=rename>保存名称</button><button data-action=compact>压缩</button><button data-action=clone>克隆</button><button data-action=export>导出</button><button data-action=stop>释放</button><button data-action=delete>删除</button></div>
  <label class=switch><input type=checkbox id=auto-compaction><span>自动压缩</span></label><label class=switch><input type=checkbox id=auto-retry><span>自动重试</span></label>
@@ -269,6 +270,41 @@ it('默认排队模式用协议一致的 steering，不是 steer', async () => {
   document.querySelector<HTMLElement>('[data-action="session-menu"]')!.click();
   await vi.waitFor(() => {
     expect(document.querySelector<HTMLInputElement>('input[name="queue-kind"][value="followUp"]')!.checked).toBe(true);
+  });
+});
+
+describe('搜索结果归属与定位', () => {
+  it('保留标题和目录，点击助手命中后定位到所属回合', async () => {
+    const search = document.getElementById('session-search') as HTMLInputElement;
+    search.value = 'Project overview';
+    fake.request.mockImplementation(async (method: string) => {
+      if (method === 'sessions.search') return { matches: [{ sessionId: 's2', entryId: 'a1', title: 'Sample workspace review', cwd: '/fixture', snippet: 'Project overview' }] };
+      if (method === 'worker.list') return [];
+      return {};
+    });
+    await workbench.search('Project overview');
+    const link = document.querySelector<HTMLAnchorElement>('#session-list [data-session="s2"]')!;
+    expect(link.textContent).toContain('Sample workspace review');
+    expect(link.dataset.title).toBe('Sample workspace review');
+    expect(link.dataset.cwd).toBe('/fixture');
+    link.click();
+    await vi.waitFor(() => expect(document.body.dataset.sessionId).toBe('s2'));
+    expect(document.getElementById('session-title')?.textContent).toBe('Sample workspace review');
+    expect(vi.mocked(window.htmx.ajax).mock.calls.some((call) => String(call[1]).includes('/ui/sessions/s2/history?leafId=a1'))).toBe(true);
+
+    const turns = document.getElementById('turns')!;
+    turns.innerHTML = '<article data-turn-id="u1"><span hidden data-search-entry-id="a1"></span>回复</article>';
+    document.dispatchEvent(new CustomEvent('htmx:afterSwap', { detail: {
+      target: turns, xhr: { responseURL: `${location.origin}/ui/sessions/s2/history?leafId=a1` },
+    } }));
+    expect(turns.querySelector('[data-turn-id="u1"]')?.classList.contains('search-target')).toBe(true);
+    expect(document.getElementById('history-scope')?.hidden).toBe(false);
+    document.querySelector<HTMLButtonElement>('#history-scope button')!.click();
+    await vi.waitFor(() => expect(vi.mocked(window.htmx.ajax).mock.calls.some((call) => call[1] === '/ui/sessions/s2/history')).toBe(true));
+    document.dispatchEvent(new CustomEvent('htmx:afterSwap', { detail: {
+      target: turns, xhr: { responseURL: `${location.origin}/ui/sessions/s2/history` },
+    } }));
+    expect(document.getElementById('history-scope')?.hidden).toBe(true);
   });
 });
 
