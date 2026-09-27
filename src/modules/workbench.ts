@@ -30,6 +30,12 @@ export class Workbench {
   private attachments: Attachment[] = [];
   /** 附件批次的串行队列，见 attach 的说明（U20）。 */
   private attachQueue: Promise<void> = Promise.resolve();
+  /**
+   * pendingHistory 登记最近一次历史请求的归属。
+   * beforeSwap 用它判断「这个响应是否还属于当前会话与当前代次」，
+   * 只看 URL 无法覆盖 A→B→A（U17/U18）。
+   */
+  private pendingHistory: { sessionId: string; epoch: number } = { sessionId: '', epoch: 0 };
   private statuses = new Map<string, string>();
   private widgets = new Map<string, { lines: string[]; placement: string }>();
   private commands: { name: string; description: string }[] = [];
@@ -109,7 +115,15 @@ export class Workbench {
       const url = detail.xhr?.responseURL;
       if (!url) return;
       const response = new URL(url);
-      if (detail.target?.id === 'turns' && response.pathname !== `/ui/sessions/${encodeURIComponent(this.sessionId)}/history`) detail.shouldSwap = false;
+      // 按会话 ID 拒绝只是第一层：A→B→A 时两个代次共用同一个 URL，
+      // 单看 URL 会放行旧代次的响应（U17/U18）。代次由 scope 记录，
+      // 请求发起时一并登记，这里同时校验两者。
+      if (detail.target?.id === 'turns') {
+        const wanted = this.pendingHistory;
+        const sameSession = response.pathname === `/ui/sessions/${encodeURIComponent(wanted.sessionId)}/history`;
+        const sameEpoch = wanted.epoch === this.scope.epoch && wanted.sessionId === this.scope.current;
+        if (!sameSession || !sameEpoch) detail.shouldSwap = false;
+      }
       if (detail.target?.id === 'ext-dialog-slot' && response.searchParams.get('sessionId') !== this.sessionId) detail.shouldSwap = false;
     }, { signal });
     document.addEventListener('htmx:afterSwap', (event) => {
@@ -242,6 +256,9 @@ export class Workbench {
     await this.refreshDialogs();
   }
   private selectSession(id: string, cwd: string, title: string, push = true): void {
+    // 注意：这里刻意不重置 pendingHistory。它记录的是「最近一次发起的历史
+    // 请求」的归属，切换会话后代次已变，迟到的旧响应会被 beforeSwap 拒绝；
+    // 若在这里改写成当前值，就识别不出「切换前发起、切换后才到达」的响应。
     this.saveCurrentDraft(); const previous = this.sessionId; this.scope.switchTo(id);
     if (previous && this.bridge.connected) void this.request('session.unsubscribe', undefined, previous).catch(() => {});
     this.sessionId = id; this.subscribed = ''; this.cwd = cwd; this.diskSession = !!id; this.cursor.reset(); this.live.clear();
@@ -344,6 +361,8 @@ export class Workbench {
   private gotoLeaf(leafId: string): void {
     if (!this.sessionId || !this.diskSession) return;
     const query = leafId ? `?leafId=${encodeURIComponent(leafId)}` : '';
+    // 归属在发起时登记：切换会话后代次变化，迟到的分支视图不会换进对话区。
+    this.pendingHistory = { sessionId: this.sessionId, epoch: this.scope.epoch };
     void window.htmx.ajax('get', `/ui/sessions/${encodeURIComponent(this.sessionId)}/history${query}`, { target: '#turns', swap: 'innerHTML' })
       .then(() => { if (leafId) this.notify(`已切换到分支 ${leafId.slice(0, 8)} 的视图`); })
       .catch((error) => this.fail(error));
@@ -364,6 +383,8 @@ export class Workbench {
   private async refreshHistory(): Promise<void> {
     if (!this.sessionId || !this.diskSession || this.historyLoading === this.sessionId) return;
     const id = this.sessionId; this.historyLoading = id;
+    // 归属随请求一起登记，beforeSwap 才能拒绝旧代次的响应（U17/U18）。
+    this.pendingHistory = { sessionId: id, epoch: this.scope.epoch };
     try { await window.htmx.ajax('get', `/ui/sessions/${encodeURIComponent(id)}/history`, { target: '#turns', swap: 'innerHTML' }); }
     finally { if (this.historyLoading === id) this.historyLoading = ''; }
   }

@@ -388,3 +388,46 @@ describe('排队模式回读', () => {
     });
   });
 });
+
+describe('历史响应的代次守卫', () => {
+  // U17/U18：beforeSwap 以前只按 URL 判断会话。代次校验能挡住
+  // 「切换前发起、切换后才到达」的响应——这是可在前端判定的一类。
+  it('代次递增后到达的旧历史响应被拒绝', async () => {
+    const turns = document.getElementById('turns')!;
+    // 先在 s1 真正发起一次历史请求，让 pendingHistory 记下 {s1, epochN}。
+    workbench.selectSession('s1', '/tmp/a', 'A');
+    await vi.waitFor(() => expect(document.body.dataset.sessionId).toBe('s1'));
+    await (workbench as unknown as { refreshHistory(): Promise<void> }).refreshHistory();
+    const registered = (workbench as unknown as { pendingHistory: { sessionId: string; epoch: number } }).pendingHistory;
+    expect(registered.sessionId).toBe('s1');
+
+    // 代次递增（等价于新建会话时 scope.switchTo 的效果）。
+    workbench.scope.switchTo('s1');
+
+    // 旧请求此刻才到达：URL 仍属于 s1，但代次已经过期。
+    const stale = new Event('htmx:beforeSwap') as CustomEvent;
+    stale.detail = {
+      target: turns,
+      xhr: { responseURL: `${location.origin}/ui/sessions/s1/history` } as unknown as XMLHttpRequest,
+      shouldSwap: true,
+    };
+    document.dispatchEvent(stale);
+    expect(stale.detail.shouldSwap).toBe(false);
+  });
+
+  it('当前会话的历史响应被放行', async () => {
+    const turns = document.getElementById('turns')!;
+    workbench.selectSession('s1', '/tmp/a', 'A');
+    await vi.waitFor(() => expect(document.body.dataset.sessionId).toBe('s1'));
+    await workbench.reconcile();
+
+    const fresh = new Event('htmx:beforeSwap') as CustomEvent;
+    fresh.detail = {
+      target: turns,
+      xhr: { responseURL: `${location.origin}/ui/sessions/s1/history` } as unknown as XMLHttpRequest,
+      shouldSwap: true,
+    };
+    document.dispatchEvent(fresh);
+    expect(fresh.detail.shouldSwap).toBe(true);
+  });
+});
