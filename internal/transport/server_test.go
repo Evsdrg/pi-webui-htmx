@@ -20,6 +20,7 @@ import (
 	"github.com/coder/websocket"
 	"pi-bridge-go/internal/management"
 	"pi-bridge-go/internal/observe"
+	"pi-bridge-go/internal/pi"
 	"pi-bridge-go/internal/presentation"
 	run "pi-bridge-go/internal/runtime"
 	"pi-bridge-go/internal/sessions"
@@ -1224,5 +1225,62 @@ func TestHTTP文件文本端点返回完整内容(t *testing.T) {
 	s.ServeHTTP(rec2, bad)
 	if rec2.Code == http.StatusOK {
 		t.Fatal("越界路径不应通过 HTTP 端点读取")
+	}
+}
+
+// TestWS读上限覆盖附件体积 覆盖 U05：
+// 读上限以前是 1 MiB，而图片附件的合法体积约 96 MiB——
+// 稍大的图片不仅发不出去，超限帧还会直接断开连接。
+func TestWS读上限覆盖附件体积(t *testing.T) {
+	want := pi.MaxImages*pi.MaxImageDataLen + (1 << 20)
+	if wsReadLimit != want {
+		t.Fatalf("WS 读上限未与附件预算对齐: %d != %d", wsReadLimit, want)
+	}
+	if wsReadLimit <= 1<<20 {
+		t.Fatalf("WS 读上限仍低于合法附件体积: %d", wsReadLimit)
+	}
+	// 单张上限乘以张数必须能装进读上限，否则满额附件永远发不出。
+	if pi.MaxImages*pi.MaxImageDataLen >= wsReadLimit {
+		t.Fatal("满额附件会超出 WS 读上限")
+	}
+}
+
+// TestWS实际读上限与预算一致 覆盖 U05 的调用点：
+// 只校验常量不够——反例把 SetReadLimit 改回 1 MiB 时常量断言照样通过，
+// 因为那一行根本没被读到。这里用真实连接发送接近预算的帧来验证。
+func TestWS实际读上限与预算一致(t *testing.T) {
+	s, _, _ := newTestServer(t)
+	srv := httptest.NewUnstartedServer(s)
+	s.host = srv.Listener.Addr().String()
+	srv.Start()
+	defer srv.Close()
+	url := "ws" + strings.TrimPrefix(srv.URL, "http") + "/api/v1/ws"
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	header := http.Header{}
+	header.Set("Authorization", "Bearer "+testToken)
+	conn, _, err := websocket.Dial(ctx, url, &websocket.DialOptions{HTTPHeader: header})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.CloseNow()
+	// 发一个超过旧 1 MiB 上限、但在附件预算之内的帧：
+	// 旧读限会让服务端直接断开连接，这里必须仍能收到响应。
+	big := strings.Repeat("a", 4<<20)
+	body, _ := json.Marshal(map[string]any{
+		"version": 1, "kind": "command", "requestId": "big-1", "method": "files.read",
+		"params": map[string]any{"path": big},
+	})
+	if err := conn.Write(ctx, websocket.MessageText, body); err != nil {
+		t.Fatalf("发送大帧失败（读上限可能仍过低）: %v", err)
+	}
+	_, raw, err := conn.Read(ctx)
+	if err != nil {
+		t.Fatalf("大帧之后连接不可用: %v", err)
+	}
+	var m map[string]any
+	_ = json.Unmarshal(raw, &m)
+	if m["kind"] != "response" {
+		t.Fatalf("没有收到响应: %v", m)
 	}
 }

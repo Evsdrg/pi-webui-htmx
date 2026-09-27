@@ -30,11 +30,11 @@
 | B14 | ✅ 已修 | Tunnel | **修复：** subs 改为保存真实订阅句柄，退订与重复订阅都先 Close 旧订阅。回归做 12 轮订阅/退订后核对 worker 订阅数归零（反例下为 8，即上限）。 | `internal/transport/tunnel.go`；`tunnel_test.go` |
 | B15 | ✅ 已修 | Tunnel | **修复：** 隧道命令与本地 WS 共用 `admit` 与全局 `operations` 预算。原问题：隧道路径完全绕过桥级并发上限。 | `internal/transport/tunnel.go`；`claims.go` |
 | B16 | ✅ 已修 | Bridge | **修复：** 先校验参数再摘除对话；回执送达失败时把对话还回等待表。回归覆盖「非法回执后可合法重试」。 | `internal/runtime/dialogs.go`；`dialogs_test.go` |
-| U01 | 高 | UI | 切换会话时 `selectSession()` 不清理全局附件数组；异步 `FileReader` 结果也没有会话 generation 归属，上一会话图片会留在或追加到新会话附件并可被发送。 | `pi-webui-htmx/src/modules/workbench.ts`；`src/modules/attachments.ts` |
+| U01 | ✅ 已修 | UI | **修复：** `selectSession` 切换时清空附件，附件不再跨会话残留；发送进行中仍保留输入以便重发。 | `src/modules/workbench.ts`；`tests/unit/workbench.test.ts` |
 | U02 | 中 | UI | 新会话首条消息前 `ensureWorker()` 刷新默认模型，覆盖用户已选择的模型。 | `pi-webui-htmx/src/modules/workbench.ts` |
-| U03 | 高 | UI | `command()` await worker 启动后才读取当前 sessionId；等待期间切换会话会把原会话操作发给新会话。 | `pi-webui-htmx/src/modules/workbench.ts` |
+| U03 | ✅ 已修 | UI | **修复：** 新增 `SessionScope`；`command()` 固定发起时归属的会话，切换后不再改投。 | `src/modules/scope.ts`；`src/modules/workbench.ts` |
 | U04 | 中 | UI/Bridge | 无 worker 的历史会话打开分支面板时，`session.tree` 被桥拒绝；历史树浏览依赖显式启动会话。 | `pi-webui-htmx/src/modules/branch.ts`；`pi-bridge-go/internal/transport/server.go` |
-| U05 | 高 | UI/Bridge | 附件控件允许 8 MiB 单图、最多 8 张并先读入 base64；桥的 WS 请求帧上限仅 1 MiB，稍大的单图就无法发送，前端还可能先持有数十 MiB 无法提交的附件。 | `pi-webui-htmx/src/modules/attachments.ts`；`pi-webui-htmx/src/modules/bridge.ts` |
+| U05 | ✅ 已修 | UI/Bridge | **修复：** WS 读上限从 1 MiB 提升到与附件预算对齐（`pi.MaxImages × pi.MaxImageDataLen + 1 MiB`），前端发送前按 base64 总量预检并给出可读错误，不再以断线形式失败。 | `internal/transport/server.go`；`pi-webui-htmx/src/modules/attachments.ts`；`src/modules/workbench.ts` |
 
 ## 继续审查发现（源码核对/定向复现）
 
@@ -73,22 +73,22 @@
 | B45 | 中 | Bridge | Pi Web 为 Pi 导出的 HTML 把 `sortChildren/mapNodes/markActive` 改为迭代实现，专门修复 5000+ 深树栈溢出；桥直接透传 Pi `export_html` 文件，没有同等处理，长线性会话导出后浏览器仍可能栈溢出。 | `internal/runtime/session_ops.go`；`pi-web/app/api/sessions/[id]/export/route.ts` |
 | B46 | ✅ 已修 | Relay | **修复：** Cookie 属主改 base64url 编码，彻底消除 '.' 分隔符冲突；同时限定 owner/deviceId 字符集（拒绝控制字符与空白，允许 '.'）。 | `internal/relay/users.go`；`users_persist_test.go` |
 | T01 | ✅ 已修 | Tests | 假 Pi 改为每个测试进程独占临时目录；sync.Once 仅复用进程内产物，runtime/transport/testutil 在 TestMain 统一清理。并发构建及编译失败清理测试通过，恢复旧固定路径后反例按预期失败。 | `internal/testutil/fakepi.go`；三个包的 `main_test.go`/`TestMain`；P0 |
-| U06 | 中 | UI | 文件列表在 htmx swap **之后**才检查 generation；文本 `files.read` 等待后完全未检查。定向 Vitest 以延迟旧文件响应复现：新文件已展示后又被旧内容覆盖。 | `pi-webui-htmx/src/modules/workspace.ts`；`ui-workspace-file-probe.log` |
-| U07 | 低 | UI | 惰性图片使用 `URL.createObjectURL`，替换/卸载图片时没有 `URL.revokeObjectURL`；长会话多次展开后 blob URL 保留至页面释放。 | `pi-webui-htmx/src/modules/lazy.ts` |
+| U06 | ✅ 已修 | UI | **修复：** 文件列表的守卫移到 htmx `beforeSwap`，迟到响应在交换前就被拒。 | `src/modules/workspace.ts` |
+| U07 | ✅ 已修 | UI | **修复：** 惰性图片在 `load` 后 `revokeObjectURL`，不再把 blob 留到页面卸载。 | `src/modules/lazy.ts` |
 | U08 | 中 | UI | 分支树 `flatten()` 递归遍历深树；15000 层线性树的定向 Vitest 复现 `Maximum call stack size exceeded`，长会话分支面板失败。 | `pi-webui-htmx/src/modules/branch.ts`；`ui-more-probes.log` |
-| U09 | 低 | UI | `@` 补全只在新请求开始时增加 seq；query 改变到下一次 debounce 触发之间，旧请求仍可能把旧候选写入新菜单。定向 Vitest 已复现。 | `pi-webui-htmx/src/modules/mention.ts`；`ui-more-probes.log` |
+| U09 | ✅ 已修 | UI | **修复：** `refresh()` 即使在途补全请求失效，debounce 窗口内的旧候选不再写入新菜单。 | `src/modules/mention.ts`；`tests/unit/mention.test.ts` |
 | U10 | 中 | UI | 分支树、fork 消息及 `gotoLeaf` 的历史片段没有完整的 session generation 守卫；切换会话后，旧树可写入新面板，旧分支历史也可能替换新会话的对话区。 | `pi-webui-htmx/src/modules/branch.ts`；`src/modules/workbench.ts` |
-| U11 | 中 | UI | Pi 返回 `followUpMode: one-at-a-time` 时，前端没有映射到“完成后追加”选项，回读状态与实际队列模式不符。 | `pi-webui-htmx/src/modules/workbench.ts` |
-| U12 | 低 | UI | 图片预览用 `<img>` 替换 `#file-content` 后，关闭操作仍对已不存在的节点调用 `replaceChildren()`，触发异常。 | `pi-webui-htmx/src/modules/workspace.ts`；`ui-more-probes-2.log` |
-| U13 | 高 | UI | 发送先 await 模型设置；期间切换会话后，后续 `session.prompt` 读取新的 `sessionId`，把消息投给另一会话。 | `pi-webui-htmx/src/modules/workbench.ts`；`ui-send-race-probe.log` |
+| U11 | ✅ 已修 | UI | **修复：** 排队模式回读改看 `followUpMode`（选 followUp 时桥改的是这个字段），缺失时不猜、保持当前选择。 | `src/modules/workbench.ts`；`tests/unit/workbench.test.ts` |
+| U12 | ✅ 已修 | UI | **修复：** 关闭文件预览改用 `elOrNull`，图片预览顶掉 `#file-content` 后不再抛异常。 | `src/modules/workspace.ts` |
+| U13 | ✅ 已修 | UI | **修复：** `send`/`sendQueued` 的目标会话在发起时取定；切换后明确报错并保留输入与附件，不静默丢弃。 | `src/modules/workbench.ts`；`tests/unit/workbench.test.ts` |
 | U14 | 中 | UI | 自动重试没有 Pi 读回字段，但复选框是跨会话的单一 DOM 状态；切换会话仍显示上一会话最后一次手动设置，默认未勾也不代表当前 worker 实际状态。 | `pi-webui-htmx/src/modules/workbench.ts`；`src/templates/shell.html` |
 | U15 | 中 | UI | `bridge.event_omitted` 控制事件被忽略；UI 不读取 `resyncRequired`，连接仍在线时不会立即重读历史，直到后续 settled/手动刷新。 | `pi-webui-htmx/src/modules/workbench.ts`；`pi-bridge-go/internal/runtime/manager.go` |
 | U16 | 中 | UI | `EventCursor.accept` 接受任意新 epoch 并把 seq 重置；旧 worker 延迟帧可把 cursor 从新 epoch 切回旧 epoch，随后旧帧被当成新事件处理。 | `pi-webui-htmx/src/modules/stream.ts`；`pi-bridge-go/internal/transport/server.go` |
 | U17 | 高 | UI | 精度校正（本轮源码复核）：当前 beforeSwap 已能按 URL 拒绝普通跨会话旧历史，不能描述为完全无守卫。缺口是 A→B→A 的旧代次、同会话不同 leaf/刷新乱序，以及 beforeSwap 之前的 HX 响应副作用；需要 generation/面板序号和 beforeOnLoad 统一守卫。原泛化的“两会话晚响应必覆盖”断言不作有效证据。 | `pi-webui-htmx/src/modules/workbench.ts:start/refreshHistory/gotoLeaf`；`src/modules/scroll.ts` |
 | U18 | 中 | UI | 精度校正（本轮源码复核）：当前 beforeSwap 已按 sessionId 检查对话目标。尚缺同一 session 的旧代次/pending 集合乱序与响应处理前守卫；旧错误/finally 也可能影响新视图。按这些真实边界补回归，不再声称所有旧对话都会先 swap 再校验。 | `pi-webui-htmx/src/modules/workbench.ts:start/refreshDialogs` |
-| U19 | 中 | UI | `ModelsEditor.save()` 成功后无条件 reload；保存等待期间用户继续输入的未保存草稿会被旧服务端快照覆盖。定向 Vitest 复现。 | `pi-webui-htmx/src/modules/models.ts`；`ui-model-save-probe.log` |
-| U20 | 中 | UI | 附件上限只按每次 `addFiles()` 调用检查；两个并发批次各自看到旧的空数组，随后合并成 16 张，越过 8 张全局限制并放大内存/WS 拒绝。定向 Vitest 复现。 | `pi-webui-htmx/src/modules/attachments.ts`；`src/modules/workbench.ts`；`ui-attachments-limit-probe.log` |
-| U21 | 中 | UI | `LiveView.appendThinking()` 每个 thinking delta 都读写整段 `textContent`，最高 40K 字符；token 级事件下形成重复整段复制，长推理会造成前端 CPU/GC 放大。 | `pi-webui-htmx/src/modules/stream.ts` |
+| U19 | ✅ 已修 | UI | **修复：** 模型配置保存后仅在编辑器内容未变时才 reload，未提交草稿不被覆盖。 | `src/modules/models.ts` |
+| U20 | ✅ 已修 | UI | **修复：** 附件批次改串行队列，每一批都在上一批落地后判断额度，并发批次不再突破 8 张上限。 | `src/modules/workbench.ts`；`tests/unit/attachments_scope.test.ts` |
+| U21 | ✅ 已修 | UI | **修复：** 思考增量改为追加文本节点（O(增量)），不再每 token 重写整段 40K 文本；上限用独立计数器，不读 DOM。 | `src/modules/stream.ts`；`tests/unit/liveview.test.ts` |
 
 ## 补充发现（源码核对/定向复现）
 

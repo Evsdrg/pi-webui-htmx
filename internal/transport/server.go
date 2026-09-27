@@ -60,6 +60,12 @@ var SupportedMethods = []string{
 	"git.status", "git.diff",
 }
 
+// wsReadLimit 是 WS 单帧读取上限。
+// 取图片附件的最大合法体积（8 张 × 12 MiB base64）再加 1 MiB 封套余量，
+// 与 pi.MaxImages / pi.MaxImageDataLen 对齐；两侧不一致就会把合法请求
+// 当成超限帧，表现为「发不出图片且连接断开」。
+const wsReadLimit = pi.MaxImages*pi.MaxImageDataLen + (1 << 20)
+
 // wsTextBudget 是 WS 响应里文本内容的安全预算。
 // 连接层单帧上限是 512 KiB，这里留出 JSON 封套与转义余量；
 // 超出即截断并标记 truncated，绝不把超限帧交给连接层。
@@ -914,7 +920,10 @@ func (s *Server) serveWS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer ws.CloseNow()
-	ws.SetReadLimit(1 << 20)
+	// 读上限必须覆盖命令本身的合法体积，而不是随手给个 1 MiB：
+	// 图片附件按 pi.MaxImages × pi.MaxImageDataLen 计，约 96 MiB。
+	// 旧值 1 MiB 让稍大的图片不仅发不出去，还会因超限直接断开连接（U05）。
+	ws.SetReadLimit(wsReadLimit)
 	ctx, cancel := context.WithCancel(s.manager.Context())
 	defer cancel()
 	c := &connection{server: s, ws: ws, ctx: ctx, cancel: cancel, out: make(chan []byte, 32), subs: map[string]*run.Subscription{}, termSubs: map[string]*terminal.Subscription{}, normal: make(chan struct{}, 8), urgent: make(chan struct{}, 2)}
