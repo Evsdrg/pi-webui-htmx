@@ -14,8 +14,8 @@
 
 | ID | 严重性 | 项目 | 问题与影响 | 主要位置 |
 |---|---|---|---|---|
-| B01 | 高 | Bridge | `config.models.raw` 的递归脱敏未覆盖 `x-api-key`，自定义 provider 头部凭据会返回给客户端。 | `pi-bridge-go/internal/management/config.go` |
-| B02 | 高 | Bridge | Raw -> 原样保存会把模型级 `Authorization` 占位符 `***` 写回 `models.json`，造成配置凭据丢失。 | `pi-bridge-go/internal/management/config.go` |
+| B01 | ✅ 已修 | Bridge | 统一配置遍历器保护所有自定义头部值，并区分 provider/model 身份键与字段名；Raw/Models 共用脱敏。回归覆盖未知头名与特殊 provider 名。 | `internal/management/config_values.go`；`config_safety_test.go` |
+| B02 | ✅ 已修 | Bridge | 秘密按 provider、模型 ID、override 键及大小写无关头部名恢复；重排不串值，不修改调用方对象。无来源/歧义占位符拒绝，明确新值可修复旧坏配置。 | `internal/management/config_values.go`；`config_identity_test.go` |
 | B03 | 高 | Bridge/UI | 前端默认发送 `kind: steer`，桥只接受 `steering`/`followUp`；运行中“插入指令”设置被拒绝。 | `pi-webui-htmx/src/modules/workbench.ts`；`pi-bridge-go/internal/runtime/session_ops.go` |
 | B04 | 高 | Bridge | 两个 WebSocket 连接可并发通过同一 `requestId` 的去重检查，副作用命令可能执行两次。 | `pi-bridge-go/internal/transport/server.go` |
 | B05 | 高 | Bridge | replay 取快照与 subscriber 注册之间发布的事件既不在 replay 中也不在实时订阅中，重连时可能漏事件。 | `pi-bridge-go/internal/transport/server.go`；`internal/transport/tunnel.go` |
@@ -42,7 +42,7 @@
 
 | ID | 严重性 | 项目 | 问题与影响 | 证据/主要位置 |
 |---|---|---|---|---|
-| B17 | 高 | Bridge | provider 查询跟随跨主机重定向，`x-api-key` 自定义头会被带到重定向目标。两台本地 HTTP 测试服务器已复现凭据转发。 | `management/discovery.go`；`redirect-probe.log` |
+| B17 | ✅ 已修 | Bridge | 供应商请求使用拒绝重定向的独立 client；两个本地服务器的回归确认目标不接收凭据。并拒绝超限正文、禁止错误正文回显秘密。 | `management/discovery.go`；`discovery_safety_test.go` |
 | B18 | 高 | Bridge | Git 查询执行仓库配置中的外部命令：`git status` 触发 `core.fsmonitor`，`git diff` 触发 `diff.external`。两个本地标记脚本探针均复现；Pi Web 的 status 路径也调用普通 `git status`，但它的 diff 明确带 `--no-ext-diff`。 | `workspace/git.go`；`pi-web/lib/git-changes.ts`；`git-probe.log`；`git-diff-probe.log` |
 | B19 | 高 | Relay | `--add-user`/`--add-device` 在一次性 CLI 进程的内存 `Users` 表中添加后即退出；服务进程重建 `Users` 时表为空，故刚发出的用户 token 与设备预共享密钥无法认证。重启反例已复现。 | `cmd/pi-relay/main.go`；`internal/relay/users.go`；`relay-probes.log` |
 | B20 | 高 | Relay | `ClaimTTL` 只作为 `expiresInSeconds` 返回，`Registry.Claim` 不检查配对码年龄；未被使用的配对码过期后仍可领取。 | `internal/relay/registry.go`；`internal/relay/server.go` |
@@ -96,9 +96,9 @@
 |---|---|---|---|---|
 | B47 | 高 | Storage | 重启读取轮转回执时按最旧日志优先装载；达到 `MaxEntries` 后跳过较新的 `receipts.1`，去重表缺少近期请求。小型确定性日志夹具已复现。 | `internal/storage/receipts.go`；`receipt-order-probe.log` |
 | B48 | 高 | Runtime | Pi RPC 扩展对话的 `timeout` 到期会在 Pi 内部默认解决并删除其 pending 请求；桥未清理对应 `pendingDialogs`/`waitingInput`，worker 会永久失去空闲回收资格。 | `internal/runtime/manager.go`；`internal/runtime/dialogs.go`；Pi 0.85.1 `dist/modes/rpc/rpc-mode.js` |
-| B49 | 中 | Management | `Config.Models` 仍将 `provider.models` 断言为对象；Pi 真实数组配置含 2 个模型时返回 `modelCount: 0`，也未按该摘要路径做模型数量截断。探针已复现。 | `internal/management/config.go`；`models-summary-probe.log` |
+| B49 | ✅ 已修 | Management | 模型摘要按 Pi 数组计数并对总输出应用限额，稳定排序 provider，保留原始 modelCount 并标记截断；旧对象夹具已改为真实数组。 | `internal/management/config.go`；`config_safety_test.go` |
 | B50 | 中 | Runtime | 同一 worker 的第二次 `Stop` 在 `closing` 后无条件等待 `done`；第一次强停超时但进程仍未退出时，关闭调用者可永久阻塞。 | `internal/runtime/manager.go` |
-| B51 | 中 | Management/Workspace | 文件大小检查后再 `os.ReadFile`；若并发写入使文件在 `Stat` 后增长，实际读取不受检查值限制。影响配置和 workspace 文件/图片的内存上界。 | `internal/management/config.go`；`internal/workspace/files.go` |
+| B51 | ⚠️ 部分修复 | Management/Workspace | 配置读取已限制实际 reader 并检查打开的文件类型；workspace 文件/图片路径仍待修复，不能因配置侧完成就关闭此项。 | `internal/management/config.go`；`internal/workspace/files.go` |
 | B52 | 中 | Sessions | 会话索引 `computeFingerprint`/`fresh` 不接收 context，且目录遍历本身没有目录数上限；取消请求无法中断指纹扫描，海量空目录也不受文件计数上限约束。 | `internal/sessions/index.go` |
 | B53 | 中 | Tunnel | 浏览器帧上限为 1 MiB，relay 再加 `to`/`from` JSON 路由封装后仍受 1 MiB 读限；接近上限的合法本地帧会断开整条隧道。 | `internal/relay/server.go`；`internal/transport/tunnel.go` |
 | B54 | 高 | Product | HTMX `BridgeClient` 固定连当前站点 `/api/v1/ws`，不实现 relay `/client` 登录、设备选择或路由封装；云端 UI 与本地桥的承诺部署链尚未连通。 | `pi-webui-htmx/src/modules/workbench.ts`；`pi-bridge-go/internal/relay/server.go` |
@@ -116,7 +116,7 @@
 | B66 | 高 | Runtime/UI | Go 端所有命令统一由 `Manager.Timeout()`（默认 30 秒）取消；前端虽给 `session.compact` 设 120 秒等待，服务器仍在 30 秒结束调用，长压缩被报告为未知结果。 | `internal/transport/server.go`；`internal/runtime/manager.go`；`pi-webui-htmx/src/modules/bridge.ts` |
 | B67 | 高 | Runtime | 超过 `EventBytes` 的 `extension_ui_request` 在登记 pending dialog 之前直接省略；Pi 仍在等回执，桥也未发 cancelled，扩展可永久等待。 | `internal/runtime/manager.go`；`internal/runtime/dialogs.go` |
 | B68 | 高 | Runtime/Security | Pi 与 PTY 子进程直接继承桥的完整 `os.Environ()`，包括 `PI_BRIDGE_TOKEN`、`PI_BRIDGE_DEVICE_TOKEN`；agent bash、项目扩展或终端命令可读出桥/设备凭据。 | `internal/runtime/manager.go`；`internal/terminal/terminal.go` |
-| B69 | 中 | Management/Security | `models.json.tmp` 是固定路径并用 `os.WriteFile` 跟随 symlink；在 Pi 配置目录预置该链接后，`config.models.write` 会覆写链接目标。隔离目录反例复现。 | `internal/management/config.go`；`models-symlink-probe.log` |
+| B69 | ✅ 已修 | Management/Security | 写入使用随机独占 0600 临时文件、文件 Sync、rename 和目录 Sync；固定路径 symlink 不再被触碰。同步不明返回 outcome_unknown，临时文件统一清理。 | `internal/management/config.go`；`config_safety_test.go` |
 | B70 | 中 | Product | HTMX 有模型配置原始 JSON 编辑和 discover/test，但没有调用已支持的 `config.catalog`；不是 Pi Web 式可视化模型字段编辑器，供应商目录/参数预设未接线。 | `pi-webui-htmx/src/modules/models.ts`；`pi-webui-htmx/src/templates/shell.html`；`pi-webui-htmx/src/types/protocol.ts` |
 | B71 | 中 | Sessions | 已声明的部署限制：桥内单 writer 不能约束另一桥或不合作的外部 Pi CLI。保持独立会话目录；合作锁只约束参与者，不能写成已经防住全部外部写入。这是约束项，不是本轮新回归。 | `internal/runtime/manager.go`；`internal/sessions/store.go`；架构 S03 |
 | B72 | 高 | Sessions | `sessions.search` 把请求的 `limit` 直接覆盖默认 `MaxMatches=100`，没有上限；`limit: 1000000000` 在 250 条夹具上全部返回，恶意大历史匹配可把结果切片撑至内存 OOM。定向探针复现。 | `internal/transport/server.go`；`internal/sessions/search.go`；`search-limit-probe.log` |
@@ -128,7 +128,7 @@
 | B78 | 中 | Relay | `persist()` 在 marshal/write/rename 成功前就清 `dirty`；一次注入写失败后移除故障再重试，设备仍未保存，重启后丢失。确定性故障探针复现。 | `internal/relay/registry.go`；`registry-persist-probe.log` |
 | B79 | 中 | Terminal | `terminal.resize` 只拒绝 0，未复用 `MaxCols`/`MaxRows`；接受最大 uint16 尺寸（65535×65535），超出 `Open` 的 500×200 上限。 | `internal/terminal/terminal.go`；`internal/transport/server.go` |
 | B80 | 低 | Protocol | capabilities 将 `phase` 固定报 `A`，且 `terminals=4`/`terminalIdleSeconds=600` 固定写默认值；CLI 可通过 `--max-terminals`/`--terminal-idle` 覆盖，发现端点会向客户端报错限额。 | `internal/transport/server.go`；`cmd/pi-bridge/main.go` |
-| B81 | 高 | Management | 方案研究补充，源码路径确认：Pi 0.85.1 会将 apiKey/header 中以 `!` 开头的值作为 shell 命令执行；桥的结构写校验没有对应执行型值限制。目标禁止网页新增/修改这类表达式，仅允许保留本机已有值；本轮没有执行命令型凭据探针，不把它计作新的运行复现。 | `internal/management/config.go:validateModelsDocument`；Pi `dist/core/resolve-config-value.js:parseConfigValueReference/executeCommandUncached`；`provider-composer.js` |
+| B81 | ✅ 已修 | Management | 网页新增/修改 apiKey/header 命令表达式被拒绝，只允许按原身份保留本机已有值；Pi 的 `$!` 字面量转义不误判。Go 回归验证拒绝和保留，没有实际执行凭据命令。 | `internal/management/config_values.go`；`config_safety_test.go`；Pi `resolve-config-value.js` |
 | D01 | 中 | Docs | 架构/阶段文档已标 A–E 完成，但 `README.md`、`docs/pi-compatibility.md`、`api/v1/protocol.md` 仍写 A 阶段或云隧道后续；前端 `docs/contract.md`、`docs/components.md` 仍记 Vite 7/旧 vendor 与“无前端测试”，和当前实现不一致。 | 两个项目的 README/docs、protocol 文档 |
 | D02 | ✅ 已配置 | Tests | 两仓独立 GitHub Actions 工作流已配置并固定 action SHA；本地等价命令及 YAML 结构检查通过。`scripts/verify-pair.sh` 强制真实 UI checkout 做跨仓联测；当前没有 Git remote，托管运行待首次接入，不声称已经跑绿。其他审查反例随修复逐项转为正式测试。 | 两仓 `.github/workflows/check.yml`；`scripts/verify-pair.sh`；P0 |
 ## 限额与部署链核对
@@ -167,7 +167,7 @@
 | S01 共用 Executor / durable intent | B04、B15、B30、B31、B47、B58、B66、B74 | 先准入/claim/可靠 intent，再派发；并发同 ID、不同指纹、崩溃与轮转均不重复执行 | ⚠️ 待实现 |
 | S02 原子 replay / Connection | B05、B14、B53、B57、B65、B73、U15、U16 | replay+订阅 fence；连接拥有取消资源；身份更换 epoch；双连接/重连/race 验证 | ⚠️ 待实现 |
 | S03 身份事务 / 进程与删除 | B08、B09、B10、B40、B44、B50、B62、B64、B68、B71、B75、B79 | 先预留后切换，Stop 有界；删除收敛 writer；受监督 cgroup，明确外部 CLI 与同 UID 边界 | ⚠️ 待实现 |
-| S04 配置 schema / 凭据 | B01、B02、B17、B32、B49、B51、B59、B69、B70、B81、U19 | revision/秘密操作/安全写；禁止重定向/新执行表达式；包并发上限；重排、并发保存和故障验证 | ⚠️ 待实现 |
+| S04 配置 schema / 凭据 | B01、B02、B17、B32、B49、B51、B59、B69、B70、B81、U19 | revision/秘密操作/安全写；禁止重定向/新执行表达式；包并发上限；重排、并发保存和故障验证 | ✅ P1 基础秘密/安全写/出站；⚠️ revision、包、UI 等待实施 |
 | S05 共用只读索引 / 扫描预算 | B06、B11、B12、B13、B27、B28、B29、B37、B38、B43、B52、B72、U04、U08 | 文件身份与完整行验证；标题/lazy/tree 复用；替换、50 MiB、深树、超多目录与取消测试 | ⚠️ 待实现 |
 | S06 HTTP 大内容 / 导出 | B07、B33、B45、B76、B77、U05 | 小控制帧+有界资源；上传计算 Pi 编码；只读导出0 worker、临时配额与清理 | ⚠️ 待实现 |
 | S07 UI SessionScope / 意图 | B03、U01、U02、U03、U06、U09、U10、U11、U12、U13、U14、U17、U18、U20、U21 | 目标发起时捕获、响应处理前守卫、并发预留；逐 await 切换、草稿/队列与 rAF 行为验证 | ⚠️ 待实现 |

@@ -21,9 +21,9 @@ func TestModels密钥被打码(t *testing.T) {
 	    "cpa": {
 	      "api": "https://example.com/v1",
 	      "apiKey": "sk-super-secret",
-	      "models": {
-	        "m1": {"name": "模型一", "contextWindow": 200000}
-	      }
+	      "models": [
+	        {"id": "m1", "name": "模型一", "contextWindow": 200000}
+	      ]
 	    }
 	  }
 	}`)
@@ -107,7 +107,7 @@ func TestTrust只读(t *testing.T) {
 
 func Test超长嵌套密钥同样打码(t *testing.T) {
 	dir := t.TempDir()
-	writeConfig(t, dir, "models.json", `{"providers":{"p":{"models":{"m":{"headers":{"Authorization":"Bearer sk-deep"}}}}}}`)
+	writeConfig(t, dir, "models.json", `{"providers":{"p":{"models":[{"id":"m","headers":{"Authorization":"Bearer sk-deep"}}]}}}`)
 	c := NewConfig(dir, DefaultLimits())
 	out, err := c.Models()
 	if err != nil {
@@ -115,8 +115,8 @@ func Test超长嵌套密钥同样打码(t *testing.T) {
 	}
 	providers := out["providers"].(map[string]any)
 	p := providers["p"].(map[string]any)
-	models := p["models"].(map[string]any)
-	m := models["m"].(map[string]any)
+	models := p["models"].([]any)
+	m := models[0].(map[string]any)
 	headers := m["headers"].(map[string]any)
 	if headers["Authorization"] != "***" {
 		t.Fatalf("深层嵌套密钥必须被打码: %v", headers)
@@ -126,14 +126,14 @@ func Test超长嵌套密钥同样打码(t *testing.T) {
 func Test模型数量上限(t *testing.T) {
 	dir := t.TempDir()
 	var b strings.Builder
-	b.WriteString(`{"providers":{"p":{"models":{`)
+	b.WriteString(`{"providers":{"p":{"models":[`)
 	for i := 0; i < 20; i++ {
 		if i > 0 {
 			b.WriteString(",")
 		}
-		b.WriteString(`"m` + string(rune('a'+i)) + `":{"name":"x"}`)
+		b.WriteString(`{"id":"m` + string(rune('a'+i)) + `","name":"x"}`)
 	}
-	b.WriteString(`}}}}`)
+	b.WriteString(`]}}}`)
 	writeConfig(t, dir, "models.json", b.String())
 	limits := DefaultLimits()
 	limits.MaxModels = 5
@@ -143,7 +143,7 @@ func Test模型数量上限(t *testing.T) {
 		t.Fatal(err)
 	}
 	p := out["providers"].(map[string]any)["p"].(map[string]any)
-	if len(p["models"].(map[string]any)) != 5 {
+	if len(p["models"].([]any)) != 5 {
 		t.Fatalf("模型数应受上限约束: %v", p)
 	}
 	if p["truncated"] != true {
@@ -202,25 +202,21 @@ func Test回传占位符不覆写真实密钥(t *testing.T) {
 	}
 }
 
-// Test新provider的占位符按字面量写入 确认还原只针对磁盘上已有的真值，
-// 不会把用户真的想写的 "***" 也吞掉。
-func Test新provider的占位符按字面量写入(t *testing.T) {
+// v1 不能区分“保留”与字面量 ***；无来源时拒绝，避免占位符污染磁盘。
+func Test新provider的占位符拒绝写入(t *testing.T) {
 	dir := t.TempDir()
-	writeConfig(t, dir, "models.json", `{"providers":{"old":{"apiKey":"sk-old"}}}`)
+	const original = `{"providers":{"old":{"apiKey":"sk-old"}}}`
+	writeConfig(t, dir, "models.json", original)
 	c := NewConfig(dir, DefaultLimits())
 	if err := c.WriteModels(map[string]any{"providers": map[string]any{
 		"old": map[string]any{"apiKey": "***"},
 		"new": map[string]any{"apiKey": "***"},
-	}}); err != nil {
-		t.Fatal(err)
+	}}); err == nil {
+		t.Fatal("没有原值的占位符必须被拒绝")
 	}
-	body, _ := os.ReadFile(filepath.Join(dir, "models.json"))
-	if !strings.Contains(string(body), "sk-old") {
-		t.Fatalf("已有密钥未还原: %s", body)
-	}
-	// 新增 provider 没有真值可还原，按用户提交的写。
-	if strings.Count(string(body), `"***"`) != 1 {
-		t.Fatalf("新 provider 的占位符应原样落盘: %s", body)
+	body, err := os.ReadFile(filepath.Join(dir, "models.json"))
+	if err != nil || string(body) != original {
+		t.Fatal("拒绝后原配置必须保持不变")
 	}
 }
 

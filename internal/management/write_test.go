@@ -14,7 +14,7 @@ func readModelsFile(t *testing.T, dir string) map[string]any {
 		t.Fatal(err)
 	}
 	var out map[string]any
-	if json.Unmarshal(b, &out) != nil {
+	if err := json.Unmarshal(b, &out); err != nil {
 		t.Fatal(err)
 	}
 	return out
@@ -35,9 +35,10 @@ func TestWriteModels原子写入(t *testing.T) {
 	if len(providers) != 1 {
 		t.Fatalf("写入内容异常: %v", got)
 	}
-	// 临时文件必须已被替换掉。
-	if _, err := os.Stat(filepath.Join(dir, "models.json.tmp")); !os.IsNotExist(err) {
-		t.Fatal("临时文件应已被替换")
+	// 临时文件必须全部回收，只留下正式配置。
+	entries, err := os.ReadDir(dir)
+	if err != nil || len(entries) != 1 || entries[0].Name() != "models.json" {
+		t.Fatalf("配置写入留下额外文件：%v %v", entries, err)
 	}
 	raw, err := c.Raw()
 	if err != nil {
@@ -99,7 +100,7 @@ func TestWriteModels体积上限(t *testing.T) {
 	dir := t.TempDir()
 	c := NewConfig(dir, Limits{MaxFileBytes: 256, MaxModels: 512})
 	doc := map[string]any{"providers": map[string]any{
-		"p": map[string]any{"models": map[string]any{"m": map[string]any{"name": string(make([]byte, 4096))}}},
+		"p": map[string]any{"models": []any{map[string]any{"id": "m", "name": string(make([]byte, 4096))}}},
 	}}
 	if err := c.WriteModels(doc); err == nil {
 		t.Fatal("超过体积上限必须被拒绝")

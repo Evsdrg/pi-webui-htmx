@@ -65,9 +65,11 @@
 
 ### 配置与秘密
 
-当前 models 配置遵循 Pi 数组 schema，`api` 是协议标识，`baseUrl` 是 URL；raw 试图脱敏，write 尝试以临时文件替换。B01/B02/B49/B69 说明脱敏、恢复、摘要和安全写入仍不完整，**不能承诺原样保存必定保住所有密钥**。
+当前 models 配置遵循 Pi 数组 schema，`api` 是协议标识，`baseUrl` 是 URL。P1 已实现：所有自定义头部值默认脱敏，模型按 ID 恢复秘密，摘要按数组统计并限制总数，随机独占临时文件可靠替换。v1 的 `***` 仅表示保留已有值，无来源或歧义时返回 invalid_params；不能用它表示新的字面量密钥。读取损坏时，只能以明确新值修复，不能猜测秘密。
 
-目标 S04：revision 检查、模型按 id 合并、所有自定义 header 默认保密、明确 keep/replace/remove 秘密操作、独占随机临时文件及可靠写盘。拒绝通过网页新增 Pi 的 `!command` 配置值；本机已有表达式只允许原样保留。discover/test 不执行这类表达式，专用 client 默认拒绝重定向。新增 revision/秘密操作形状须协商或升级协议，不能静默替换当前 v1 raw 响应。
+当前禁止网页新增/修改 Pi 的 `!command` 凭据；原身份的本机表达式可保留，`$!` 是普通转义。discover/test 不解析或执行表达式，专用 client 拒绝重定向；超限正文返回 limit_exceeded，上游错误仅透出 HTTP 状态。现有写锁只协调本 Config 实例，不声称已防止外部 CLI 或旧浏览器草稿覆盖。
+
+目标 S04 尚余：revision 检查、明确 keep/replace/remove 秘密操作及其 UI。新增 revision/秘密操作形状在 v2 配套发布，不能静默替换当前 v1 raw 响应。
 
 ## 4. 事件与恢复
 

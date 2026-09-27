@@ -31,6 +31,29 @@ func DefaultDiscoveryLimits() DiscoveryLimits {
 	}
 }
 
+// providerHTTPClient 不继承 DefaultClient 的 Cookie/重定向策略。
+// 自定义鉴权头不受标准库的跨主机 Authorization 剥离规则保护。
+var providerHTTPClient = &http.Client{
+	CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+}
+
+func normalizeDiscoveryLimits(limits DiscoveryLimits) DiscoveryLimits {
+	defaults := DefaultDiscoveryLimits()
+	if limits.Timeout <= 0 {
+		limits.Timeout = defaults.Timeout
+	}
+	if limits.MaxBytes <= 0 {
+		limits.MaxBytes = defaults.MaxBytes
+	}
+	if limits.MaxModels <= 0 {
+		limits.MaxModels = defaults.MaxModels
+	}
+	if limits.MaxCatalog <= 0 {
+		limits.MaxCatalog = defaults.MaxCatalog
+	}
+	return limits
+}
+
 // DiscoveredModel 是供应商 /models 返回的一条模型。
 type DiscoveredModel struct {
 	ID          string   `json:"id"`
@@ -44,6 +67,7 @@ type DiscoveredModel struct {
 // Discover 向供应商的 /models 端点查询可用模型。
 // URL 构造与 Pi Web 的 buildModelsListUrl 保持一致，保证同一供应商行为相同。
 func (c *Config) Discover(ctx context.Context, baseURL, api, apiKey string, headers map[string]string, limits DiscoveryLimits) ([]DiscoveredModel, error) {
+	limits = normalizeDiscoveryLimits(limits)
 	target, err := buildModelsListURL(baseURL, api)
 	if err != nil {
 		return nil, err
@@ -58,6 +82,7 @@ func (c *Config) Discover(ctx context.Context, baseURL, api, apiKey string, head
 // TestConnection 用一个最小请求验证供应商凭据是否可用。
 // 只发一次极短请求，不产生实质费用。
 func (c *Config) TestConnection(ctx context.Context, baseURL, api, apiKey string, headers map[string]string, limits DiscoveryLimits) (map[string]any, error) {
+	limits = normalizeDiscoveryLimits(limits)
 	target, err := buildModelsListURL(baseURL, api)
 	if err != nil {
 		return nil, err
@@ -80,9 +105,7 @@ func (c *Config) TestConnection(ctx context.Context, baseURL, api, apiKey string
 // Catalog 返回 models.dev 的模型目录，用于「按型号补全参数」。
 // 带超时与体积上限；失败不影响本地编辑。
 func (c *Config) Catalog(ctx context.Context, limits DiscoveryLimits) ([]DiscoveredModel, error) {
-	if limits.Timeout <= 0 {
-		limits = DefaultDiscoveryLimits()
-	}
+	limits = normalizeDiscoveryLimits(limits)
 	body, err := c.fetchJSON(ctx, "https://models.dev/api.json", "", "", nil, limits)
 	if err != nil {
 		return nil, err
@@ -132,15 +155,16 @@ func (c *Config) Catalog(ctx context.Context, limits DiscoveryLimits) ([]Discove
 
 // fetchJSON 发起带鉴权的 GET 并读取有界响应体。
 func (c *Config) fetchJSON(ctx context.Context, target, api, apiKey string, headers map[string]string, limits DiscoveryLimits) ([]byte, error) {
-	if limits.Timeout <= 0 {
-		limits = DefaultDiscoveryLimits()
-	}
+	limits = normalizeDiscoveryLimits(limits)
 	parsed, err := url.Parse(target)
 	if err != nil || parsed.Host == "" {
 		return nil, protocol.E("invalid_params", "目标地址不是合法 URL")
 	}
 	if parsed.Scheme != "https" && parsed.Scheme != "http" {
 		return nil, protocol.E("invalid_params", "只支持 http/https")
+	}
+	if parsed.User != nil || parsed.Fragment != "" {
+		return nil, protocol.E("invalid_params", "地址不能包含用户凭据或片段")
 	}
 	ctx, cancel := context.WithTimeout(ctx, limits.Timeout)
 	defer cancel()
@@ -173,21 +197,21 @@ func (c *Config) fetchJSON(ctx context.Context, target, api, apiKey string, head
 			req.Header.Set("Authorization", "Bearer "+apiKey)
 		}
 	}
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := providerHTTPClient.Do(req)
 	if err != nil {
 		return nil, protocol.E("pi_error", "请求供应商失败")
 	}
 	defer resp.Body.Close()
-	body, err := io.ReadAll(io.LimitReader(resp.Body, limits.MaxBytes))
+	body, err := io.ReadAll(io.LimitReader(resp.Body, limits.MaxBytes+1))
 	if err != nil {
 		return nil, protocol.E("pi_error", "读取响应失败")
 	}
+	if int64(len(body)) > limits.MaxBytes {
+		return nil, protocol.E("limit_exceeded", "供应商响应超过体积上限")
+	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		detail := strings.TrimSpace(string(body))
-		if len(detail) > 200 {
-			detail = detail[:200]
-		}
-		return nil, protocol.E("pi_error", fmt.Sprintf("供应商返回 HTTP %d：%s", resp.StatusCode, detail))
+		// 上游可能回显凭据；错误正文不进入浏览器提示或桥日志。
+		return nil, protocol.E("pi_error", fmt.Sprintf("供应商返回 HTTP %d", resp.StatusCode))
 	}
 	return body, nil
 }
