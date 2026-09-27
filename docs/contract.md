@@ -59,6 +59,8 @@ body 的 data-session-id 是当前显示目标，不得在长异步链中反复�
 
 **已实现：** 思考占位符各自持有 entryId+blockIndex，不再用整轮的单一 AssistantEntryID 代表不同助手条目。搜索命中也能凭 Turn.EntryIDs 找到 user、assistant、tool 所属的回合；从搜索结果进入时只读展示截至命中条目的历史，并提供返回最新入口，发送仍沿会话当前分支继续。
 
+`session.fork` 返回的 `text` 是待编辑的原用户消息，必须预填进新分支草稿；`persisted:false` 表示 Pi 已建立新 ID 但尚未创建 JSONL，此时保留活跃 worker、不请求磁盘历史，并明确提示关闭 worker 的丢失风险。页面刷新时只要 worker 仍在，UI 历史接口的 `204 + X-Session-Unsaved: 1` 让草稿继续可编辑，不能把它当作“会话不存在”。持久化后加载真实历史并移除临时提示；原会话未发送的草稿仍按原会话保存。桥不得伪造 JSONL 来提前持久化。
+
 ## 4. 历史与滚动
 
 当前页按回合对齐，保留稳定回合/entry 标识；字节/条目上限优先于“整轮”。超长回合若需要跨页，目标是稳定 group/segment，而不是无限增加一页或重新折叠已显示节点。

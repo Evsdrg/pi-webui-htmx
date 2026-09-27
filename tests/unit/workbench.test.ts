@@ -17,14 +17,14 @@ let workbench: Workbench;
 let pending: string[];
 let busy: boolean;
 let sequence: number;
-const methods = ['session.start','session.prompt','session.subscribe','session.set_model','sessions.search','worker.list','session.state','session.thinking_levels','session.pending_dialogs','session.ui_response','session.stats','session.set_queue_mode','session.set_auto_compaction','session.set_auto_retry','session.abort_retry','session.export_html','config.models.raw','config.models.write','config.models.discover','config.models.test'];
+const methods = ['session.start','session.prompt','session.fork','session.subscribe','session.set_model','sessions.search','worker.list','session.state','session.thinking_levels','session.pending_dialogs','session.ui_response','session.stats','session.set_queue_mode','session.set_auto_compaction','session.set_auto_retry','session.abort_retry','session.export_html','config.models.raw','config.models.write','config.models.discover','config.models.test'];
 function emit(type: string, extra: Record<string, unknown> = {}) {
  fake.instance!.dispatchEvent(new CustomEvent('message', { detail: { version:1,kind:'event',event:'pi.event',sessionId:'s1',epoch:'test',seq:++sequence,data:{type,...extra} } }));
 }
 function mount() {
  document.body.innerHTML = `<form id=auth-form><input id=bridge-token><button>连接</button></form><dialog id=auth-dialog></dialog><div id=auth-error></div>
  <form id=composer><textarea id=prompt></textarea><div id=attachments hidden></div><p id=composer-drop hidden></p><input id=attach-input type=file><button id=send-button></button><button id=abort-button></button><select id=model-select><option value="">Pi 默认模型</option></select><select id=thinking-select></select></form>
- <div id=history-scope hidden><button type=button data-action=branch-current>返回最新</button></div>
+ <div id=history-scope hidden><button type=button data-action=branch-current>返回最新</button></div><div id=unsaved-branch hidden>会话尚未写盘；首条回复前关闭工作进程会丢失这个临时分支。</div>
  <form id=new-form><input id=cwd-input></form><dialog id=new-dialog></dialog><datalist id=workspace-roots></datalist><input id=session-search>
  <button class=icon-btn data-action=session-menu aria-label=会话操作>···</button><dialog id=session-dialog><input id=session-name><div class=session-action-grid><button data-action=rename>保存名称</button><button data-action=compact>压缩</button><button data-action=clone>克隆</button><button data-action=export>导出</button><button data-action=stop>释放</button><button data-action=delete>删除</button></div>
  <label class=switch><input type=checkbox id=auto-compaction><span>自动压缩</span></label><label class=switch><input type=checkbox id=auto-retry><span>自动重试</span></label>
@@ -331,6 +331,64 @@ describe('新会话首次发送', () => {
     expect(fake.request).toHaveBeenCalledWith('session.prompt', 's-new', { text: '首条消息' }, 30_000);
     expect(document.body.dataset.sessionId).toBe('s-new');
     expect(document.getElementById('connection-notice')?.textContent).not.toContain('未发送');
+  });
+});
+
+describe('从用户消息创建未落盘分支', () => {
+  it('保留 Pi 返回的原消息，临时分支不读取不存在的 JSONL', async () => {
+    fake.request.mockImplementation(async (method: string) => {
+      if (method === 'session.start') return { sessionId: 's1', cwd: '/fixture' };
+      if (method === 'session.fork') return { sessionId: 's-fork', text: '重写 src/main.ts', persisted: false };
+      if (method === 'worker.list') return [{ sessionId: 's-fork', cwd: '/fixture', busy: false }];
+      if (method === 'session.state') return { sessionId: 's-fork', isStreaming: false, model: { provider: 'cpa', id: 'm1', name: '测试模型' } };
+      if (method === 'session.thinking_levels') return ['off'];
+      if (method === 'session.pending_dialogs') return { ids: [] };
+      return {};
+    });
+    const input = document.getElementById('prompt') as HTMLTextAreaElement;
+    input.value = '原会话尚未提交的草稿';
+    await workbench.forkFrom('u1');
+    expect(fake.request).toHaveBeenCalledWith('session.fork', 's1', { entryId: 'u1' }, 30_000);
+    expect(document.body.dataset.sessionId).toBe('s-fork');
+    expect(input.value).toBe('重写 src/main.ts');
+    expect(document.getElementById('unsaved-branch')?.hidden).toBe(false);
+    expect(document.getElementById('unsaved-branch')?.textContent).toContain('尚未写盘');
+    expect(vi.mocked(window.htmx.ajax).mock.calls.some((call) => String(call[1]).includes('/ui/sessions/s-fork/history'))).toBe(false);
+  });
+
+  it('刷新后的活跃未落盘分支收到 204 时不显示会话不存在', () => {
+    workbench.selectSession('s-fork', '/fixture', '分支会话', false);
+    const target = document.getElementById('turns')!;
+    const detail = { target, xhr: {
+      responseURL: `${location.origin}/ui/sessions/s-fork/history`, status: 204,
+      getResponseHeader: (name: string) => name === 'X-Session-Unsaved' ? '1' : null,
+    }, shouldSwap: true };
+    document.dispatchEvent(new CustomEvent('htmx:beforeSwap', { detail }));
+    expect(detail.shouldSwap).toBe(false);
+    expect(document.getElementById('unsaved-branch')?.hidden).toBe(false);
+    expect(document.getElementById('connection-notice')?.textContent).not.toContain('会话不存在');
+    document.dispatchEvent(new CustomEvent('htmx:afterSwap', { detail: {
+      target, xhr: { responseURL: `${location.origin}/ui/sessions/s-fork/history`, status: 200 },
+    } }));
+    expect(document.getElementById('unsaved-branch')?.hidden).toBe(true);
+    expect(workbench.diskSession).toBe(true);
+  });
+
+  it('已有 assistant 的分支仍读取磁盘历史，并预填原消息', async () => {
+    fake.request.mockImplementation(async (method: string) => {
+      if (method === 'session.start') return { sessionId: 's1', cwd: '/fixture' };
+      if (method === 'session.fork') return { sessionId: 's-fork', text: '修改后的原消息', persisted: true };
+      if (method === 'worker.list') return [{ sessionId: 's-fork', cwd: '/fixture', busy: false }];
+      if (method === 'session.state') return { sessionId: 's-fork', isStreaming: false };
+      if (method === 'session.thinking_levels') return ['off'];
+      if (method === 'session.pending_dialogs') return { ids: [] };
+      return {};
+    });
+    await workbench.forkFrom('u2');
+    expect(document.body.dataset.sessionId).toBe('s-fork');
+    expect((document.getElementById('prompt') as HTMLTextAreaElement).value).toBe('修改后的原消息');
+    expect(document.getElementById('unsaved-branch')?.hidden).toBe(true);
+    expect(vi.mocked(window.htmx.ajax).mock.calls.some((call) => String(call[1]).includes('/ui/sessions/s-fork/history'))).toBe(true);
   });
 });
 

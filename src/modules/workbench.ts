@@ -141,6 +141,11 @@ export class Workbench {
         const sameSession = response.pathname === `/ui/sessions/${encodeURIComponent(wanted.sessionId)}/history`;
         const sameEpoch = wanted.epoch === this.scope.epoch && wanted.sessionId === this.scope.current;
         if (!sameSession || !sameEpoch) detail.shouldSwap = false;
+        else if (detail.xhr?.status === 204 && detail.xhr.getResponseHeader('X-Session-Unsaved') === '1') {
+          this.diskSession = false;
+          el('unsaved-branch').hidden = false;
+          detail.shouldSwap = false;
+        }
       }
       if (detail.target?.id === 'ext-dialog-slot' && response.searchParams.get('sessionId') !== this.sessionId) detail.shouldSwap = false;
     }, { signal });
@@ -152,6 +157,7 @@ export class Workbench {
       if (target?.id === 'turns') {
         const url = detail.xhr?.responseURL ? new URL(detail.xhr.responseURL) : undefined;
         if (url && (url.pathname !== `/ui/sessions/${encodeURIComponent(this.sessionId)}/history` || url.searchParams.has('before'))) return;
+        this.diskSession = true; el('unsaved-branch').hidden = true;
         el('history-scope').hidden = !url?.searchParams.has('leafId');
         const marker = target.querySelector<HTMLElement>('[data-history-model-provider]');
         if (marker) {
@@ -299,21 +305,21 @@ export class Workbench {
     this.refreshQueueState(state);
     await this.refreshDialogs();
   }
-  private selectSession(id: string, cwd: string, title: string, push = true, entryId = ''): void {
+  private selectSession(id: string, cwd: string, title: string, push = true, entryId = '', persisted = true): void {
     // 注意：这里刻意不重置 pendingHistory。它记录的是「最近一次发起的历史
     // 请求」的归属，切换会话后代次已变，迟到的旧响应会被 beforeSwap 拒绝；
     // 若在这里改写成当前值，就识别不出「切换前发起、切换后才到达」的响应。
     this.saveCurrentDraft(); const previous = this.sessionId; this.scope.switchTo(id);
     this.searchFocus = entryId ? { sessionId: id, entryId, epoch: this.scope.epoch } : undefined;
     if (previous && this.bridge.connected) void this.request('session.unsubscribe', undefined, previous).catch(() => {});
-    this.sessionId = id; this.subscribed = ''; this.cwd = cwd; this.diskSession = !!id; this.cursor.reset(); this.live.clear();
+    this.sessionId = id; this.subscribed = ''; this.cwd = cwd; this.diskSession = !!id && persisted; this.cursor.reset(); this.live.clear();
     this.currentModel = undefined; this.historicalModel = undefined; this.modelIntent = undefined; this.modelUnavailable = false;
     const modelSelect = el<HTMLSelectElement>('model-select');
     modelSelect.querySelectorAll('option[data-runtime-model]').forEach((option) => option.remove());
     this.renderModel();
     this.statuses.clear(); this.widgets.clear(); this.renderExtensions(); this.commands = [];
     el('turns').replaceChildren(); el('older-slot').replaceChildren(); el('ext-dialog-slot').replaceChildren();
-    el('history-scope').hidden = true;
+    el('history-scope').hidden = true; el('unsaved-branch').hidden = !id || persisted;
     el('welcome').hidden = !!id; el('session-title').textContent = title; el('session-cwd').textContent = cwd || '选择工作目录，开始对话';
     // 发送进行中不覆盖输入框：那条消息还没发出去，切换会话后
     // 用户要能在这里继续重发（U13）。其余情况照常载入目标会话草稿。
@@ -325,7 +331,7 @@ export class Workbench {
     document.body.dataset.sessionId = id; this.setRun('idle'); this.notice(''); closeMobileSidebar();
     if (push) history.pushState(null, '', id ? `/?session=${encodeURIComponent(id)}` : '/');
     this.markSelected(); el('chat-scroll').dataset.resetScroll = 'true';
-    if (id) void this.refreshHistory(entryId);
+    if (id && this.diskSession) void this.refreshHistory(entryId);
     if (this.bridge.connected) void this.reconcile().catch((err) => this.fail(err));
     this.workspace?.setCwd(cwd);
   }
@@ -435,7 +441,11 @@ export class Workbench {
       const result = record(await this.command('session.fork', { entryId }));
       const id = text(result.sessionId);
       if (!id) { this.notify('Pi 没有返回新会话 ID', 'warning'); return; }
-      this.selectSession(id, this.cwd, '分支会话');
+      this.selectSession(id, this.cwd, '分支会话', true, '', result.persisted !== false);
+      const input = el<HTMLTextAreaElement>('prompt');
+      input.value = text(result.text);
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+      input.focus();
       closeDialog('branch-dialog');
     } catch (error) { this.fail(error); }
   }
