@@ -17,6 +17,7 @@ import (
 	"github.com/coder/websocket"
 
 	"pi-bridge-go/internal/protocol"
+	"pi-bridge-go/internal/runtime"
 	"pi-bridge-go/internal/storage"
 	"pi-bridge-go/internal/terminal"
 )
@@ -242,8 +243,11 @@ func (b *blockingSink) send(m protocol.Message) bool {
 	}
 	return true
 }
-func (b *blockingSink) trackTerminal(string, *terminal.Subscription) {}
-func (b *blockingSink) dropTerminal(string)                          {}
+func (b *blockingSink) trackTerminal(string, *terminal.Subscription)      {}
+func (b *blockingSink) dropTerminal(string)                               {}
+func (b *blockingSink) sendRaw([]byte) bool                               { return true }
+func (b *blockingSink) trackSubscription(string, *runtime.Subscription)   {}
+func (b *blockingSink) existingSubscription(string) *runtime.Subscription { return nil }
 func (b *blockingSink) dispatch(context.Context, protocol.Request) (any, error) {
 	b.once.Do(func() { close(b.entered) })
 	<-b.release

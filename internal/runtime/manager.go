@@ -392,6 +392,39 @@ func (w *Worker) Subscribe() (*Subscription, Info, error) {
 	return s, w.infoLocked(), nil
 }
 
+// SubscribeWithReplay 在同一次持锁内完成「取补发快照 + 注册订阅」。
+//
+// 分成 Replay() 再 Subscribe() 两次加锁会留下窗口期：两次锁之间发布的
+// 事件既不在快照里，也不会进入实时订阅，重连后静默丢失（B05）。
+// 合并后要么整体成功（快照 + 已注册），要么整体失败且不留下半套状态。
+//
+// cursor 为空表示普通订阅，不做补发。
+func (w *Worker) SubscribeWithReplay(epoch string, afterSeq uint64, cursor bool) (*Subscription, Info, []events.Item, bool, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.closing {
+		return nil, Info{}, nil, false, protocol.E("worker_exited", "工作进程正在关闭")
+	}
+	var items []events.Item
+	if cursor {
+		if epoch != w.epoch {
+			return nil, Info{}, nil, false, nil
+		}
+		replayed, ok := w.replay.Replay(afterSeq)
+		if !ok {
+			// 补发环已淘汰所需序号：不得注册订阅后让客户端以为能续上。
+			return nil, Info{}, nil, false, nil
+		}
+		items = replayed
+	}
+	if len(w.subs) >= 8 {
+		return nil, Info{}, nil, false, protocol.E("limit_exceeded", "该工作进程的订阅数量已达上限")
+	}
+	s := &Subscription{worker: w, ch: make(chan queuedEvent, w.cfg.SubscriberMessages)}
+	w.subs[s] = struct{}{}
+	return s, w.infoLocked(), items, true, nil
+}
+
 // SubscriberCount 返回当前订阅者数量，供测试与诊断核对配额是否被释放。
 func (w *Worker) SubscriberCount() int {
 	w.mu.Lock()

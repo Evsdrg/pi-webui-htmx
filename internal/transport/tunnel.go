@@ -306,65 +306,7 @@ func (c *virtualConn) dispatch(ctx context.Context, r protocol.Request) (any, er
 }
 
 func (c *virtualConn) subscribe(r protocol.Request) (any, error) {
-	var p struct {
-		Epoch    string  `json:"epoch"`
-		AfterSeq *uint64 `json:"afterSeq"`
-	}
-	if err := protocol.Decode(r.Params, &p); err != nil {
-		return nil, err
-	}
-	w, err := c.bridge.server.manager.Get(r.SessionID)
-	if err != nil {
-		return nil, err
-	}
-	if c.ctx.Err() != nil {
-		return nil, protocol.E("conflict", "连接已关闭")
-	}
-	if p.Epoch != "" || p.AfterSeq != nil {
-		after := uint64(0)
-		if p.AfterSeq != nil {
-			after = *p.AfterSeq
-		}
-		items, ok := w.Replay(p.Epoch, after)
-		if !ok {
-			c.bridge.server.metrics.ReplayMiss()
-			return nil, protocol.E("resync_required", "事件游标已失效，请重新读取持久历史后再订阅")
-		}
-		if len(items) > 0 {
-			c.bridge.server.metrics.ReplayHit()
-		}
-		for _, item := range items {
-			if !c.sendRaw(item.Payload) {
-				return nil, protocol.E("conflict", "连接已关闭")
-			}
-		}
-	}
-	// 重复订阅同一会话必须先关掉旧订阅，否则旧 goroutine 仍占用配额。
-	c.dropSubscription(r.SessionID)
-	sub, info, err := w.Subscribe()
-	if err != nil {
-		return nil, err
-	}
-	c.bridge.mu.Lock()
-	c.subs[r.SessionID] = sub
-	c.bridge.mu.Unlock()
-	c.reply(protocol.Reply(r.RequestID, map[string]any{"subscribed": true, "epoch": info.Epoch, "seq": info.Seq, "replay": true}, nil))
-	go func() {
-		defer sub.Close()
-		for {
-			m, err := sub.Next(c.ctx)
-			if err != nil {
-				if c.ctx.Err() == nil {
-					c.reply(protocol.Message{Version: 1, Kind: "control", SessionID: r.SessionID, Event: "bridge.subscription_closed", Data: map[string]bool{"resyncRequired": true}})
-				}
-				return
-			}
-			if !c.send(m) {
-				return
-			}
-		}
-	}()
-	return noReply{}, nil
+	return c.bridge.server.subscribeWithReplay(c, r)
 }
 
 func (c *virtualConn) unsubscribe(r protocol.Request) (any, error) {
@@ -373,6 +315,20 @@ func (c *virtualConn) unsubscribe(r protocol.Request) (any, error) {
 	}
 	c.dropSubscription(r.SessionID)
 	return map[string]bool{"subscribed": false}, nil
+}
+
+// trackSubscription 实现 connSink。
+func (c *virtualConn) trackSubscription(id string, sub *runtime.Subscription) {
+	c.bridge.mu.Lock()
+	c.subs[id] = sub
+	c.bridge.mu.Unlock()
+}
+
+// existingSubscription 实现 connSink：取回旧订阅供调用方关闭。
+func (c *virtualConn) existingSubscription(id string) *runtime.Subscription {
+	c.bridge.mu.Lock()
+	defer c.bridge.mu.Unlock()
+	return c.subs[id]
 }
 
 // dropSubscription 关闭并移除某个会话的订阅。

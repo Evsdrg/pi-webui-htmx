@@ -976,8 +976,11 @@ func (s *Server) recordReceipt(req protocol.Request, err error) {
 type connSink interface {
 	connContext() context.Context
 	send(m protocol.Message) bool
+	sendRaw(b []byte) bool
 	trackTerminal(id string, sub *terminal.Subscription)
 	dropTerminal(id string)
+	trackSubscription(id string, sub *run.Subscription)
+	existingSubscription(id string) *run.Subscription
 	dispatch(ctx context.Context, r protocol.Request) (any, error)
 }
 
@@ -1641,7 +1644,12 @@ func (s *Server) dispatchCommon(ctx context.Context, r protocol.Request, sink co
 }
 
 // subscribe 处理事件订阅：先做游标补发，再注册有界队列并持续推送。
-func (c *connection) subscribe(ctx context.Context, r protocol.Request) (any, error) {
+// subscribeWithReplay 是订阅命令的共用实现，WebSocket 连接与隧道虚拟连接
+// 都用它，避免两处各写一份补发/确认顺序而后漂移。
+//
+// 关键点：补发快照与订阅注册必须在 worker 内一次持锁完成，否则两次锁之间
+// 发布的事件既不在快照里也不会进入实时订阅，重连后静默丢失（B05）。
+func (s *Server) subscribeWithReplay(c connSink, r protocol.Request) (any, error) {
 	var p struct {
 		Epoch    string  `json:"epoch"`
 		AfterSeq *uint64 `json:"afterSeq"`
@@ -1649,62 +1657,56 @@ func (c *connection) subscribe(ctx context.Context, r protocol.Request) (any, er
 	if err := protocol.Decode(r.Params, &p); err != nil {
 		return nil, err
 	}
-	w, err := c.server.manager.Get(r.SessionID)
+	w, err := s.manager.Get(r.SessionID)
 	if err != nil {
 		return nil, err
 	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.ctx.Err() != nil {
+	if c.connContext().Err() != nil {
 		return nil, protocol.E("conflict", "连接已关闭")
 	}
-	// 带游标订阅时先补发，补不上就明确要求重新同步，不伪造无损恢复。
-	if p.Epoch != "" || p.AfterSeq != nil {
-		after := uint64(0)
-		if p.AfterSeq != nil {
-			after = *p.AfterSeq
-		}
-		items, ok := w.Replay(p.Epoch, after)
-		if !ok {
-			c.server.metrics.ReplayMiss()
-			return nil, protocol.E("resync_required", "事件游标已失效，请重新读取持久历史后再订阅")
-		}
-		if len(items) > 0 {
-			c.server.metrics.ReplayHit()
-		}
-		for _, item := range items {
-			if !c.sendRaw(item.Payload) {
-				return nil, protocol.E("conflict", "连接已关闭")
-			}
-		}
+	cursor := p.Epoch != "" || p.AfterSeq != nil
+	after := uint64(0)
+	if p.AfterSeq != nil {
+		after = *p.AfterSeq
 	}
-	if old := c.subs[r.SessionID]; old != nil {
-		old.Close()
-		delete(c.subs, r.SessionID)
-	}
-	sub, info, err := w.Subscribe()
+	sub, info, items, ok, err := w.SubscribeWithReplay(p.Epoch, after, cursor)
 	if err != nil {
 		return nil, err
 	}
-	c.subs[r.SessionID] = sub
-	// 先入队订阅确认，再允许推送协程投递事件，避免确认晚于首批事件。
+	if !ok {
+		// 补发不了就明确要求重新同步，不伪造无损恢复。
+		s.metrics.ReplayMiss()
+		return nil, protocol.E("resync_required", "事件游标已失效，请重新读取持久历史后再订阅")
+	}
+	if len(items) > 0 {
+		s.metrics.ReplayHit()
+	}
+	// 换订阅前先关掉旧订阅，旧 goroutine 必须退出，否则 worker 配额被占用。
+	if prev := c.existingSubscription(r.SessionID); prev != nil {
+		prev.Close()
+	}
+	c.trackSubscription(r.SessionID, sub)
+	// 先发补发内容，再发订阅确认，最后才允许推送协程投递实时事件。
+	for _, item := range items {
+		if !c.sendRaw(item.Payload) {
+			return nil, protocol.E("conflict", "连接已关闭")
+		}
+	}
 	c.send(protocol.Reply(r.RequestID, map[string]any{"subscribed": true, "epoch": info.Epoch, "seq": info.Seq, "replay": true}, nil))
 	go func() {
 		defer sub.Close()
 		for {
-			m, err := sub.Next(c.ctx)
+			m, err := sub.Next(c.connContext())
 			if err != nil {
-				if c.ctx.Err() == nil {
+				if c.connContext().Err() == nil {
 					c.send(protocol.Message{Version: 1, Kind: "control", SessionID: r.SessionID, Event: "bridge.subscription_closed", Data: map[string]bool{"resyncRequired": true}})
 				}
 				return
 			}
 			// 顺手维护扩展状态快照，供页面刷新后立即显示。
 			// 只处理 setStatus，其余扩展方法不进状态表。
-			if raw, isRaw := m.Data.(json.RawMessage); isRaw {
-				if key, text, ok := parseSetStatus(raw); ok {
-					c.server.extState.update(key, text)
-				}
+			if key, text, ok := parseSetStatus(eventPayload(m)); ok && key != "" {
+				s.extState.update(key, text)
 			}
 			if !c.send(m) {
 				return
@@ -1712,6 +1714,24 @@ func (c *connection) subscribe(ctx context.Context, r protocol.Request) (any, er
 		}
 	}()
 	return noReply{}, nil
+}
+
+func (c *connection) subscribe(ctx context.Context, r protocol.Request) (any, error) {
+	return c.server.subscribeWithReplay(c, r)
+}
+
+// trackSubscription 实现 connSink。
+func (c *connection) trackSubscription(id string, sub *run.Subscription) {
+	c.mu.Lock()
+	c.subs[id] = sub
+	c.mu.Unlock()
+}
+
+// existingSubscription 实现 connSink：取回旧订阅供调用方关闭。
+func (c *connection) existingSubscription(id string) *run.Subscription {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.subs[id]
 }
 
 // unsubscribe 只解除该连接的订阅，不中断任务。

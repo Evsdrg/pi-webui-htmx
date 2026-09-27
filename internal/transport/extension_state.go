@@ -1,6 +1,7 @@
 package transport
 
 import (
+	"encoding/json"
 	"sort"
 	"sync"
 
@@ -83,6 +84,27 @@ func (e *extensionState) evictOldestLocked() {
 	}
 	sort.Strings(keys)
 	delete(e.byKey, keys[0])
+}
+
+// eventPayload 把事件帧的 Data 还原成原始 JSON 字节。
+// 订阅推送协程用它判定是否需要更新扩展状态快照。
+func eventPayload(m protocol.Message) []byte {
+	switch v := m.Data.(type) {
+	case nil:
+		return nil
+	case json.RawMessage:
+		return v
+	case []byte:
+		return v
+	case string:
+		return []byte(v)
+	default:
+		b, err := json.Marshal(v)
+		if err != nil {
+			return nil
+		}
+		return b
+	}
 }
 
 // parseSetStatus 从 Pi 事件里取 setStatus 的 key 与 text。

@@ -18,7 +18,7 @@
 | B02 | ✅ 已修 | Bridge | 秘密按 provider、模型 ID、override 键及大小写无关头部名恢复；重排不串值，不修改调用方对象。无来源/歧义占位符拒绝，明确新值可修复旧坏配置。 | `internal/management/config_values.go`；`config_identity_test.go` |
 | B03 | 高 | Bridge/UI | 前端默认发送 `kind: steer`，桥只接受 `steering`/`followUp`；运行中“插入指令”设置被拒绝。 | `pi-webui-htmx/src/modules/workbench.ts`；`pi-bridge-go/internal/runtime/session_ops.go` |
 | B04 | ✅ 已修 | Bridge | **修复：** 桥级 claim 注册表 + 命令指纹，本地 WS 与隧道虚拟连接共用同一 `admit`。64 并发压测验证只有一个放行；在途登记绝不被淘汰。原问题：`seen` 只在单连接内，两连接可同时执行同一 requestId。 | `internal/transport/claims.go`；`methods_test.go` |
-| B05 | 高 | Bridge | replay 取快照与 subscriber 注册之间发布的事件既不在 replay 中也不在实时订阅中，重连时可能漏事件。 | `pi-bridge-go/internal/transport/server.go`；`internal/transport/tunnel.go` |
+| B05 | ✅ 已修 | Bridge | **修复：** `SubscribeWithReplay` 在单次持锁内完成「取快照 + 注册订阅」，并把 WS 与隧道两条入口的订阅逻辑收敛成一个共用实现。回归断言「快照末序号 == 注册序号」，反例（拆成两次加锁）5/5 稳定失败。 | `internal/runtime/manager.go`；`internal/transport/server.go`；`manager_test.go` |
 | B06 | 高 | Bridge | 大 `get_tree` 的端到端请求后，后续状态返回 `worker_exited`。源码确认桥默认 `MaxFrame=8 MiB`，`Client.read()` 在超限时 fail 并关闭 stdin/stdout；原约 9 MiB 探针只能证明此链路失效，不能归因成 Pi 自身约 9 MiB 限制。 | `internal/runtime/manager.go:Defaults`；`internal/pi/client.go:read`；`internal/runtime/session_ops.go` |
 | B07 | 高 | Bridge/UI | 桥接受 600 KiB 文件读取，但 JSON 响应超过 WS 帧上限并取消连接；常规文件预览会断线。 | `pi-bridge-go/internal/transport/server.go` |
 | B08 | 高 | Bridge | `sessions.delete` 能在 worker 忙时删除活动会话文件，而 Pi writer 仍存活。 | `pi-bridge-go/internal/sessions/delete.go`；`internal/transport/server.go` |
