@@ -197,7 +197,7 @@ func (c *Config) fetchJSON(ctx context.Context, target, api, apiKey string, head
 			req.Header.Set("Authorization", "Bearer "+apiKey)
 		}
 	}
-	resp, err := providerHTTPClient.Do(req)
+	resp, err := c.httpClient.Do(req)
 	if err != nil {
 		return nil, protocol.E("pi_error", "请求供应商失败")
 	}

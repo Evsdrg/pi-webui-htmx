@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"net/http"
 	"os"
 	"path/filepath"
 	"sort"
@@ -25,10 +26,16 @@ func DefaultLimits() Limits { return Limits{8 << 20, 512} }
 
 // Config 管理受控配置；写锁只约束本实例，不能约束外部 CLI。
 type Config struct {
-	agentDir string
-	limits   Limits
-	writeMu  sync.Mutex
+	agentDir     string
+	limits       Limits
+	writeMu      sync.Mutex
+	packageSlots chan struct{}
+	httpClient   *http.Client
+	// registryBaseURL 供测试注入本地 registry；生产固定为 npmjs。
+	registryBaseURL string
 }
+
+const defaultRegistryBaseURL = "https://registry.npmjs.org"
 
 func NewConfig(agentDir string, limits Limits) *Config {
 	if limits.MaxFileBytes <= 0 {
@@ -37,7 +44,7 @@ func NewConfig(agentDir string, limits Limits) *Config {
 	if limits.MaxModels <= 0 {
 		limits.MaxModels = DefaultLimits().MaxModels
 	}
-	return &Config{agentDir: agentDir, limits: limits}
+	return &Config{agentDir: agentDir, limits: limits, packageSlots: make(chan struct{}, maxPackageQueries), httpClient: providerHTTPClient, registryBaseURL: defaultRegistryBaseURL}
 }
 
 // Raw 返回可编辑的脱敏文档。v1 的 *** 只能表示保留已存在的秘密。
@@ -151,7 +158,10 @@ func configReadError(err error) error {
 
 // read 既检查普通文件，也限制实际 reader；Stat 后增长不能绕过字节预算。
 func (c *Config) read(name string) ([]byte, error) {
-	path := filepath.Join(c.agentDir, name)
+	return readConfigFile(filepath.Join(c.agentDir, name), c.limits.MaxFileBytes)
+}
+
+func readConfigFile(path string, maxBytes int64) ([]byte, error) {
 	st, err := os.Stat(path)
 	if err != nil {
 		return nil, err
@@ -159,7 +169,7 @@ func (c *Config) read(name string) ([]byte, error) {
 	if !st.Mode().IsRegular() {
 		return nil, protocol.E("forbidden", "配置不是普通文件")
 	}
-	if st.Size() > c.limits.MaxFileBytes {
+	if st.Size() > maxBytes {
 		return nil, protocol.E("limit_exceeded", "配置文件超过体积上限")
 	}
 	file, err := os.Open(path)
@@ -174,11 +184,11 @@ func (c *Config) read(name string) ([]byte, error) {
 	if !st.Mode().IsRegular() {
 		return nil, protocol.E("forbidden", "配置不是普通文件")
 	}
-	body, err := io.ReadAll(io.LimitReader(file, c.limits.MaxFileBytes+1))
+	body, err := io.ReadAll(io.LimitReader(file, maxBytes+1))
 	if err != nil {
 		return nil, err
 	}
-	if int64(len(body)) > c.limits.MaxFileBytes {
+	if int64(len(body)) > maxBytes {
 		return nil, protocol.E("limit_exceeded", "配置文件超过体积上限")
 	}
 	return body, nil
