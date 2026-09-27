@@ -540,8 +540,13 @@ export class Workbench {
     const steering = document.querySelector<HTMLInputElement>('input[name="queue-kind"][value="steering"]');
     const followUp = document.querySelector<HTMLInputElement>('input[name="queue-kind"][value="followUp"]');
     if (steering && followUp) {
-      const kind = state.steeringMode === 'one-at-a-time' ? 'followUp' : 'steering';
-      (kind === 'steering' ? steering : followUp).checked = true;
+      // 回读必须看 followUpMode：选「完成后追加」时桥调的是 set_follow_up_mode，
+      // 改的是 followUpMode，steeringMode 仍是 all。旧实现读 steeringMode，
+      // 于是用户明明选了 followUp，界面却弹回 steering（U11）。
+      // followUpMode 缺失时（Pi 未回该字段）不猜，保持当前选择。
+      if (state.followUpMode !== undefined) {
+        (state.followUpMode === 'one-at-a-time' ? followUp : steering).checked = true;
+      }
     }
     const compaction = el<HTMLInputElement>('auto-compaction');
     if (state.autoCompactionEnabled !== undefined) compaction.checked = state.autoCompactionEnabled;

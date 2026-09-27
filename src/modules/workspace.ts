@@ -3,7 +3,7 @@ import type { BridgeClient } from './bridge';
 import type { Message } from '@/types/protocol';
 import { mountHighlight, languageFor } from './highlight';
 import { record } from './stream';
-import { el } from './dom';
+import { el, elOrNull } from './dom';
 
 export class Workspace {
   private cwd = '';
@@ -149,7 +149,12 @@ export class Workspace {
     switch (action) {
       case 'files-up': { const parent = '/' + this.path.split('/').filter(Boolean).slice(0, -1).join('/'); await this.list(parent); break; }
       case 'files-refresh': await this.list(this.path || this.cwd); break;
-      case 'file-close': el('file-preview').hidden = true; el('file-content').replaceChildren(); break;
+      case 'file-close':
+        // 图片预览用 <img> 顶掉了 #file-content，此时它已不在 DOM 里；
+        // 直接 replaceChildren 会抛异常，关闭按钮就此失效（U12）。
+        el('file-preview').hidden = true;
+        elOrNull('file-content')?.replaceChildren();
+        break;
       case 'git-refresh': await this.git(); break;
       case 'terminal-open': if (!this.terminal) { const { TerminalView } = await import('./terminal'); this.terminal = new TerminalView(this.bridge, this.onError); } await this.terminal.open(this.cwd); break;
       case 'terminal-close': await this.terminal?.close(); break;

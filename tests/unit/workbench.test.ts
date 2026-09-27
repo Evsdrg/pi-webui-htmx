@@ -348,3 +348,43 @@ describe('附件按会话隔离', () => {
     expect(box.childElementCount).toBe(1);
   });
 });
+
+describe('排队模式回读', () => {
+  // U11：选「完成后追加」时桥调 set_follow_up_mode，改的是 followUpMode；
+  // 旧实现读 steeringMode，界面被弹回「插入指令」。
+  it('followUpMode 为 one-at-a-time 时选中完成后追加', async () => {
+    fake.request.mockImplementation(async (method: string) => {
+      if (method === 'worker.list') return [{ sessionId: 's1', cwd: '/fixture', busy: false }];
+      if (method === 'session.thinking_levels') return ['off', 'high'];
+      if (method === 'session.pending_dialogs') return { ids: [] };
+      if (method === 'session.state') return {
+        sessionId: 's1', isStreaming: false, isCompacting: false, thinkingLevel: 'high',
+        steeringMode: 'all', followUpMode: 'one-at-a-time', autoCompactionEnabled: true,
+      };
+      return {};
+    });
+    await workbench.reconcile();
+    await vi.waitFor(() => {
+      const followUp = document.querySelector<HTMLInputElement>('input[name="queue-kind"][value="followUp"]');
+      expect(followUp?.checked).toBe(true);
+    });
+  });
+
+  it('followUpMode 为 all 时选中插入指令', async () => {
+    fake.request.mockImplementation(async (method: string) => {
+      if (method === 'worker.list') return [{ sessionId: 's1', cwd: '/fixture', busy: false }];
+      if (method === 'session.thinking_levels') return ['off', 'high'];
+      if (method === 'session.pending_dialogs') return { ids: [] };
+      if (method === 'session.state') return {
+        sessionId: 's1', isStreaming: false, isCompacting: false, thinkingLevel: 'high',
+        steeringMode: 'all', followUpMode: 'all', autoCompactionEnabled: true,
+      };
+      return {};
+    });
+    await workbench.reconcile();
+    await vi.waitFor(() => {
+      const steering = document.querySelector<HTMLInputElement>('input[name="queue-kind"][value="steering"]');
+      expect(steering?.checked).toBe(true);
+    });
+  });
+});
