@@ -244,11 +244,15 @@ func (m *Manager) Start(ctx context.Context, id, cwd string) (*Worker, error) {
 		m.metrics.WorkerStarted()
 	}
 	m.mu.Unlock()
+	// 退出清理必须按「当前映射」而不是启动时的 ID：fork/clone/switch 会改键，
+	// 用捕获的旧 ID 判断会让删除永不发生，注册表里留下已停止的 worker（B10）。
 	go func() {
 		<-w.done
 		m.mu.Lock()
-		if m.workers[state.SessionID] == w {
-			delete(m.workers, state.SessionID)
+		for id, cur := range m.workers {
+			if cur == w {
+				delete(m.workers, id)
+			}
 		}
 		m.mu.Unlock()
 	}()

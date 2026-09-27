@@ -367,3 +367,66 @@ func appendTurns(t *testing.T, path, lastParent string, from, to int) {
 		last = a
 	}
 }
+
+// Test原子替换后缓存失效 覆盖 B12：
+// 只靠 (path, size, mtime) 会被「同长度、保留 mtime 的 rename」骗过，
+// 旧索引的叶子 ID 与实际记录不一致。文件身份（dev/ino）能识破它。
+func Test原子替换后缓存失效(t *testing.T) {
+	// 3 轮时叶子是 a2，与「大小相同时仍失效」用同一套夹具。
+	store, id, _ := newBigStore(t, 3)
+	ctx := context.Background()
+	first, err := store.History(ctx, id, "", "", 50)
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := first.LeafID
+	if before != "a2" {
+		t.Fatalf("leaf 应为 a2，实际 %s", before)
+	}
+
+	// 构造一个长度相同但内容不同的文件，并用 rename 原子替换，
+	// 同时把 mtime 拨回原值——这是最坏情况。
+	orig, err := os.ReadFile(sessionFilePath(store, id))
+	if err != nil {
+		t.Fatal(err)
+	}
+	st, err := os.Stat(sessionFilePath(store, id))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 与「大小相同时仍失效」一致的构造：同时改 id 与引用它的 parentId，
+	// 保持两条记录等长，只让叶子判定发生变化。
+	replacement := []byte(strings.Replace(string(orig), `"id":"a2"`, `"id":"z2"`, 1))
+	replacement = []byte(strings.Replace(string(replacement), `"parentId":"a2"`, `"parentId":"z2"`, 1))
+	if len(replacement) != len(orig) {
+		t.Fatalf("替换文件长度不一致：%d != %d", len(replacement), len(orig))
+	}
+	tmp := sessionFilePath(store, id) + ".swap"
+	if err := os.WriteFile(tmp, replacement, 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(tmp, sessionFilePath(store, id)); err != nil {
+		t.Fatal(err)
+	}
+	// 保留原 mtime，只让 size 与身份可能变化。
+	if err := os.Chtimes(sessionFilePath(store, id), st.ModTime(), st.ModTime()); err != nil {
+		t.Fatal(err)
+	}
+
+	after, err := store.History(ctx, id, "", "", 50)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.LeafID == before {
+		t.Fatalf("原子替换后仍命中旧索引：leaf 仍是 %s", before)
+	}
+}
+
+// sessionFilePath 取回会话文件在磁盘上的绝对路径，供测试做原子替换。
+func sessionFilePath(store *Store, id string) string {
+	h, err := store.Find(context.Background(), id)
+	if err != nil {
+		panic(err)
+	}
+	return filepath.Join(store.Dir(), filepath.FromSlash(h.path))
+}

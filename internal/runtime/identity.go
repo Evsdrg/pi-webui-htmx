@@ -92,7 +92,10 @@ func (w *Worker) SwitchSession(ctx context.Context, sessionPath string) (string,
 	if !filepath.IsAbs(clean) {
 		return "", protocol.E("invalid_params", "sessionPath 必须是绝对路径")
 	}
-	id := strings.TrimSuffix(filepath.Base(clean), ".jsonl")
+	// Pi 的标准命名是 timestamp_ID.jsonl，直接取 basename 会带上时间戳前缀，
+	// 之后按 ID 查索引必然失败（B09）。取不到再退回整个 basename，
+	// 兼容桥自己写的 ID.jsonl。
+	id := sessionIDFromFileName(filepath.Base(clean))
 	if !sessions.ValidID(id) {
 		return "", protocol.E("invalid_params", "无法从路径解析会话 ID")
 	}
@@ -211,4 +214,15 @@ func mustFind(ctx context.Context, store *sessions.Store, id string) sessions.He
 		return sessions.Header{}
 	}
 	return h
+}
+
+// sessionIDFromFileName 从会话文件名解析会话 ID。
+// Pi 的标准命名是 <timestamp>_<id>.jsonl（时间戳含 T 与连字符但没有下划线），
+// 因此取下划线后最后一段；没有下划线时整个 basename 就是 ID。
+func sessionIDFromFileName(name string) string {
+	base := strings.TrimSuffix(name, ".jsonl")
+	if at := strings.LastIndexByte(base, '_'); at >= 0 && at+1 < len(base) {
+		return base[at+1:]
+	}
+	return base
 }

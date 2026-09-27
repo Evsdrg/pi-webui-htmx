@@ -85,6 +85,10 @@ func (s *Store) scanFile(ctx context.Context, f *os.File, size int64, id, cwd st
 		if head.Type == "" || head.Type == "session" || !ValidID(head.ID) || !head.HasParent {
 			return nil, "", protocol.E("invalid_history", "完整的历史记录格式错误")
 		}
+		// 快路径没看正文，必须补一次结构校验，否则正文损坏的记录会被静默接受（B13）。
+		if !balancedJSON(b) {
+			return nil, "", protocol.E("invalid_history", "完整的历史记录格式错误")
+		}
 		if _, ok := nodes[head.ID]; ok {
 			return nil, "", protocol.E("invalid_history", "历史条目 ID 重复")
 		}

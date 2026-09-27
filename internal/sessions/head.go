@@ -137,3 +137,43 @@ func unquoteJSON(raw string) string {
 	}
 	return out
 }
+
+// balancedJSON 用括号配平粗校验一条记录是不是结构完整的 JSON 对象。
+//
+// 为什么需要它：快路径只读行首三个字段就停，剩下的大块 message 根本不看。
+// 于是一条「type/id/parentId 齐全、但正文被写坏」的记录会被静默接受——
+// 与「完整损坏行显式报错」的契约不符（B13）。
+//
+// 只统计括号深度，不进字符串内容：成本是 O(n) 的单次扫描、零分配，
+// 与完整 Unmarshal 相比可以忽略。它抓不到「括号配平但值类型错误」，
+// 那类仍由慢路径裁决；这里只堵住「结构不完整」这一大类。
+func balancedJSON(b []byte) bool {
+	depth := 0
+	inString := false
+	escaped := false
+	for _, c := range b {
+		if inString {
+			switch {
+			case escaped:
+				escaped = false
+			case c == '\\':
+				escaped = true
+			case c == '"':
+				inString = false
+			}
+			continue
+		}
+		switch c {
+		case '"':
+			inString = true
+		case '{', '[':
+			depth++
+		case '}', ']':
+			depth--
+			if depth < 0 {
+				return false
+			}
+		}
+	}
+	return depth == 0 && !inString && !escaped
+}

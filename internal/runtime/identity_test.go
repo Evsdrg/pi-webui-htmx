@@ -339,3 +339,58 @@ func writeTestSession(t *testing.T, m *Manager, cwd, id string) {
 		t.Fatal(err)
 	}
 }
+
+// Test会话文件名解析标准命名 覆盖 B09：
+// Pi 的会话文件是 timestamp_ID.jsonl，旧实现直接取 basename，
+// 时间戳前缀会让后续按 ID 的查找必然失败。
+func Test会话文件名解析标准命名(t *testing.T) {
+	cases := map[string]string{
+		"2026-01-02T03-04-05.000Z_sess-1.jsonl": "sess-1",
+		"sess-1.jsonl":                          "sess-1",
+		"2026-01-02T03-04-05.000Z_abc123.jsonl": "abc123",
+		"no-extension":                          "no-extension",
+		// 末尾下划线没有 ID 段：回退整个 basename，随后由 ValidID 拒绝。
+		"2026-01-02T03-04-05.000Z_.jsonl": "2026-01-02T03-04-05.000Z_",
+	}
+	for in, want := range cases {
+		if got := sessionIDFromFileName(in); got != want {
+			t.Errorf("%q -> %q，期望 %q", in, got, want)
+		}
+	}
+}
+
+// Test重绑定后退出仍会清理注册表 覆盖 B10：
+// 退出清理以前按启动时的 sessionId 判断，fork/clone 改键之后
+// 那个键已不在表里，删除永不发生，注册表留下已停止的 worker。
+func Test重绑定后退出仍会清理注册表(t *testing.T) {
+	m, cwd := newTestManager(t, func(c *Config) { c.IdleTimeout = 20 * time.Millisecond })
+	ctx := context.Background()
+	w, err := m.Start(ctx, "", cwd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := w.Info().SessionID
+	if len(m.List()) != 1 {
+		t.Fatalf("启动后应只有一个 worker: %+v", m.List())
+	}
+	// fork 会把 worker 绑到新 ID 上。
+	if _, err := w.Fork(ctx, "a"); err != nil {
+		t.Fatal(err)
+	}
+	after := w.Info().SessionID
+	if after == before {
+		t.Fatal("fork 后身份未变化，测试没有覆盖目标路径")
+	}
+	if _, err := m.Get(after); err != nil {
+		t.Fatalf("fork 后应能按新 ID 取到 worker: %v", err)
+	}
+	// 等它被回收：注册表必须彻底清空，不能留下已停止的条目。
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if len(m.List()) == 0 {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("重绑定后退出仍在注册表留下 worker: %+v", m.List())
+}

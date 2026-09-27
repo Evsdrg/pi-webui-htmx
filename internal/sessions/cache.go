@@ -27,6 +27,10 @@ type scanCache struct {
 	path  string
 	size  int64
 	mtime int64 // UnixNano
+	// dev/ino 是文件身份。原子替换（rename）会换 inode，
+	// 只靠 (path, size, mtime) 会被「同长度、保留 mtime 的替换」骗过（B12）。
+	dev   uint64
+	ino   uint64
 	nodes map[string]node
 	last  string
 	// bytes 是 nodes 的粗略字节估计，用于有界控制与诊断。
@@ -42,12 +46,17 @@ const maxCachedNodes = 100000
 // 100000 条约 4 MB；这里给到 16 MB，留足 map 开销余量。
 const maxCachedBytes = 16 << 20
 
-// get 返回缓存的扫描结果。三项全部匹配才算命中。
+// get 返回缓存的扫描结果。路径、大小、mtime 与文件身份全部匹配才算命中。
 // 命中时返回的 map 归调用方只读，不得修改。
 func (c *scanCache) get(path string, size, mtime int64) (map[string]node, string, bool) {
+	dev, ino, ok := fileIdentity(path)
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.nodes == nil || c.path != path || c.size != size || c.mtime != mtime {
+		return nil, "", false
+	}
+	// 取不到文件身份时不能命中：宁可多扫一次，也不能用旧索引。
+	if !ok || c.dev != dev || c.ino != ino {
 		return nil, "", false
 	}
 	return c.nodes, c.last, true
@@ -59,13 +68,18 @@ func (c *scanCache) put(path string, size, mtime int64, nodes map[string]node, l
 	if len(nodes) > maxCachedNodes {
 		return
 	}
+	dev, ino, ok := fileIdentity(path)
+	if !ok {
+		// 取不到身份就不缓存，避免写入一条无法验证的条目。
+		return
+	}
 	est := len(nodes) * 64 // 粗估：map 桶 + string 头 + 值
 	if est > maxCachedBytes {
 		return
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.path, c.size, c.mtime = path, size, mtime
+	c.path, c.size, c.mtime, c.dev, c.ino = path, size, mtime, dev, ino
 	c.nodes, c.last, c.bytes = nodes, last, est
 }
 

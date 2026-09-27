@@ -258,15 +258,17 @@ func (s *Store) History(ctx context.Context, id, leaf, before string, limit int)
 		return Page{}, protocol.E("limit_exceeded", "历史文件超过体积上限")
 	}
 	// 先查缓存：翻页与切标签时文件不变，可省掉整个解析阶段。
-	// 失效判定见 scanCache 的说明——只认 size 与 mtime 都完全一致。
-	nodes, last, cached := s.scan.get(h.path, st.Size(), st.ModTime().UnixNano())
+	// 失效判定见 scanCache 的说明——size、mtime 与文件身份都要一致。
+	// 文件身份必须用绝对路径取：索引里存的是相对路径。
+	abs := filepath.Join(s.dir, filepath.FromSlash(h.path))
+	nodes, last, cached := s.scan.get(abs, st.Size(), st.ModTime().UnixNano())
 	if !cached {
 		var scanErr error
 		nodes, last, scanErr = s.scanFile(ctx, f, st.Size(), id, h.Cwd)
 		if scanErr != nil {
 			return Page{}, scanErr
 		}
-		s.scan.put(h.path, st.Size(), st.ModTime().UnixNano(), nodes, last)
+		s.scan.put(abs, st.Size(), st.ModTime().UnixNano(), nodes, last)
 	}
 	if leaf == "" {
 		leaf = last

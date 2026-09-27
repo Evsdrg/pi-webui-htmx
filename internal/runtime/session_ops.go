@@ -130,6 +130,9 @@ func (w *Worker) CycleThinkingLevel(ctx context.Context) (string, error) {
 }
 
 // SetQueueMode 设置 steering 或 followUp 的投递模式。
+// kind 的取值与 Pi 的字段名一致（steering/followUp）。曾经前端发 "steer"
+// 而被笼统拒绝，运行中的「插入指令」因此完全不可用（B03）；
+// 这里对已知的旧值给出可操作的提示。
 func (w *Worker) SetQueueMode(ctx context.Context, kind, mode string) error {
 	if mode != "all" && mode != "one-at-a-time" {
 		return protocol.E("invalid_params", "mode 只能是 all 或 one-at-a-time")
@@ -140,6 +143,8 @@ func (w *Worker) SetQueueMode(ctx context.Context, kind, mode string) error {
 		method = "set_steering_mode"
 	case "followUp":
 		method = "set_follow_up_mode"
+	case "steer":
+		return protocol.E("invalid_params", "kind 的取值是 steering 或 followUp，steer 是旧前端的错误值")
 	default:
 		return protocol.E("invalid_params", "kind 只能是 steering 或 followUp")
 	}

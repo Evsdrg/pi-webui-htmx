@@ -195,11 +195,8 @@ func (m *Manager) Open(cwd, shell string, cols, rows uint16) (*Terminal, error) 
 	cmd := exec.Command(resolved)
 	cmd.Dir = cwd
 	cmd.Env = childenv.Filter(append(os.Environ(), "TERM=xterm-256color"))
-	// Setsid + Setctty 让 pty 成为受控终端；Pdeathsig 保证桥异常退出时
-	// 不会留下无人管理的 shell。三者必须一起通过 StartWithAttrs 传入，
-	// 因为 StartWithSize 会把 SysProcAttr 清空。
-	attrs := &syscall.SysProcAttr{Setsid: true, Setctty: true, Pdeathsig: syscall.SIGTERM}
-	ptmx, err := pty.StartWithAttrs(cmd, &pty.Winsize{Cols: cols, Rows: rows}, attrs)
+	// 平台差异（Pdeathsig、进程组语义）收敛在 proc_lin.go / proc_oth.go。
+	ptmx, err := startPTY(cmd, &pty.Winsize{Cols: cols, Rows: rows})
 	if err != nil {
 		return nil, protocol.E("pi_error", "无法启动终端")
 	}
@@ -219,7 +216,7 @@ func (m *Manager) Open(cwd, shell string, cols, rows uint16) (*Terminal, error) 
 		_ = cmd.Wait()
 		t.closed.Store(true)
 		_ = t.ptmx.Close()
-		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+		killGroup(cmd.Process.Pid, syscall.SIGKILL)
 		t.mu.Lock()
 		for s := range t.subs {
 			delete(t.subs, s)
@@ -470,7 +467,7 @@ func (t *Terminal) Done() <-chan struct{} { return t.done }
 func (t *Terminal) Close(force bool) error {
 	if t.closed.Swap(true) {
 		if force && t.cmd.Process != nil {
-			_ = syscall.Kill(-t.cmd.Process.Pid, syscall.SIGKILL)
+			killGroup(t.cmd.Process.Pid, syscall.SIGKILL)
 		}
 		select {
 		case <-t.done:
@@ -486,14 +483,14 @@ func (t *Terminal) Close(force bool) error {
 	case <-time.After(grace):
 	}
 	if t.cmd.Process != nil {
-		_ = syscall.Kill(-t.cmd.Process.Pid, syscall.SIGTERM)
+		killGroup(t.cmd.Process.Pid, syscall.SIGTERM)
 	}
 	select {
 	case <-t.done:
 	case <-time.After(grace):
 	}
 	if t.cmd.Process != nil && force {
-		_ = syscall.Kill(-t.cmd.Process.Pid, syscall.SIGKILL)
+		killGroup(t.cmd.Process.Pid, syscall.SIGKILL)
 	}
 	select {
 	case <-t.done:
