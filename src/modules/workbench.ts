@@ -755,9 +755,11 @@ export class Workbench {
    * 队列让每一批都在上一批落地之后才判断额度。
    */
   private async attach(files: FileList | File[]): Promise<void> {
+    // FileList 在清空选择器或 drop 事件结束后可能立即变空；排队前快照。
+    const batch = Array.from(files);
     const previous = this.attachQueue;
     // 无论上一批成功与否都要释放队列，否则一次失败会永久堵住后续附件。
-    const run = previous.then(() => this.attachBatch(files)).catch((error) => { this.fail(error); });
+    const run = previous.then(() => this.attachBatch(batch)).catch((error) => { this.fail(error); });
     this.attachQueue = run.then(() => undefined, () => undefined);
     return run;
   }

@@ -192,6 +192,36 @@ describe('模型配置编辑器', () => {
   });
 });
 
+describe('附件事件中的 FileList 必须同步快照', () => {
+  const image = () => new File([new Uint8Array([0x89, 0x50, 0x4e, 0x47, 1])], 'fixture.png', { type: 'image/png' });
+  const expiringList = (file: File, alive: () => boolean): FileList => ({
+    get length() { return alive() ? 1 : 0; },
+    item(index: number) { return alive() && index === 0 ? file : null; },
+    *[Symbol.iterator]() { if (alive()) yield file; },
+  }) as FileList;
+
+  it('选择器清空 input 后仍读取选中的文件', async () => {
+    const input = document.getElementById('attach-input') as HTMLInputElement;
+    let alive = true;
+    Object.defineProperty(input, 'files', { configurable: true, value: expiringList(image(), () => alive) });
+    Object.defineProperty(input, 'value', { configurable: true, get: () => '', set: (value: string) => { if (!value) alive = false; } });
+    input.dispatchEvent(new Event('change'));
+    await vi.advanceTimersByTimeAsync(50);
+    await vi.waitFor(() => expect(document.querySelectorAll('#attachments .attachment')).toHaveLength(1));
+    expect(alive).toBe(false);
+  });
+
+  it('drop 事件结束后仍读取拖入的文件', async () => {
+    let alive = true;
+    const event = new Event('drop', { bubbles: true, cancelable: true });
+    Object.defineProperty(event, 'dataTransfer', { value: { files: expiringList(image(), () => alive) } });
+    document.getElementById('composer')!.dispatchEvent(event);
+    alive = false;
+    await vi.advanceTimersByTimeAsync(50);
+    await vi.waitFor(() => expect(document.querySelectorAll('#attachments .attachment')).toHaveLength(1));
+  });
+});
+
 describe('附件随消息发送', () => {
   it('有附件时 prompt 带 images，发送成功后清空', async () => {
     (document.getElementById('prompt') as HTMLTextAreaElement).value = '看这张图';
