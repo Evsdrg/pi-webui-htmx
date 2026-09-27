@@ -48,7 +48,7 @@
 | B20 | ✅ 已修 | Relay | **修复：** `Claim` 校验 `PairingAt` 与 `ClaimTTL`，过期即作废并拒绝；`PairingAt` 仅存内存，重启后未使用码一律失效。 | `internal/relay/registry.go`；`registry_safety_test.go` |
 | B21 | ✅ 已修 | Relay | **修复：** 尝试表先清理过期项再查活跃硬上限（1024），超出即拒绝，不再依赖滚动驱逐兜底。 | `internal/relay/registry.go` |
 | B22 | ✅ 已修 | Relay | **修复：** `persist` 在持锁状态下完成序列化，解锁后只做文件写入；`-race` 竞争探针已验证。 | `internal/relay/registry.go` |
-| B23 | 中 | Relay | `/client` 可为同一 owner 的任意不同 `clientId` 建立 WS，`s.clients` 没有总连接数/每用户上限；公网 relay 可被认证用户用大量连接耗尽 goroutine 与内存。 | `internal/relay/server.go`；`cmd/pi-relay/main.go` |
+| B23 | ✅ 已修 | Relay | **修复：** 每 owner 浏览器连接上限 16，与关闭状态、设备在线在同一段持锁区间内判定；另一设备的连接不受影响。 | `internal/relay/server.go`；`relay_limits_test.go` |
 | B24 | 高 | Tunnel | 设备长期 token 放在 `/tunnel?deviceId=...&token=...` 查询串，容易进入反向代理访问日志；桥也接受明文 `ws://` 到非环回 relay，token 会以明文出网。 | `internal/tunnel/client.go`；`internal/relay/server.go`；`cmd/pi-bridge/main.go` |
 | B25 | ✅ 已修 | Bridge | **修复：** porcelain -z 同时读取分支与状态；空仓库、特殊文件名、重命名回归通过。原问题：合法的 unborn/空 Git 仓库没有 `HEAD`；`GitStatus` 先执行 `rev-parse --abbrev-ref HEAD` 并把失败作为整次查询失败。空仓库本地探针复现。 | `internal/workspace/git.go`；`git-probe.log` |
 | B26 | ✅ 已修 | Bridge | **修复：** NUL 增量读取，2 MiB/50000 条上限，溢出取消整组，缓存传播 truncated；9000 长文件名回归通过。walk/大结果传输仍按 B27/S06 推进。原问题：`files.index` 的 Git 路径用 `cmd.Output()` 完整捕获 `git ls-files`，之后才应用 50000 条上限；超大仓库会先无界分配输出和 `strings.Split` 切片。 | `internal/workspace/index.go` |
@@ -66,7 +66,7 @@
 | B38 | 中 | Bridge | 每次惰性加载 thinking/tool image 都由 `rawEntry` 从 JSONL 文件头逐行扫描到目标条目；History 建好的偏移索引/scan cache 未复用，展开多个旧块会重复扫描长会话。 | `internal/sessions/lazy.go`；`internal/sessions/cache.go` |
 | B39 | ✅ 已修 | Bridge | **修复：** 压缩命中先返回缓存，未命中才读原文；回归用「预热后删除原文件仍可命中」验证。原问题：命中前仍 `os.ReadFile` 并分配完整 JS/CSS。 | `internal/presentation/presentation.go`；`compress_test.go` |
 | B40 | 高 | Runtime | Linux `Pdeathsig=SIGTERM` 只作用于 Pi/terminal 的直接子进程，不会发给整个进程组；桥被 SIGKILL 后，忽略 SIGTERM 的 shell/扩展后代仍存活。带孙进程的 helper 反例已复现。 | `internal/runtime/process_linux.go`；`internal/terminal/terminal.go`；`pdeath-probe.log` |
-| B41 | 中 | Relay | `Server.Close()` 注释称关闭全部连接，但只关闭 tunnels、不遍历 `s.clients`；活动浏览器 WS 在调用 `Close()` 后仍保持打开。定向 WS 测试已复现。 | `internal/relay/server.go`；`relay-close-probe.log` |
+| B41 | ✅ 已修 | Relay | **修复：** `Close()` 遍历 `s.clients` 一并 cancel 并关闭，浏览器不再挂到对端超时。回归断言必须读到「连接已关闭」而非读超时。 | `internal/relay/server.go`；`relay_limits_test.go` |
 | B42 | ✅ 已修 | Bridge | **修复：** 状态设 64 KiB 原始字节及条目双限，预留 JSON/WS 空间，返回完整记录及 truncated，UI 显示截断。精确边界及转义预算回归通过。原问题：`GitStatus` 的 2 MiB stdout 截断被 `gitOutput` 丢弃；10000 个未跟踪文件的探针只返回 9119 条且无 `truncated` 字段，接口静默显示不完整状态。超过 512 KiB 的列表还会超出 WS 响应帧上限。 | `internal/workspace/git.go`；`git-status-limit-probe.log` |
 | B43 | 中 | Bridge | 全文搜索最多遍历 200 个文件、单文件 16 MiB；超大文件会标截断但不计入 `scanned`，因此实际 I/O 可越过文件数预算；`ctx` 只在文件之间检查，单文件扫描期间取消不生效。并发搜索可放大磁盘与 CPU 消耗。 | `internal/sessions/search.go` |
 | B44 | ✅ 已修 | Build | **修复：** 终端平台差异收敛到 `proc_lin.go`/`proc_oth.go`，非 Linux 显式报错。linux/darwin/windows 三平台 `go build` 与 `go vet` 均通过。 | `internal/terminal/{terminal,proc_lin,proc_oth}.go` |

@@ -17,6 +17,11 @@ import (
 	"pi-bridge-go/internal/protocol"
 )
 
+// maxClientsPerOwner 限制单个用户同时持有的浏览器连接数。
+// 多标签页是正常用法，但必须有个上限：公网 relay 上，
+// 一个认证用户就能用大量 clientId 把 goroutine 与内存耗尽（B23）。
+const maxClientsPerOwner = 16
+
 // Server 是云端转发器的 HTTP/WS 入口。
 // 只做鉴权、设备路由与字节搬运，不解析业务协议。
 type Server struct {
@@ -45,11 +50,13 @@ type tunnelConn struct {
 type clientConn struct {
 	deviceID string
 	clientID string
-	ws       *websocket.Conn
-	ctx      context.Context
-	cancel   context.CancelFunc
-	out      chan []byte
-	queued   atomic.Int64
+	// owner 用于按用户统计连接数，防止单令牌耗尽 relay（B23）。
+	owner  string
+	ws     *websocket.Conn
+	ctx    context.Context
+	cancel context.CancelFunc
+	out    chan []byte
+	queued atomic.Int64
 }
 
 // routeFrame 是隧道与浏览器之间的最小路由封装。
@@ -117,10 +124,21 @@ func (s *Server) Close() {
 		conns = append(conns, t)
 	}
 	s.tunnels = map[string]*tunnelConn{}
+	clients := make([]*clientConn, 0, len(s.clients))
+	for _, c := range s.clients {
+		clients = append(clients, c)
+	}
+	s.clients = map[string]*clientConn{}
 	s.mu.Unlock()
 	for _, t := range conns {
 		t.cancel()
 		t.ws.Close(websocket.StatusNormalClosure, "relay shutting down")
+	}
+	// 浏览器连接也必须关闭：只关 tunnels 会让已连接的页面一直挂到对端超时，
+	// graceful shutdown 期间用户看不到任何关闭信号（B41）。
+	for _, c := range clients {
+		c.cancel()
+		c.ws.Close(websocket.StatusNormalClosure, "relay shutting down")
 	}
 }
 
@@ -471,6 +489,8 @@ func (s *Server) handleClient(w http.ResponseWriter, r *http.Request) {
 	}
 	defer ws.CloseNow()
 	ws.SetReadLimit(maxFrame)
+	// 关闭状态、设备在线、每 owner 连接数三项在同一段持锁区间内判定：
+	// 拆成多段既要重复加锁，也会让判定之间出现窗口。
 	s.mu.Lock()
 	if s.closed {
 		s.mu.Unlock()
@@ -481,9 +501,22 @@ func (s *Server) handleClient(w http.ResponseWriter, r *http.Request) {
 		ws.Close(websocket.StatusTryAgainLater, "device offline")
 		return
 	}
+	// 每 owner 连接上限：公网 relay 上，一个认证用户就能用大量
+	// clientId 把 goroutine 与内存耗尽（B23）。
+	perOwner := 0
+	for _, existing := range s.clients {
+		if existing.owner == owner {
+			perOwner++
+		}
+	}
+	if perOwner >= maxClientsPerOwner {
+		s.mu.Unlock()
+		ws.Close(websocket.StatusTryAgainLater, "too many connections")
+		return
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	c := &clientConn{
-		deviceID: deviceID, clientID: clientID, ws: ws, ctx: ctx, cancel: cancel,
+		deviceID: deviceID, clientID: clientID, owner: owner, ws: ws, ctx: ctx, cancel: cancel,
 		out: make(chan []byte, 64),
 	}
 	if old := s.findClientLocked(deviceID, clientID); old != nil {
