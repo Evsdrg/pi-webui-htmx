@@ -1,5 +1,15 @@
 import { describe, expect, it } from 'vitest';
-import { languageFor } from '@/modules/highlight';
+import { languageFor, mountHighlight } from '@/modules/highlight';
+
+describe('代码块键盘可达', () => {
+  it('高亮前就允许聚焦，响应式缩窄后仍能键盘横向滚动', () => {
+    document.body.innerHTML = '<div class="markdown"><pre><code class="language-ts">const longLine = 1;</code></pre></div>';
+    const code = document.querySelector<HTMLElement>('pre code')!;
+    expect(code.tabIndex).toBe(-1);
+    mountHighlight(document);
+    expect(code.tabIndex).toBe(0);
+  });
+});
 
 describe('代码高亮语言推断', () => {
   it('按扩展名映射到 hljs 语言名', () => {

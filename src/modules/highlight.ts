@@ -36,6 +36,8 @@ export function mountHighlight(root: ParentNode = document, language = ""): void
   if (nodes.length === 0) return;
   for (const el of nodes) {
     if (language && !el.className) { el.className = `language-${language}`; el.dataset.language = language; }
+    // 代码高亮样式会让 code 自身成为水平滚动区，窄屏下必须可聚焦。
+    el.tabIndex = 0;
   }
   void import("@/lib/hljs").then(({ highlightElement }) => {
     for (const el of nodes) {

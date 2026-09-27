@@ -192,6 +192,20 @@ describe('模型配置编辑器', () => {
   });
 });
 
+describe('工作区面板的展开状态', () => {
+  it('点面板内部的关闭按钮也会更新页眉控制按钮', async () => {
+    const shell = document.createElement('div'); shell.id = 'workbench'; document.body.append(shell);
+    const toggle = document.createElement('button'); toggle.dataset.action = 'workspace';
+    toggle.setAttribute('aria-controls', 'workspace-panel'); toggle.setAttribute('aria-expanded', 'true');
+    document.body.append(toggle);
+    const panel = document.createElement('aside'); panel.id = 'workspace-panel'; document.body.append(panel);
+    const close = document.createElement('button'); close.dataset.action = 'workspace'; panel.append(close);
+    await workbench.action('workspace', close);
+    expect(panel.hidden).toBe(true);
+    expect(toggle.getAttribute('aria-expanded')).toBe('false');
+  });
+});
+
 describe('中止提示跟随真正的运行状态', () => {
   it('agent_settled 先于 abort 回执时不重新显示等待清理', async () => {
     busy = true; emit('agent_start');

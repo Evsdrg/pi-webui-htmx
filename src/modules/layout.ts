@@ -37,6 +37,11 @@ export function mountLayout(): () => void {
     if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return; event.preventDefault();
     savePreference('sidebar-width', String(setWidth(Number(resize.getAttribute('aria-valuenow')) + (event.key === 'ArrowLeft' ? -10 : 10))));
   }, { signal: abort.signal });
+  const toggle = document.querySelector<HTMLElement>('[aria-controls="sidebar"]');
+  const syncExpanded = () => toggle?.setAttribute('aria-expanded', String(matchMedia('(max-width:760px)').matches
+    ? shell.dataset.mobileSidebar === 'open' : shell.dataset.sidebar !== 'closed'));
+  syncExpanded();
+  window.addEventListener('resize', syncExpanded, { signal: abort.signal });
   document.addEventListener('click', (event) => {
     const button = (event.target as Element).closest<HTMLElement>('[data-action=sidebar],[data-close-dialog]');
     if (!button) return;
@@ -45,7 +50,7 @@ export function mountLayout(): () => void {
       const open = shell.dataset.mobileSidebar !== 'open'; shell.dataset.mobileSidebar = open ? 'open' : 'closed';
       (document.querySelector('.sidebar-backdrop') as HTMLElement).hidden = !open;
     } else shell.dataset.sidebar = shell.dataset.sidebar === 'closed' ? 'open' : 'closed';
-    button.setAttribute('aria-expanded', String(shell.dataset.sidebar !== 'closed'));
+    syncExpanded();
   }, { signal: abort.signal });
   document.addEventListener('keydown', (event) => { if (event.key === 'Escape') closeMobileSidebar(); }, { signal: abort.signal });
   return () => abort.abort();
@@ -53,4 +58,5 @@ export function mountLayout(): () => void {
 export function closeMobileSidebar(): void {
   const shell = document.getElementById('workbench'); if (shell) shell.dataset.mobileSidebar = 'closed';
   const backdrop = document.querySelector<HTMLElement>('.sidebar-backdrop'); if (backdrop) backdrop.hidden = true;
+  if (window.matchMedia?.('(max-width:760px)').matches) document.querySelector<HTMLElement>('[aria-controls="sidebar"]')?.setAttribute('aria-expanded', 'false');
 }

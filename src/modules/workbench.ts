@@ -683,7 +683,7 @@ export class Workbench {
       case 'attach': el<HTMLInputElement>('attach-input').click(); break;
       case 'workspace': {
         const panel = el('workspace-panel'); panel.hidden = !panel.hidden; el('workbench').dataset.rightPanel = panel.hidden ? 'closed' : 'open';
-        button.setAttribute('aria-expanded', String(!panel.hidden));
+        document.querySelector<HTMLElement>('[aria-controls="workspace-panel"]')?.setAttribute('aria-expanded', String(!panel.hidden));
         if (!panel.hidden) { if (!this.workspace) { const { Workspace } = await import('./workspace'); this.workspace = new Workspace(this.bridge, (err) => this.fail(err)); } this.workspace.setCwd(this.cwd); await this.workspace.open(); } break;
       }
     }
