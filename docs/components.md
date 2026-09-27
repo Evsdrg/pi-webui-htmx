@@ -1,148 +1,80 @@
-# 组件选型与理由
+# 组件选型、工具链与资源约束
 
-选型标准只有一条：**这个库在 htmx 的「服务器渲染片段」模型下是否仍然必要。**
-不必要的宁可手写。
+更新：2026-09-27。依赖版本以 `package.json` 和 `pnpm-lock.yaml` 为准。本页纠正旧 vendor/无构建/无测试描述，不升级依赖。[交互契约](contract.md) 区分当前实现与目标修复。
 
----
+## 1. 保留现有技术栈
 
-## 已选
-
-### htmx 2.0.4
-
-核心。声明式地把服务器响应换进 DOM，不需要构建步骤，不需要虚拟 DOM。
-版本锁定在 `src/assets/vendor/` 并在 `ui-manifest.json` 登记。
-
-### marked + DOMPurify
-
-模型输出是 Markdown。htmx 换入的片段里 Markdown 仍是纯文本，
-必须客户端渲染。**DOMPurify 不是可选的**——模型输出与文件内容都不可信，
-`marked` 不过滤 HTML，两者必须配套。
-
-渲染时机：`htmx:afterSwap` 后扫 `.markdown` 节点，未渲染过的才处理。
-
-### highlight.js
-
-代码块高亮。按需调用 `hljs.highlightElement()`，不做全局扫描。
-语言包按需加载，不打包全部 190 种。
-
-### KaTeX + auto-render
-
-公式。同 highlight，懒加载。
-
-### mermaid
-
-图表。**最重的一个**，必须动态 `import()`，只在出现 `.mermaid` 节点时加载。
-首屏不包含它。
-
-### xterm.js + FitAddon
-
-终端。这是唯一「不得不复杂」的组件——PTY 是字节流，没有 HTML 表示。
-数据面走 WS，不走 htmx。
-
-### （不选）diff2html → 服务端渲染
-
-最初打算用 diff2html，实际查看包结构后放弃：3.4.56 起只发 CJS/ESM，
-没有浏览器可用包，而本仓刻意不引入构建步骤。
-
-改为**桥服务端解析 unified diff 并渲染 `diff.html` 片段**。这反而更贴合
-htmx 模型——桥本来就在跑 `git diff`，多一步解析比在浏览器里再加载一个库
-更省，而且 diff 的配色可以复用同一套 CSS 变量。
-
-### ansi_up
-
-bash 输出转 HTML。小，无依赖。
-
----
-
-## vendor 清单
-
-| 文件 | 来源 | 用途 |
+| 组件 | 当前声明版本 | 职责与约束 |
 |---|---|---|
-| `htmx.min.js` | unpkg htmx@2.0.4 | 核心 |
-| `marked.min.js` | unpkg marked@12.0.2 | Markdown |
-| `dompurify.min.js` | unpkg dompurify@3.1.6 | HTML 净化（必需） |
-| `highlight.min.js` | unpkg highlight.js@11.10.0 | 代码高亮 |
-| `katex.min.js` | unpkg katex@0.16.11 | 公式 |
-| `mermaid.min.js` | unpkg mermaid@11.4.1 | 图表（2.5 MB，懒加载） |
-| `xterm.js` / `xterm.css` | unpkg @xterm/xterm@5.5.0 | 终端 |
-| `fitaddon.min.js` | unpkg @xterm/addon-fit@0.10.0 | 终端自适应 |
-| `ansiup.min.js` | unpkg ansi_up@5.2.0 | ANSI 转 HTML |
+| htmx | ^2.0.11 | HTML 片段请求/替换；ESM 由 Vite 构建，入口显式挂 window.htmx |
+| marked + DOMPurify | ^18.0.14 / ^3.4.16 | Markdown 解析后净化；不信任模型输出，不直接插入 marked 原始结果 |
+| highlight.js | ^11.12.0 | 按扩展名/代码标签提示语言，避免自动误判；通过 lib/hljs 控制语言包 |
+| KaTeX | ^0.18.9 | 公式与 auto-render 按需加载 |
+| Mermaid | ^12.0.0 | 通过 Vite 动态 import 构建，图表出现才加载；不以裸包名绕过构建 |
+| xterm + FitAddon | 6.0.0 / 0.11.0 | 有状态 PTY 字节流；动态加载，关闭/断线/dispose 语义分别处理 |
+| ansi_up | ^6.0.6 | ANSI 转义输出；ANSI 内容不再交给 hljs 二次处理 |
+| Tailwind / Vite 插件 | ^4.3.3 | 扫描 Go 模板的工具类，与 CSS 设计令牌配合 |
+| Vite / TypeScript | ^8.3.1 / ^7.0.2 | JS/CSS 代码分割、哈希与严格类型检查；不编译 Go 模板 |
+| Vitest / jsdom | 5.0.2 / 30.1.1 | 真实模块行为测试，补充 Go 模板测试 |
+| pnpm | 11.22.0 | 锁文件安装与脚本入口 |
 
-`src/assets/lib/` 下是我们写的薄封装，负责惰性加载与「只渲染未处理节点」。
-第三方代码一律放 `vendor/` 不做修改，便于核对与升级。
+上表是声明范围，不是“最新版本”报告；可复现安装使用 `pnpm install --frozen-lockfile`。第三方代码由包管理器管理，不直接改 node_modules 或保留另一套 CDN vendor。
 
----
+## 2. 为什么不更换框架
 
-## 刻意不选
+审查暴露的主要根因是目标归属、交换时序、资源生命周期和跨层预算。换 React/Vue、改 SSE 或加入 Redux 都不会自动修复这些问题。保留 HTMX+小型 TypeScript 模块，用共用 SessionScope、请求序号与 disposer 明确管理状态。
 
-| 需求 | 做法 | 理由 |
-|---|---|---|
-| UI 组件库（shadcn/MUI/Radix…） | 手写 + CSS 变量 | 这些库假设 React/Vue 的渲染模型，在 htmx 下只会徒增体积 |
-| 图标库 | 内联 SVG，用哪个写哪个 | 图标库动辄几百 KB，实际用不到二十个 |
-| 状态管理库 | DOM 即状态 | htmx 的模型下引入 Redux/Zustand 是自相矛盾 |
-| i18n 框架 | 两份模板或服务端选语言 | 三句话的需求不需要框架 |
-| 虚拟滚动 | 历史分页 + 整轮渲染 | 已经够用；虚拟滚动与 htmx 的 DOM 替换冲突 |
-| 前端测试框架 | 不用 | 契约由 Go 侧测试守住（模板渲染、转义、数据形状），客户端只做 DOM 粘合 |
+| 选择 | 原因 |
+|---|---|
+| 不引入 UI/状态管理框架 | 模板与模块已能覆盖布局；目前需要的是显式状态所有权 |
+| 继续服务端 diff 渲染 | 桥已有 Git 数据与 Go 模板；避免再下载/维护另一套 diff 渲染器 |
+| 不引 diff2html | 基于职责和包体选择；不是“没有浏览器包/不能构建”的限制，项目已有 Vite |
+| 小型 SVG 图标与 CSS 变量 | 五套主题继续复用，不为按钮引入完整组件体系 |
+| 先分页，不上通用虚拟滚动 | 保留稳定回合/entry 锚点；超长回合仍需有界分段，不能无限扩大页 |
+| i18n 等不先引框架 | 产品范围尚未立项，不能用“刻意不要”替代真实决定 |
 
-### 关于 Vite / pnpm / TypeScript（0.2.0 起已采用）
+“DOM 即全部状态”不再成立：session/draft、用户意图、请求 generation、服务端回执、组件资源都需要小型类型化状态；DOM 只是显示投影。
 
-0.1.0 时判断「不值得」：自己写的代码只有 340 行 / gzip 4 KB，
-引工具链省不下体积。用户的要求是「工具链可以重，最终产物足够轻」，
-目标从「省工具链」变成「保产物」，于是三项都上。
+## 3. 构建和首屏预算
 
-各自解决的真实问题：
-
-| 工具 | 解决的问题 | 无它会怎样 |
-|---|---|---|
-| **pnpm** | 依赖图与锁文件 | `curl` 拉包、手工记版本，升级时无法确认兼容性 |
-| **Vite 7** | 代码分割 + 内容哈希 + 压缩 | 手工拆 chunk 不可能做好；无哈希则不能长期缓存 |
-| **TypeScript** | 协议类型 | `src/types/protocol.ts` 305 行，把桥的 v1 协议、错误码全集、Pi 事件载荷、扩展 UI 通道全部类型化。没有它，`msg.data.assistantMessageEvent.type` 拼错只能运行时发现 |
-| **Tailwind v4** | 与 Pi Web 一致的类名写法 | 手写 CSS 亦可，但迁移 Pi Web 的模板时要逐个翻译类名 |
-
-**代价与约束**（这是关键，不是免费午餐）：
-
-- 构建从零步骤变成一步 `pnpm vite build`
-- 桥的加载逻辑必须读 `dist/.vite/manifest.json` 解析哈希文件名
-- 首屏预算写进 `ui-manifest.json`，`check-contract.mjs` 超预算即失败——
-  否则 TypeScript 的运行时类型助手和 Vite 的默认 chunk 策略会把重库
-  悄悄拖回首屏（本次就实测发生过：静态 import katex/xterm 让首屏
-  从 24 KB 涨到 105 KB）
-- `dist/` 进 `.gitignore`，CI 必须构建后才能部署
-
----
-
-## 首屏体积预算
-
-| 资源 | gzip 后 |
-|---|---:|
-| htmx | ~13 KiB |
-| app.css | ~3 KiB |
-| app.js | ~3 KiB |
-| marked + DOMPurify | ~35 KiB |
-| highlight（核心 + 常用语言） | ~30 KiB |
-| **首屏合计** | **~85 KiB** |
-
-按需加载（不计入首屏）：KaTeX ~25 KiB、mermaid ~300 KiB、xterm ~80 KiB、diff2html ~40 KiB。
-
-对照 Pi Web 首屏 gzip 0.91 MiB / 解码 2.93 MiB——主要是它把
-mermaid + KaTeX + syntax-highlighter + xterm 全打了进去。
-
-我们靠代码分割做到：**首屏 27 KB gzip，其余 2.4 MB 全部惰性。**
-
----
-
-## CSP
-
-因为模板不内联 `<script>`、不内联动态 `style`，可以上较严的策略：
-
-```
-default-src 'self';
-script-src 'self';
-style-src 'self';
-img-src 'self' data:;
-connect-src 'self' ws: wss:;
-font-src 'self';
+```bash
+pnpm install --frozen-lockfile
+pnpm test
+pnpm typecheck
+pnpm build
+pnpm check
 ```
 
-`connect-src` 需要 `ws:`/`wss:` 给流式层。若 UI 由云端托管而桥在本地，
-还要加上云端与本地桥的 origin。
+Vite 处理 JS/CSS；Tailwind 扫描 `src/templates`；Go 在运行时加载模板。桥通过 `dist/.vite/manifest.json` 解析哈希资源。发布时模板、manifest 和 dist 必须是同一构建，重建 UI 后重启桥。
+
+- 当前首屏预算为 **40 KiB gzip**，位于 ui-manifest 的 `build.firstLoadBudgetGzipKB`。
+- 统计入口的全部静态依赖闭包；动态内容库不计入初始入口预算，但在第一次使用时仍真实消耗网络/内存。
+- 2026-09-27 审查基线产物：**36.63 KiB gzip**；这是入口包体，不含 HTML、历史、字体和首次触发的惰性内容。
+- 历史测量“页面+首次数据 brotli 34.9 KB”属于另一构建/资源集合，不能拿来当本次首屏新测量。也不把旧 Pi Web 资源数字当公平的持续性能对照。
+- 不能为通过预算而只改数字；先检查静态依赖误入首屏、重复模块和不必要初始化，再决定范围。本轮不修改 40 KiB 预算。
+
+## 4. 安全与 CSP
+
+当前入口关闭 htmx eval/script 标签执行和 history cache；Go 模板转义、DOMPurify 净化另行负责。构建器看到 htmx 内部 eval 的警告不等于应用已走该路径，也不能因此取消内容净化。
+
+目标 CSP 必须从真实资产/行为验证：同源脚本；blob/data 图片仅用于批准的图片路径；字体同源；连接限制到实际服务来源，不泛放所有 ws/wss。KaTeX、Mermaid、xterm 运行时样式的需要单独核验。**不再把旧文档的一段严格 CSP 当作当前已部署且可用的策略。**
+
+文件预览、Markdown、图表、ANSI 等各用独立处理路径；没有“已经净化就可以忽略 URL/属性/资源权限”的捷径。
+
+## 5. 资源所有权与目标修复
+
+| 资源 | 目标所有者 | 释放时机 |
+|---|---|---|
+| fetch / htmx 读取 | 对应设备/会话视图/配置编辑作用域 + 面板序号 | 所属目标切换/替换时 abort，响应前仍检查归属；切聊天不取消全局配置草稿 |
+| 图片 blob URL | 对应图片/预览组件 | 替换、清理片段、离开会话时 revoke |
+| xterm、ResizeObserver、输入定时器 | TerminalPanel | 确认关闭后 dispose；断线仅禁输入，不谎称服务端已结束 |
+| 附件异步读取/配额 | draft/session | 读前预留，成功转交，取消/失败释放 |
+| live 文本/thinking buffer | 当前订阅 epoch | rAF 批量输出，settled/重同步/切换时释放 |
+
+这些是 S07/S11 的待实现约束；当前 U07/U20/U21 等仍未修。htmx 片段替换也必须触发清理，不能只在整页卸载时释放。
+
+## 6. 测试分层
+
+当前 `tests/unit` 有 11 个文件、72 项基线测试。TypeScript 管类型，Go 管模板/投影，契约脚本管结构与产物，Vitest 管异步/状态/生命周期，真实浏览器管交换/滚动/富内容行为。
+
+新修复优先补：每个 await 点切换目标、beforeOnLoad 阻止旧响应副作用、并发附件预留、保存时继续编辑、深树迭代、组件重复挂载/卸载。基线绿不能替代这些反例；两仓独立 CI 已配置，本地联测通过；托管运行待接入远程，缺少配套 UI 的独立桥测试不算跨仓验收。

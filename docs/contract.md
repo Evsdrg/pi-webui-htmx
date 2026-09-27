@@ -1,359 +1,149 @@
-# UI 包契约
+# UI 包与交互契约
 
-本文件是 `pi-webui-htmx` 与 `pi-bridge-go` 之间唯一的约定。
-两边各自演进，但只要本契约不被破坏就不需要同步改动。
+更新：2026-09-27。本文约定 UI 包/模板/浏览器行为；应用协议归 [Bridge Protocol v1](../../pi-bridge-go/api/v1/protocol.md)。[桥架构 S01–S12](../../pi-bridge-go/docs/architecture.md) 是修复决策，[审查清单](../../pi-bridge-go/docs/code-audit.md) 是未解决问题台账。**本文明确标记的目标约定尚待实现；文档更新不代表当前源码已具备这些保证。**
 
-**核心原则：模板归 UI 仓，桥只提供数据。** 桥不复制一份模板，
-启动时从 `--ui-dir` 加载；目录缺失或校验失败时拒绝启动，而不是带着
-不确定的模板跑。
+## 1. 所有权与实际目录
 
----
-
-## 1. 目录结构
-
-```
-pi-webui-htmx/
-├── ui-manifest.json        # 契约本体，桥启动时读取
-├── package.json            # 仅用于客户端依赖管理，不参与桥的构建
-├── src/
-│   ├── templates/          # 服务器渲染片段（htmx 直接换入 DOM）
-│   │   ├── shell.html      # 应用外壳，唯一完整 HTML 文档
-│   │   ├── sessions.html   # 侧栏会话列表
-│   │   ├── history.html    # 一页历史，整轮渲染
-│   │   ├── models.html     # 模型下拉框
-│   │   ├── packages.html   # 已安装资源清单
-│   │   ├── files.html      # 文件浏览
-│   │   ├── diff.html       # unified diff 的服务端渲染
-│   │   ├── extensions/     # 通用扩展通道三件套
-│   │   │   ├── status.html # setStatus 状态行
-│   │   │   ├── widgets.html# setWidget 小组件
-│   │   │   └── dialog.html # select/confirm/input/editor 对话框
-│   │   └── partials/       # 可复用局部（如 process.html）
-│   ├── assets/
-│   │   ├── app.css
-│   │   ├── app.js          # 流式层，刻意保持小巧
-│   │   ├── vendor/         # 第三方库原样，版本锁定并在 manifest 登记
-│   │   └── lib/            # 我们写的薄封装：惰性加载 vendor，只在需要时注入
-│   └── client/             # 需要模块化的客户端逻辑
-├── dist/                   # 构建产物（带版本号，供云端静态分发）
-└── docs/
-    ├── contract.md         # 本文件
-    └── components.md       # 组件选型与理由
+```text
+ui-manifest.json             UI 包声明
+package.json / pnpm-lock.yaml 依赖与构建入口
+src/entry/app.ts              首屏入口
+src/modules/                 WS、工作台、状态与惰性内容模块
+src/types/                   协议与 htmx 类型
+src/styles/                  Tailwind 入口和设计令牌
+src/lib/                     打包边界辅助
+src/templates/               Go html/template 模板
+  extensions/                通用扩展状态/组件/对话
+  partials/                  共用片段
+dist/.vite/manifest.json     构建生成的资源映射
+dist/assets/                内容哈希资源
+tests/unit/                 Vitest 行为测试
+tests/fixtures/             可控假 Pi
 ```
 
-### 谁拥有什么
+模板、CSS、JS、manifest 归 UI 仓；桥只读加载同一发布版本。旧的 `src/assets/vendor`、`src/client` 布局不再适用。桥没有内嵌 UI 兜底，也不在缺少产物时改走 CDN。
 
-| 资产 | 归属 | 桥能否修改 |
+`--ui-dir` 未配置时桥只提供 API；配置后模板/manifest/产物缺失或不兼容应拒绝加载。资源表在启动时快照，重新 build 后需要重启桥；不要让新 manifest 配旧资源。Vite 只构建 JS/CSS，Go 模板仍由桥渲染，Tailwind 使用 `@source` 扫描模板。
+
+## 2. 模板基本规则
+
+1. shell 是唯一完整 HTML 文档，其他模板只输出片段。
+2. 所有用户内容经过 Go `html/template` 上下文转义，禁止转为 `template.HTML` 绕过检查。Markdown 在浏览器净化后显示。
+3. 交互脚本放 TypeScript 模块；模板禁止内联脚本和 `hx-on` 求值表达式。当前入口已经设置 `allowEval=false`、`allowScriptTags=false`、`historyCacheSize=0`。外部哈希 script 由 shell 引用。
+4. 动态值不写进 style；样式用 class/设计令牌。富内容库的运行时 style 需要另外核实 CSP，不能把模板禁内联等同浏览器完全禁内联样式。
+5. 读取片段用 htmx；发消息、模型设置、终端、扩展回执等可由模块调用 WS。**不要求所有交互必须带 hx-*，也没有当前可用的 HTTP prompt/model 表单约定。**
+6. 包清单只读，不渲染远程安装、更新、卸载入口。无 Magic Context 等插件专属分支。
+
+## 3. 当前模板数据
+
+下表按桥 `internal/presentation/presentation.go` 与 `extensions.go` 核对。字段类型以 Go 源码为准，模板和桥一起做渲染测试，避免维护另一套失真的结构体副本。
+
+| 模板/数据 | 当前字段 |
+|---|---|
+| shell / ShellData | SessionID；JS、CSS 字符串列表 |
+| sessions / SessionsData | Items、Selected、HasMore、NextOffset |
+| SessionRow | ID、Title、Modified、Cwd |
+| history / HistoryData | SessionID、LeafID、Turns、HasMore、OldestEntryID |
+| Turn | ID、UserText、AssistantText、Steps、HasProcess、AssistantEntryID、Thinking |
+| Step | Kind、Detail、EntryID、Images |
+| models / ModelsData | Models、Current；ModelRow 为 ID、Name、Provider |
+| packages / PackagesData | Packages；每行为 Name、Source、Version、Latest、HasUpdate、Disabled、Error |
+| files / FilesData | Root、Entries、Truncated；每行为 Name、Path、IsDir、Size |
+| diff / DiffData | SessionID、Files；DiffFile 为 Path、IsNew、IsDeleted、IsBinary、Lines |
+| DiffLine | Kind、OldNo、NewNo、Text |
+| extStatus / StatusData | Statuses |
+| extWidgets / WidgetsData | Widgets |
+| extDialog / DialogData | ID、SessionID、Method、Title、Message、Options、Placeholder、Prefill |
+
+body 的 data-session-id 是当前显示目标，不得在长异步链中反复读它来决定已发起命令的目标。模型 Current 使用 provider/id。URL 中的参数仍要正确编码，不能因为路径已授权就跳过 URL 编码。
+
+**B11 的目标修改：** 惰性块各自持有 entryId+blockIndex，不能用 Turn.AssistantEntryID 为整轮所有 Thinking 代言。新投影和模板必须配套发布；不是先改模板字段再让旧桥默默给空值。
+
+## 4. 历史与滚动
+
+当前页按回合对齐，保留稳定回合/entry 标识；字节/条目上限优先于“整轮”。超长回合若需要跨页，目标是稳定 group/segment，而不是无限增加一页或重新折叠已显示节点。
+
+- prepend 保留阅读锚点；append 是否跟随由用户原来是否贴底决定；replace 区分切会话与同会话对账。
+- `X-Scroll-Mode` 是提示/诊断，**不再由桥强制决定滚到底部**。
+- 目标锚点为 entryId+视口偏移；图片、公式、代码高亮异步改变高度后补偿。
+- 页大小是原始条目数，不等于可见消息/回合数。磁盘 leafSource 与 live Pi 叶子必须分开显示。
+
+## 5. 会话作用域（目标 S07）
+
+使用轻量 SessionScope，不引入状态管理框架。作用域持有固定 session/draft 身份、generation、AbortController、资源 disposer；新草稿绑定真实 ID 不算另选会话。面板另有 request sequence；设备、连接、工作区和配置编辑使用独立作用域，具体所有权见 [整体规划](../../pi-bridge-go/docs/repair-plan.md)。切聊天不能丢全局配置草稿，同 cwd 切聊天不能误关 PTY；实际换 cwd 仍按当前行为关闭旧 PTY，关闭失败保留 ID 供清理。DOM 是投影，不是已发起操作的唯一事实来源。
+
+### 5.1 命令
+
+- 调用开始即捕获目标、文本、附件、模型/思考选择和队列 destination。ensureWorker 返回创建/恢复的绑定，不从新的 this.sessionId 推导目标。
+- 每个 await 后检查作用域；切换前尚未派发的下一步写命令停止。已经派发的任务继续属于原会话，不能自动改投、取消或重发。
+- 迟到结果可更新原目标的受限状态缓存，但不得改新会话 DOM、清空新草稿/附件。
+- 新会话模型/思考选择作为用户意图单独保留；启动回读默认值不覆盖 dirty 选择。
+
+### 5.2 htmx 与其他读取
+
+1. beforeRequest 把 session generation、面板序号、目标绑定到 xhr。
+2. **beforeOnLoad** 先检查归属，过期则 preventDefault；该钩子早于响应 HX-Trigger/重定向处理。
+3. beforeSwap 再检查目标节点和作用域，包括可能的 OOB 内容；过期不得交换。
+4. 切换时 abort 旧读取作为节流措施，但不能用 abort 代替响应守卫。Promise 完成/afterSwap 再检查已经太晚。
+
+history、branch、fork_messages、gotoLeaf、扩展对话、文件列表/预览、模型列表和搜索都遵循这一规则。补全输入一变就增加 sequence，不等 debounce 才作废旧结果。
+
+### 5.3 草稿、附件和预览
+
+- 草稿与附件按 draft/session 隔离。附件异步读取前预留张数/字节，读取结束核验 scope，失败/取消释放；并发两批不能分别越过全局限制。
+- 目标上传使用受限 HTTP 暂存引用；当前仍是 base64 WS，不能声称已支持超过传输上限的图片。可接受值以桥实际 capabilities 和完整编码预算为准。
+- 模型保存固定 snapshot+revision；保存期间若又编辑，成功回执只更新保存基线，不 reload 覆盖新草稿。revision 冲突必须显示并由用户合并。
+- 预览固定容器承载文本或 img，关闭不依赖已被替换的子节点；blob URL、终端、监听、Observer、timer 都有显式 disposer。
+
+## 6. 队列与状态
+
+| 概念 | 取值/来源 |
+|---|---|
+| 本条消息 destination | steer 或 followUp，由用户选择 |
+| steering 投递模式 | all 或 one-at-a-time，session.set_queue_mode kind=steering |
+| follow-up 投递模式 | all 或 one-at-a-time，kind=followUp |
+| 自动压缩 | Pi get_state 的已知字段 |
+| 自动重试 | 无可靠 Pi 读回；unknown 或当前 worker 本地确认值 |
+
+destination 与 mode 不能互相推导；不因发送一条消息就隐式覆盖队列设置。自动重试不跨会话复用一个 checkbox，不把未勾选当“Pi 确认关闭”。状态区区分连接在线、命令已受理、agent 运行、对话等待与未知结果。
+
+## 7. 事件与流式
+
+- 当前 WS 有 requestId 关联、超时和断线处理；目标按当前连接的订阅确认确定 epoch，旧 epoch/旧 connection 的事件忽略。当前 subscribe 调用方尚未消费确认的身份数据，需显式建立订阅状态后再派发业务事件，必要暂存须有界。
+- 收到 omitted/resync 立即标记 live 缺口并重读持久历史。重放只对保留窗口有效，不能伪造无损恢复。
+- 文本与 thinking 使用有界 buffer+rAF 批量 append；不能每 token 复制完整已有 textContent。
+- message_end 是权威内容；agent_settled 后对账持久投影；不只凭 agent_end 宣告全部结束。
+- 非幂等命令 timeout/outcome_unknown 不自动重发；读取对账与取消是独立用户操作。
+
+## 8. 通用扩展通道
+
+| 类别 | 方法 | 行为 |
 |---|---|---|
-| `src/templates/**` | UI 仓 | ❌ 只读加载 |
-| `dist/**` | UI 仓构建产物 | ❌ 只读服务 |
-| `ui-manifest.json` | UI 仓 | ❌ 只读解析 |
-| `dist/.vite/manifest.json` | Vite 生成 | 桥读它解析哈希文件名 |
-| 会话数据、模型配置、进程 | 桥 | — |
-| 流式协议帧 | 桥定义，UI 消费 | — |
+| 需回执 | select、confirm、input、editor | select/input/editor 回 value；confirm 回 confirmed；取消只回 cancelled |
+| 无需回执 | setStatus、setWidget、notify、setTitle、set_editor_text | 展示/通知，不登记 pending |
+| RPC 不转发/无效 | custom、setFooter、setHeader、终端/编辑器组件等 | 不渲染假能力 |
 
----
+回执使用 session.ui_response 并固定请求所属 session/dialog，不把 value/confirmed/cancelled 一起塞进一个“通用回复”。对话框 data-dialog-id 与 SessionID 都必须正确。
 
-## 2. 模板契约
+目标 S08：状态缓存按 worker/session/epoch/key 隔离；超时/过大/取消都有终态；pending 回复校验或队列失败不能先吃掉对话。切换会话时插件对话仍按固定 worker/transition 应答，不能被身份屏障堵住。stdin 写成功只显示已发送，不能宣称 Pi 已处理。轮询只更新变化的 pending 项，不覆盖正在输入的值。editor 没有声明 timeout 时不擅加短超时。
 
-### 2.1 通用规则
+## 9. 构建、发布与版本
 
-1. **除 `shell.html` 外，所有模板必须渲染片段，不是完整文档。**
-   不输出 `<!DOCTYPE html>`、`<html>`、`<head>`、`<body>`。
-2. **模板必须用 `html/template` 语法**（Go 侧渲染）。
-   所有插值 `{{.X}}` 都会按 HTML 上下文自动转义。
-   **禁止**把任何用户内容标成 `template.HTML`——模型输出、文件内容、
-   会话标题一律按不可信数据处理。
-3. **模板不得内联 `<script>`**。客户端行为放 `src/client/`，
-   通过 `hx-on` 或事件监听接入。这条保证 CSP 可以收紧。
-4. **模板不得内联 `style="..."` 承载动态值**。放 class，样式在 `app.css`。
-5. **每个可交互元素必须带 `hx-*` 属性**，不能依赖客户端 JS 补发请求。
-   流式对话是唯一例外（见 §4）。
+- 当前工具链为 pnpm 11、Vite 8、TypeScript 7、Tailwind 4；精确版本以 package.json/pnpm-lock.yaml 为准。Vitest+jsdom 已使用。
+- 首屏预算当前 40 KiB gzip，按入口静态依赖闭包累计；KaTeX/Mermaid/xterm/Markdown 等按实际导入边界惰性加载。不能只数入口或用总 dist 体积代替首屏。
+- 桥读取 ui-manifest、验证 protocolVersion/requiredMethods，再读取 Vite manifest 解析 JS/CSS。路径按各 manifest 的定义解析，不能把 dist 资产当 src vendor。
+- 没有“内嵌备用模板/CDN 缺库回退”；缺依赖/产物应明确失败。
+- 新增可选字段可以协商；完整修复按整体规划 P6 集中升级 v2，并一起更新 manifest、模板、TS、桥和测试工具。当前代码仍是 v1，没有提前改变版本。requiredFeatures 等协商字段尚未实现；旧标签页遇到版本不符须保留草稿并停止新写操作，不回退旧危险接口。
+- 本地与云端目标共用 HTTP/WS UI，只改变受信 basePath。当前云端 relay UI、上传数据通道、磁盘树/导出尚未交付。
 
-### 2.2 数据契约
-
-桥按下列结构渲染模板。字段名是契约的一部分，重命名属于破坏性变更。
-
-#### `shell.html`
-
-```go
-map[string]string{"SessionID": string}
-```
-
-| 字段 | 含义 |
-|---|---|
-| `SessionID` | 当前会话；空串表示尚未选择 |
-
-外壳必须把 `SessionID` 写进 `body[data-session-id]`，流式层靠它订阅。
-
-#### `sessions.html`
-
-```go
-SessionsData{
-    Items      []SessionRow
-    Selected   string
-    HasMore    bool
-    NextOffset int
-}
-SessionRow{ID, Title, Modified string}
-```
-
-| 字段 | 约束 |
-|---|---|
-| `Items[].ID` | 必须是合法会话 ID，用于拼 `/ui/sessions/{id}/history` |
-| `Items[].Title` | 已由桥做过长度截断，模板直接输出 |
-| `HasMore` | 为真时必须渲染一个 `revealed` 触发的加载哨兵 |
-| `NextOffset` | 哨兵的 `hx-get` 查询参数 |
-
-#### `history.html`
-
-```go
-HistoryData{
-    SessionID      string
-    LeafID         string
-    Turns          []Turn
-    HasMore        bool
-    OldestEntryID  string
-}
-Turn{ID, UserText, AssistantText string; Steps []Step; HasProcess bool}
-Step{Kind, Detail string}
-```
-
-**整轮渲染是硬约束。** 一个片段只含完整回合，`hx-swap="afterbegin"` 或
-`afterend` 插入时位置永远落在轮边界。理由：Pi Web 按单条消息切片，
-往回翻页时会把已在屏幕上的 assistant 重新折进 `ProcessDetailsGroup`，
-视口内容被顶走。整轮渲染从结构上排除这个问题。
-
-`HasProcess` 为真时才渲染 `<details>`，避免空折叠组占位。
-
-#### `models.html`
-
-```go
-ModelsData{Models []ModelRow; Current string}
-ModelRow{ID, Name, Provider string}
-```
-
-`Current` 形如 `provider/id`，用于 `selected` 属性。
-
-#### `packages.html`
-
-```go
-PackagesData{Packages []PackageRow}
-PackageRow{Name, Source, Version, Latest string; HasUpdate, Disabled bool; Error string}
-```
-
-**只读清单。** 模板不得渲染安装、卸载、更新按钮——桥没有实现这些命令。
-
-#### `files.html`
-
-```go
-FilesData{Root string; Entries []FileRow; Truncated bool}
-FileRow{Name, Path string; IsDir bool; Size string}
-```
-
-`Path` 已是桥校验过的绝对路径，模板直接用于 `hx-get`。
-
-#### `diff.html`
-
-```go
-DiffData{SessionID string; Files []DiffFile}
-DiffFile{Path string; IsNew, IsDeleted, IsBinary bool; Lines []DiffLine}
-DiffLine{Kind string; OldNo, NewNo int; Text string}
-```
-
-`Kind` 取 `add`/`del`/`context`/`hunk`，模板据此加 class。
-
-**diff 由服务端渲染，不引 diff2html。** 理由：diff2html 3.4.56 起只发
-CJS/ESM，没有浏览器包，而本仓刻意不引入构建步骤；同时服务端渲染
-更符合「htmx 换入片段」的模型——桥已经在跑 `git diff`，多走一步解析
-比在浏览器里再加载一个库更省。
-
-### 2.2.1 manifest 的路径基准
-
-`ui-manifest.json` 里所有相对路径均相对于 `src/`。
-以 `_` 开头的键是说明，不是模板或资源，校验时跳过。
-
-### 2.3 htmx 属性约定
-
-| 场景 | 属性 |
-|---|---|
-| 侧栏初始加载 | `hx-get="/ui/sessions" hx-trigger="load, every 10s" hx-swap="innerHTML"` |
-| 往上翻历史 | `hx-trigger="revealed" hx-swap="afterend"` |
-| 切换会话 | `hx-get="/ui/sessions/{id}/history" hx-target="#turns" hx-swap="innerHTML"` |
-| 发送消息 | `hx-post="/ui/sessions/{id}/prompt" hx-swap="none"` |
-| 模型切换 | `hx-post="/ui/sessions/{id}/model" hx-swap="none"` |
-
-**滚动位置由桥的响应头控制，不由模板里的 JS 控制。**
-桥在历史响应返回 `X-Scroll-Mode: prepend` 或 `append`，客户端据此决定
-保持离底部距离还是滚到新片段。模板不写滚动逻辑。
-
----
-
-## 3. 通用扩展通道
-
-前端**不得**为任何具体插件写专属代码。全部走这三张模板。
-
-### 3.1 Pi 对外暴露的能力是封闭集合
-
-源码（`dist/modes/rpc/rpc-mode.js` 的 `createExtensionUIContext`）确认：
-
-**需要回执**（阻塞等结果，前端必须回复）：
-
-| method | 请求字段 | 响应字段 |
-|---|---|---|
-| `select` | `title`、`options[]`、`timeout` | `value` 或 `cancelled` |
-| `confirm` | `title`、`message`、`timeout` | `confirmed` 或 `cancelled` |
-| `input` | `title`、`placeholder`、`timeout` | `value` 或 `cancelled` |
-| `editor` | `title`、`prefill` | `value` 或 `cancelled` |
-
-**无需回执**（fire-and-forget，前端只渲染）：
-
-| method | 字段 |
-|---|---|
-| `setStatus` | `statusKey`、`statusText` |
-| `setWidget` | `widgetKey`、`widgetLines[]`、`widgetPlacement` |
-| `notify` | `message`、`notifyType` |
-| `setTitle` | `title` |
-| `set_editor_text` | `text` |
-
-**Pi 明确不往 RPC 转的**（前端不做，也不假装有）：
-
-`setFooter`、`setHeader`、`setWorkingMessage`、`setWorkingVisible`、
-`setWorkingIndicator`、`setHiddenThinkingLabel`、`custom`、
-`onTerminalInput`、`addAutocompleteProvider`、`setEditorComponent`、
-`getEditorComponent`、`pasteToEditor`
-
-### 3.2 状态行合并规则
-
-多个插件的 `setStatus` 按 `statusKey` 去重，同 key 后者覆盖前者。
-渲染顺序按 key 排序，保证同一条状态线在多次渲染间稳定，不跳动。
-
-### 3.3 对话框回执
-
-对话框模板必须带 `data-dialog-id`，提交时调桥命令：
-
-```json
-{"version":1,"kind":"command","requestId":"...","sessionId":"...",
- "method":"session.ui_response",
- "params":{"id":"<dialog-id>","value":"...","confirmed":true,"cancelled":false}}
-```
-
-三者语义互斥：`cancelled` 优先，其次 `confirmed`（confirm 用），
-其余用 `value`（select/input/editor 用）。
-
----
-
-## 4. 流式层：htmx 负责不到的 10%
-
-流式对话**不**用 htmx 每秒替换 HTML。Pi Web 的教训是逐 token 重渲染
-整条消息会丢光标、闪烁。
-
-分工：
+## 10. 验收分工
 
 | 层 | 负责 |
 |---|---|
-| htmx + 服务器片段 | 侧栏、历史、设置、文件、模型、包清单、扩展状态与对话框 |
-| WS + `src/assets/app.js` | 文本增量、运行状态、终端 IO |
+| Go 渲染测试 | 真实模板字段、转义、片段形状、边界 projection |
+| TypeScript/Vitest | 目标捕获、迟到响应、用户意图、队列语义、附件预算、dispose |
+| 契约检查 | manifest、模板结构、产物引用、gzip 预算 |
+| 浏览器 | 真实 htmx 交换顺序、HX 响应副作用、滚动、富内容、移动布局和闭环 |
+| 本地/云模式联测 | 认证、片段、WS、图片、上传/下载、断线恢复一致 |
 
-`app.js` 只做四件事：
-
-1. 连 WS，断线指数退避重连
-2. `session.subscribe`，把 `body[data-session-id]` 带上
-3. 收到 `message_update` 的 `text_delta` 时 `textContent` 追加，**不**重解析已有节点
-4. 收到 `agent_settled` 后触发一次 `#turns` 的 `load`，整轮重取
-
-重取而不是增量拼接，是为了拿到权威的 `message_end` 结果——包括工具调用、
-思考块和最终文本的完整结构。
-
----
-
-## 4.1 构建与加载
-
-工具链：**pnpm + Vite 7 + TypeScript 5 + Tailwind v4**。
-用户明确要求「工具链可以重，最终产物要轻」，因此选了完整栈；
-产物侧由契约强制约束：
-
-- 首屏 gzip 预算写死在 `ui-manifest.json` 的 `build.firstLoadBudgetGzipKB`，
-  校验脚本超预算即失败
-- **首屏体积按入口的静态依赖闭包统计**，不是只算入口文件。只算入口会漏掉
-  被静态引用的子 chunk：实测漏算时 24 KB，算全后 33 KB。
-- 重库（katex / mermaid / xterm）**不得**出现在首屏 chunk 的实现代码里，
-  只允许出现 import 说明字符串
-- 动态分块引用的每个产物都必须存在于 `dist/`，防止用裸包名绕过 Vite
-- 文件名带内容哈希，可长期不可变缓存
-
-**Vite 只处理 JS/CSS，不处理 Go 模板。** 模板由桥在请求时渲染，
-Vite 既不知道也不该知道它们的存在。Tailwind 通过 `@source` 扫描模板目录，
-这样才能产出「模板里用到的类」。
-
-桥的加载顺序：
-
-1. 读 `ui-manifest.json`，校验 `protocolVersion` 与 `requiredMethods`
-2. 读 `dist/.vite/manifest.json`，把逻辑名 `app` 解析成 `app-<hash>.js`
-3. 渲染 `shell.html` 时注入解析后的 `<script>` 与 `<link>`
-4. 其余模板按需渲染
-
-**交互接线不在契约检查范围内。** 契约校验只覆盖模板结构、manifest 与产物；
-「表单真的连到了 `session.ui_response`」「滚动真的保住了视口」这类行为由
-`tests/unit/` 与浏览器实测负责。用正则断言 `session.ui_response` 出现在模板里
-曾经造成过误导：实现已改成 WS 回执，模板里不再有那个字符串，而检查仍然报绿。
-
-## 5. 协议与版本协商
-
-### 5.1 握手
-
-UI 加载时调 `GET /api/v1/capabilities`，校验：
-
-- `version == manifest.protocolVersion`
-- `manifest.requiredMethods` 中每个方法都出现在 `methods` 里
-
-任一不满足，外壳显示不兼容提示，**不**进入半可用状态。
-
-### 5.2 版本字段
-
-| 字段 | 位置 | 变更规则 |
-|---|---|---|
-| `protocolVersion` | `ui-manifest.json` | 桥侧协议破坏性变更时 +1 |
-| `uiVersion` | `ui-manifest.json` | UI 自身演进，桥不校验 |
-| `piBaseline` | `ui-manifest.json` | 声明测试过的 Pi 版本，仅提示 |
-
-### 5.3 兼容矩阵
-
-UI 不得调用 `requiredMethods` 之外的命令做核心流程。
-可以调，但调用前必须先在 `capabilities.methods` 里确认存在，
-否则显示「当前桥不支持」。
-
----
-
-## 6. 加载方式
-
-桥按以下优先级找 UI 包：
-
-1. `--ui-dir` 指定的目录（开发、云端自托管）
-2. 编译期内嵌的副本（`pi-bridge` 独立分发时）
-
-启动时校验：
-
-- `ui-manifest.json` 可解析
-- `templates` 中每个路径都存在
-- `assets` 中 `app.css`、`app.js`、`htmx` 存在（其余可缺，缺的走 CDN 或禁用该特性）
-- `protocolVersion` 与桥一致
-
-任一失败：**拒绝启动**并打印缺什么。不静默降级到半套 UI。
-
----
-
-## 7. 变更规则
-
-| 变更 | 是否需要改桥 |
-|---|---|
-| 改模板内部结构、样式、class 名 | ❌ |
-| 增删模板（同时更新 manifest） | ❌（桥按 manifest 找） |
-| 改 `src/client/`、`src/assets/lib/` | ❌ |
-| 给已有模板**增加**数据字段 | ❌（桥多给，模板不用） |
-| **重命名或删除**数据字段 | ✅ 契约破坏 |
-| 改 `hx-get`/`hx-post` 的 URL | ✅ |
-| 增加对桥命令的依赖 | ✅（要进 `requiredMethods`） |
-| 改 `protocolVersion` | ✅ |
-
-最后一条的含义：**UI 可以随时改样子，但不能单方面改协议。**
+当前 72 项基线通过不意味着新增反例已修。修复必须把审查反例转为正式测试；不得以字符串正则代替行为接线验证。
