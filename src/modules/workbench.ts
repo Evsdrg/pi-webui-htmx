@@ -9,6 +9,7 @@ import { SessionScope } from './scope';
 import type { Scope } from './scope';
 
 const DIALOGS = new Set(['select','confirm','input','editor']);
+const ABORT_PENDING_NOTICE = '已请求中止，等待 Pi 完成清理。';
 interface State { sessionId: string; sessionName?: string; isStreaming: boolean; isCompacting: boolean; thinkingLevel?: string; model?: { id: string; provider: string; name: string } | null; pendingMessageCount?: number; steeringMode?: string; followUpMode?: string; autoCompactionEnabled?: boolean }
 type ModelChoice = { provider: string; id: string; name: string };
 
@@ -412,6 +413,7 @@ export class Workbench {
   }
   private async settled(): Promise<void> {
     this.setRun('idle'); this.live.finish(); this.diskSession = true;
+    if (el('connection-notice').textContent === ABORT_PENDING_NOTICE) this.notice('');
     const id = this.sessionId;
     await this.refreshHistory();
     if (id !== this.sessionId) return;
@@ -655,7 +657,10 @@ export class Workbench {
         if (this.sessionId) await this.refreshState();
         break;
       }
-      case 'abort': await this.request('session.abort'); this.notice('已请求中止，等待 Pi 完成清理。'); break;
+      case 'abort':
+        await this.request('session.abort');
+        if (this.run !== 'idle') this.notice(ABORT_PENDING_NOTICE);
+        break;
       case 'rename': await this.command('session.set_name', { name: el<HTMLInputElement>('session-name').value }); el('session-title').textContent = el<HTMLInputElement>('session-name').value; this.refreshSessions(); break;
       case 'compact': this.setRun('compacting'); try { await this.command('session.compact'); await this.refreshHistory(); } finally { await this.reconcile(); } break;
       case 'clone': { const result = await this.command<{sessionId:string}>('session.clone'); this.selectSession(result.sessionId, this.cwd, '克隆会话'); this.refreshSessions(); break; }

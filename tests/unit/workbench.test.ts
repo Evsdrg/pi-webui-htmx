@@ -17,7 +17,7 @@ let workbench: Workbench;
 let pending: string[];
 let busy: boolean;
 let sequence: number;
-const methods = ['session.start','session.prompt','session.fork','session.subscribe','session.set_model','sessions.search','worker.list','session.state','session.thinking_levels','session.pending_dialogs','session.ui_response','session.stats','session.set_queue_mode','session.set_auto_compaction','session.set_auto_retry','session.abort_retry','session.export_html','config.models.raw','config.models.write','config.models.discover','config.models.test'];
+const methods = ['session.start','session.prompt','session.abort','session.fork','session.subscribe','session.set_model','sessions.search','worker.list','session.state','session.thinking_levels','session.pending_dialogs','session.ui_response','session.stats','session.set_queue_mode','session.set_auto_compaction','session.set_auto_retry','session.abort_retry','session.export_html','config.models.raw','config.models.write','config.models.discover','config.models.test'];
 function emit(type: string, extra: Record<string, unknown> = {}) {
  fake.instance!.dispatchEvent(new CustomEvent('message', { detail: { version:1,kind:'event',event:'pi.event',sessionId:'s1',epoch:'test',seq:++sequence,data:{type,...extra} } }));
 }
@@ -189,6 +189,29 @@ describe('模型配置编辑器', () => {
     await (workbench as unknown as { action(a: string, b: HTMLElement): Promise<void> }).action('models-discover', document.createElement('button'));
     await vi.waitFor(() => expect(document.getElementById('discover-result').textContent).toContain('GPT X'));
     expect(document.getElementById('discover-result').querySelector('script')).toBeNull();
+  });
+});
+
+describe('中止提示跟随真正的运行状态', () => {
+  it('agent_settled 先于 abort 回执时不重新显示等待清理', async () => {
+    busy = true; emit('agent_start');
+    fake.request.mockImplementation(async (method: string) => {
+      if (method === 'session.abort') { busy = false; emit('agent_settled'); return {}; }
+      if (method === 'session.stats') return {};
+      return {};
+    });
+    await workbench.action('abort', document.createElement('button'));
+    expect(document.getElementById('session-state')?.textContent).toBe('就绪');
+    expect(document.getElementById('connection-notice')?.textContent).not.toContain('等待 Pi 完成清理');
+  });
+
+  it('abort 回执先到时显示等待，agent_settled 后撤掉提示', async () => {
+    busy = true; emit('agent_start');
+    await workbench.action('abort', document.createElement('button'));
+    expect(document.getElementById('connection-notice')?.textContent).toContain('等待 Pi 完成清理');
+    busy = false; emit('agent_settled');
+    expect(document.getElementById('session-state')?.textContent).toBe('就绪');
+    expect(document.getElementById('connection-notice')?.textContent).not.toContain('等待 Pi 完成清理');
   });
 });
 
