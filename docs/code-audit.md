@@ -24,7 +24,7 @@
 | B08 | ✅ 已修 | Bridge | **修复：** 删除前先 `StopSession` 停掉该会话 worker，失败时非 force 明确拒绝、force 下仍尽力再停；结果带 `stoppedWorker`。原问题：worker 忙时也能删文件，Pi writer 仍存活。 | `internal/runtime/manager.go`；`internal/transport/server.go` |
 | B09 | ✅ 已修 | Bridge | **修复：** 新增 `sessionIDFromFileName`，取下划线后最后一段，无下划线时退回整个 basename。回归覆盖标准命名、裸 ID、无扩展名与畸形尾段。 | `internal/runtime/identity.go`；`identity_test.go` |
 | B10 | ✅ 已修 | Runtime | **修复：** 退出清理改为按「当前映射」删除，不再用启动时捕获的 sessionId。回归验证 fork 后回收时注册表彻底清空；反例下 `forked-fake-session` 永久残留。 | `internal/runtime/manager.go`；`identity_test.go` |
-| B11 | 中 | Bridge/UI | 多个 assistant entry 的 thinking 占位符关联错 entry：较早思考块不可取回，后续块可能重复出现。 | `pi-bridge-go/internal/presentation/` |
+| B11 | ✅ 已修 | Bridge/UI | **修复：** `Turn.Thinking` 改为 `[]ThinkingBlock`（自带 entry ID + 块下标），不再用回合级单一 `AssistantEntryID` 配合并下标。回归覆盖同回合多 assistant、孤儿 assistant 与无思考块三种形态。 | `internal/presentation/presentation.go`；`pi-webui-htmx/src/templates/history.html` |
 | B12 | ✅ 已修 | Sessions | **修复：** 缓存键加入文件身份（dev+ino，平台适配）；取不到身份时一律不命中、也不写入。回归用 rename + 保留 mtime + 等长替换复现原缺陷。 | `internal/sessions/cache.go`；`identity_lin.go`；`cache_test.go` |
 | B13 | ✅ 已修 | Sessions | **修复：** 快路径补 `balancedJSON` 结构配平校验（O(n)、零分配），覆盖未被本页选中的损坏记录；反向用例确认含转义引号与嵌套括号的合法记录不误伤。 | `internal/sessions/head.go`；`scan.go`；`scan_test.go` |
 | B14 | ✅ 已修 | Tunnel | **修复：** subs 改为保存真实订阅句柄，退订与重复订阅都先 Close 旧订阅。回归做 12 轮订阅/退订后核对 worker 订阅数归零（反例下为 8，即上限）。 | `internal/transport/tunnel.go`；`tunnel_test.go` |

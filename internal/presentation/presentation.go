@@ -471,10 +471,17 @@ type Turn struct {
 	AssistantText string
 	Steps         []Step
 	HasProcess    bool
-	// AssistantEntryID 与 Thinking 配对：前者是承载思考块的条目 ID，
-	// 后者是块下标。缺任一条件就不渲染占位符。
-	AssistantEntryID string
-	Thinking         []int
+	// Thinking 是思考占位符列表，每项自带 entry ID 与块下标。
+	// 曾经用「单个 AssistantEntryID + 合并下标」表示，于是一个回合里
+	// 多个 assistant 条目时，较早条目承载的块会按最后一个条目的 ID 去取，
+	// 既取不回原文，又可能重复出现同一段（B11）。占位符必须自己知道归属。
+	Thinking []ThinkingBlock
+}
+
+// ThinkingBlock 是一个思考占位符：定位到具体条目的具体块。
+type ThinkingBlock struct {
+	EntryID    string `json:"entryId"`
+	BlockIndex int    `json:"blockIndex"`
 }
 
 // HistoryData 驱动历史模板。
@@ -484,6 +491,17 @@ type HistoryData struct {
 	Turns         []Turn
 	HasMore       bool
 	OldestEntryID string
+}
+
+// thinkingBlocks 把某个条目的思考块转成自带归属的占位符列表。
+func thinkingBlocks(entryID string, blocks []sessions.LazyBlock) []ThinkingBlock {
+	out := []ThinkingBlock{}
+	for _, b := range blocks {
+		if b.Kind == "thinking" {
+			out = append(out, ThinkingBlock{EntryID: entryID, BlockIndex: b.BlockIndex})
+		}
+	}
+	return out
 }
 
 // lazyIndexes 从惰性块列表里挑出某一类的块下标。
@@ -509,15 +527,13 @@ func GroupTurns(entries []sessions.Entry) []Turn {
 			turns = append(turns, Turn{ID: e.ID, UserText: e.Text})
 			current = len(turns) - 1
 		case sessions.KindAssistant:
-			thinking := lazyIndexes(e.Lazy, "thinking")
+			// 每个块都带上自己的 entry ID，绝不合并到回合级的单一 ID 上。
+			thinking := thinkingBlocks(e.ID, e.Lazy)
 			if current < 0 {
-				turns = append(turns, Turn{ID: e.ID, AssistantText: e.Text, AssistantEntryID: e.ID, Thinking: thinking})
+				turns = append(turns, Turn{ID: e.ID, AssistantText: e.Text, Thinking: thinking})
 				continue
 			}
-			if len(thinking) > 0 {
-				turns[current].AssistantEntryID = e.ID
-				turns[current].Thinking = append(turns[current].Thinking, thinking...)
-			}
+			turns[current].Thinking = append(turns[current].Thinking, thinking...)
 			if turns[current].AssistantText != "" && e.Text != "" {
 				turns[current].AssistantText += "\n\n"
 			}
