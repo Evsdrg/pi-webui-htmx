@@ -96,6 +96,7 @@ type MetricsSink interface {
 	WorkerExited()
 	EventPublished()
 	EventDropped()
+	DialogsExpired(n int)
 }
 
 // New 创建管理器并启动空闲回收协程。
@@ -249,7 +250,13 @@ func (m *Manager) reap() {
 				ws = append(ws, w)
 			}
 			m.mu.Unlock()
+			now := time.Now()
 			for _, w := range ws {
+				// 先清理超时对话：Pi 到期会自行解决且不通知桥，
+				// 不清理的话 waitingInput 永远为真，worker 永远不会被回收（B48）。
+				if n := w.ExpireDialogs(now); n > 0 && m.metrics != nil {
+					m.metrics.DialogsExpired(n)
+				}
 				w.mu.Lock()
 				idle := !w.busyLocked() && !w.closing && time.Since(w.lastActivity) >= m.cfg.IdleTimeout
 				w.mu.Unlock()
@@ -338,13 +345,15 @@ type Worker struct {
 	active, queued, uncertain, closing bool
 	waitingInput                       bool
 	pendingDialogs                     map[string]json.RawMessage
-	pending                            int
-	seq                                uint64
-	lastActivity                       time.Time
-	subs                               map[*Subscription]struct{}
-	replay                             *events.Ring
-	owner                              *Manager
-	store                              *sessions.Store
+	// dialogOpened 记录每个对话的登记时间，供超时清理使用。
+	dialogOpened map[string]time.Time
+	pending      int
+	seq          uint64
+	lastActivity time.Time
+	subs         map[*Subscription]struct{}
+	replay       *events.Ring
+	owner        *Manager
+	store        *sessions.Store
 }
 
 // newReplayRing 按配置构造补发环。
@@ -498,28 +507,32 @@ func (w *Worker) event(raw json.RawMessage) {
 	case "queue_update":
 		w.queued = len(ev.Steering)+len(ev.FollowUp) > 0
 	}
-	if len(raw) > w.cfg.EventBytes {
-		w.publishLocked("bridge.event_omitted", map[string]any{"type": ev.Type, "reason": "事件体积超过上限", "resyncRequired": true})
-		w.mu.Unlock()
-		return
-	}
 	// 扩展 UI 分两类：需要人工输入的才登记为等待中，
 	// 无需回执的（setStatus/setWidget/notify/setTitle/set_editor_text）
 	// 必须直接转发，否则它们会被当成待回复对话，
 	// 让 worker 永久停在 waiting_input 并挡住空闲回收。
+	//
+	// 登记必须排在体积上限检查之前：超大的 extension_ui_request 也要先
+	// 占住对话，否则 Pi 在等回执而桥根本没有记录，扩展永久挂起（B67）。
 	if ev.Type == "extension_ui_request" && needsDialogResponse(ev.Method) {
 		if _, tracked := w.pendingDialogs[ev.ID]; !tracked {
 			if len(w.pendingDialogs) >= w.cfg.MaxDialogs {
-				w.publishLocked("pi.event", raw)
-				w.mu.Unlock()
 				// 超出上限时明确取消，避免 Pi 永久挂起。
 				_ = w.client.Notify(map[string]any{"type": "extension_ui_response", "id": ev.ID, "cancelled": true})
+				w.publishLocked("pi.event", map[string]any{"type": ev.Type, "id": ev.ID, "method": ev.Method, "reason": "对话数量超过上限，已取消"})
+				w.mu.Unlock()
 				return
 			}
 			w.pendingDialogs[ev.ID] = raw
+			w.dialogOpened[ev.ID] = time.Now()
 			w.waitingInput = true
 			w.status = "waiting_input"
 		}
+	}
+	if len(raw) > w.cfg.EventBytes {
+		w.publishLocked("bridge.event_omitted", map[string]any{"type": ev.Type, "reason": "事件体积超过上限", "resyncRequired": true})
+		w.mu.Unlock()
+		return
 	}
 	w.publishLocked("pi.event", raw)
 	w.mu.Unlock()
@@ -686,6 +699,7 @@ func (w *Worker) stop(force, idleOnly bool) error {
 		dialogs = append(dialogs, id)
 	}
 	w.pendingDialogs = map[string]json.RawMessage{}
+	w.dialogOpened = map[string]time.Time{}
 	w.waitingInput = false
 	w.publishLocked("bridge.worker_state", w.infoLocked())
 	w.mu.Unlock()
@@ -777,6 +791,7 @@ func launch(cfg Config, cwd, file string) (*Worker, error) {
 		lastActivity:   time.Now(),
 		subs:           map[*Subscription]struct{}{},
 		pendingDialogs: map[string]json.RawMessage{},
+		dialogOpened:   map[string]time.Time{},
 		replay:         events.NewRing(cfg.ReplayItems, int64(cfg.ReplayBytes)),
 		store:          cfg.Store,
 	}

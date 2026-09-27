@@ -59,6 +59,7 @@ type Metrics struct {
 	workersStarted  atomic.Uint64
 	workersReaped   atomic.Uint64
 	workersExited   atomic.Uint64
+	dialogsExpired  atomic.Uint64
 	sessionsIndexed atomic.Uint64
 	historyRequests atomic.Uint64
 	authFailures    atomic.Uint64
@@ -129,6 +130,9 @@ func (x *Metrics) WorkerReaped() { x.workersReaped.Add(1) }
 // WorkerExited 记录工作进程退出。
 func (x *Metrics) WorkerExited() { x.workersExited.Add(1) }
 
+// DialogsExpired 记录因超过自身 timeout 而被清理的扩展对话数量。
+func (x *Metrics) DialogsExpired(n int) { x.dialogsExpired.Add(uint64(n)) }
+
 // HistoryRequest 记录一次历史读取。
 func (x *Metrics) HistoryRequest() { x.historyRequests.Add(1) }
 
@@ -151,6 +155,7 @@ func (x *Metrics) Snapshot() map[string]any {
 		"workersStarted":  x.workersStarted.Load(),
 		"workersReaped":   x.workersReaped.Load(),
 		"workersExited":   x.workersExited.Load(),
+		"dialogsExpired":  x.dialogsExpired.Load(),
 		"sessionsIndexed": x.sessionsIndexed.Load(),
 		"historyRequests": x.historyRequests.Load(),
 		"authFailures":    x.authFailures.Load(),

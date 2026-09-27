@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"sort"
+	"time"
 
 	"pi-bridge-go/internal/protocol"
 )
@@ -52,12 +53,27 @@ func (w *Worker) PendingDialogPayloads() []json.RawMessage {
 //   - select/input/editor 用 value
 //   - confirm 用 confirmed
 //   - 任意 dialog 都可以用 cancelled 取消
+//
+// 顺序很关键：必须先校验参数再摘除对话。反过来会让一次非法回执把对话
+// 从表里删掉，用户无法修正重试，而 Pi 仍在等待（B16）。
 func (w *Worker) UIResponse(ctx context.Context, id string, value *string, confirmed *bool, cancelled bool) error {
 	if id == "" {
 		return protocol.E("invalid_params", "id 不能为空")
 	}
+	payload := map[string]any{"type": "extension_ui_response", "id": id}
+	switch {
+	case cancelled:
+		payload["cancelled"] = true
+	case confirmed != nil:
+		payload["confirmed"] = *confirmed
+	case value != nil:
+		payload["value"] = *value
+	default:
+		// 参数不合法时对话必须留在表里，否则合法重试会变成 not_found。
+		return protocol.E("invalid_params", "必须提供 value、confirmed 或 cancelled 之一")
+	}
 	w.mu.Lock()
-	_, tracked := w.pendingDialogs[id]
+	raw, tracked := w.pendingDialogs[id]
 	if tracked {
 		delete(w.pendingDialogs, id)
 		if len(w.pendingDialogs) == 0 {
@@ -71,25 +87,70 @@ func (w *Worker) UIResponse(ctx context.Context, id string, value *string, confi
 	if !tracked {
 		return protocol.E("not_found", "没有该 ID 的待回复对话")
 	}
-	payload := map[string]any{"type": "extension_ui_response", "id": id}
-	switch {
-	case cancelled:
-		payload["cancelled"] = true
-	case confirmed != nil:
-		payload["confirmed"] = *confirmed
-	case value != nil:
-		payload["value"] = *value
-	default:
-		return protocol.E("invalid_params", "必须提供 value、confirmed 或 cancelled 之一")
-	}
 	// 回执必须送达：Notify 现在返回错误，连接已断时不再静默丢弃。
 	if err := w.client.Notify(payload); err != nil {
+		// 送达失败要把对话还回去：否则前端以为已回复，Pi 却永远等不到。
+		w.restoreDialog(id, raw)
 		return protocol.E("worker_exited", "无法送达扩展回执：工作进程连接已断开")
 	}
 	w.mu.Lock()
 	w.lastActivity = nowUTC()
 	w.mu.Unlock()
 	return nil
+}
+
+// restoreDialog 把一条被摘除的对话放回等待表。
+// 用于回执送达失败后的补偿：宁可让用户再试一次，也不能让 Pi 空等。
+func (w *Worker) restoreDialog(id string, raw json.RawMessage) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if _, exists := w.pendingDialogs[id]; exists {
+		return
+	}
+	if len(w.pendingDialogs) >= w.cfg.MaxDialogs {
+		return
+	}
+	w.pendingDialogs[id] = raw
+	w.waitingInput = true
+	if !w.active && !w.queued {
+		w.status = "waiting_input"
+	}
+}
+
+// ExpireDialogs 清理已超过自身 timeout 的对话。
+// Pi 在 RPC 模式下到期会自行解决并删除 pending 请求，不会通知桥；
+// 桥若不清理，waitingInput 永远为真，worker 失去空闲回收资格（B48）。
+func (w *Worker) ExpireDialogs(now time.Time) int {
+	w.mu.Lock()
+	expired := make([]string, 0, 4)
+	for id, raw := range w.pendingDialogs {
+		req, ok := ParseDialog(raw)
+		if !ok || req.TimeoutMs <= 0 {
+			continue
+		}
+		if now.Sub(w.dialogOpened[id]) < time.Duration(req.TimeoutMs)*time.Millisecond {
+			continue
+		}
+		expired = append(expired, id)
+	}
+	for _, id := range expired {
+		delete(w.pendingDialogs, id)
+		delete(w.dialogOpened, id)
+	}
+	if len(w.pendingDialogs) == 0 {
+		w.waitingInput = false
+		if !w.active && !w.queued {
+			w.status = "idle"
+		}
+	}
+	w.mu.Unlock()
+	// Pi 已自行解决，不需要也不应该再回执；只通知前端撤掉对话框。
+	for _, id := range expired {
+		w.mu.Lock()
+		w.publishLocked("bridge.dialog_expired", map[string]any{"id": id})
+		w.mu.Unlock()
+	}
+	return len(expired)
 }
 
 // CancelPendingDialogs 取消全部未回复对话。

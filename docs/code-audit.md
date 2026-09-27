@@ -29,7 +29,7 @@
 | B13 | 中 | Bridge | 快速历史扫描可放过完整且已换行、但正文损坏的旧记录，与“完整损坏行显式报错”的契约不符。 | `pi-bridge-go/internal/sessions/scan.go` |
 | B14 | ✅ 已修 | Tunnel | **修复：** subs 改为保存真实订阅句柄，退订与重复订阅都先 Close 旧订阅。回归做 12 轮订阅/退订后核对 worker 订阅数归零（反例下为 8，即上限）。 | `internal/transport/tunnel.go`；`tunnel_test.go` |
 | B15 | ✅ 已修 | Tunnel | **修复：** 隧道命令与本地 WS 共用 `admit` 与全局 `operations` 预算。原问题：隧道路径完全绕过桥级并发上限。 | `internal/transport/tunnel.go`；`claims.go` |
-| B16 | 中 | Bridge | `UIResponse` 在参数校验之前就删除 pending dialog；非法回执或 Notify 队列已满时，合法重试会变成 not_found，对话可能一直等待。 | `pi-bridge-go/internal/runtime/dialogs.go` |
+| B16 | ✅ 已修 | Bridge | **修复：** 先校验参数再摘除对话；回执送达失败时把对话还回等待表。回归覆盖「非法回执后可合法重试」。 | `internal/runtime/dialogs.go`；`dialogs_test.go` |
 | U01 | 高 | UI | 切换会话时 `selectSession()` 不清理全局附件数组；异步 `FileReader` 结果也没有会话 generation 归属，上一会话图片会留在或追加到新会话附件并可被发送。 | `pi-webui-htmx/src/modules/workbench.ts`；`src/modules/attachments.ts` |
 | U02 | 中 | UI | 新会话首条消息前 `ensureWorker()` 刷新默认模型，覆盖用户已选择的模型。 | `pi-webui-htmx/src/modules/workbench.ts` |
 | U03 | 高 | UI | `command()` await worker 启动后才读取当前 sessionId；等待期间切换会话会把原会话操作发给新会话。 | `pi-webui-htmx/src/modules/workbench.ts` |
@@ -95,7 +95,7 @@
 | ID | 严重性 | 项目 | 问题与影响 | 主要位置 |
 |---|---|---|---|---|
 | B47 | ✅ 已修 | Storage | **修复：** 轮转文件按序号升序载入（当前 → .1 → .2 → .3），同一 requestId 只保留更晚结论。回归直接构造「新记录在 .1、旧记录在 .2」的布局。 | `internal/storage/receipts.go`；`receipts_test.go` |
-| B48 | 高 | Runtime | Pi RPC 扩展对话的 `timeout` 到期会在 Pi 内部默认解决并删除其 pending 请求；桥未清理对应 `pendingDialogs`/`waitingInput`，worker 会永久失去空闲回收资格。 | `internal/runtime/manager.go`；`internal/runtime/dialogs.go`；Pi 0.85.1 `dist/modes/rpc/rpc-mode.js` |
+| B48 | ✅ 已修 | Runtime | **修复：** 记录每个对话的登记时间，回收协程里清理超过自身 `timeout` 的对话并通知前端；无 timeout 字段的对话不误清。回归验证清理后 `busyLocked()` 为假、空闲回收恢复。 | `internal/runtime/dialogs.go`；`manager.go`；`dialogs_test.go` |
 | B49 | ✅ 已修 | Management | 模型摘要按 Pi 数组计数并对总输出应用限额，稳定排序 provider，保留原始 modelCount 并标记截断；旧对象夹具已改为真实数组。 | `internal/management/config.go`；`config_safety_test.go` |
 | B50 | 中 | Runtime | 同一 worker 的第二次 `Stop` 在 `closing` 后无条件等待 `done`；第一次强停超时但进程仍未退出时，关闭调用者可永久阻塞。 | `internal/runtime/manager.go` |
 | B51 | ⚠️ 部分修复 | Management/Workspace | 配置读取已限制实际 reader 并检查打开的文件类型；workspace 文件/图片路径仍待修复，不能因配置侧完成就关闭此项。 | `internal/management/config.go`；`internal/workspace/files.go` |
@@ -114,7 +114,7 @@
 | B64 | 高 | Runtime | `SwitchSession` 先令 Pi 切到目标文件，再调用 `Rebind` 检查目标 worker 冲突；若目标会话已活跃，冲突发生时 Pi 已切换，旧键下的 worker 仍可 `Prompt`，可能形成双写。 | `internal/runtime/identity.go`；`internal/runtime/manager.go` |
 | B65 | ✅ 已修 | Events | **修复：** `resetReplay` 同时更换 epoch；旧 epoch 一律拒绝并强制重新同步，不再用「返回空」假装已同步。new/switch/fork/clone 四条路径都经 `Rebind`，覆盖完整。反例（只归零 seq）验证通过。 | `internal/runtime/identity.go`；`identity_test.go` |
 | B66 | 高 | Runtime/UI | Go 端所有命令统一由 `Manager.Timeout()`（默认 30 秒）取消；前端虽给 `session.compact` 设 120 秒等待，服务器仍在 30 秒结束调用，长压缩被报告为未知结果。 | `internal/transport/server.go`；`internal/runtime/manager.go`；`pi-webui-htmx/src/modules/bridge.ts` |
-| B67 | 高 | Runtime | 超过 `EventBytes` 的 `extension_ui_request` 在登记 pending dialog 之前直接省略；Pi 仍在等回执，桥也未发 cancelled，扩展可永久等待。 | `internal/runtime/manager.go`；`internal/runtime/dialogs.go` |
+| B67 | ✅ 已修 | Runtime | **修复：** 对话登记移到体积上限检查之前，超大对话也占住记录并可回复；超出 `MaxDialogs` 时明确取消并推送说明。 | `internal/runtime/manager.go`；`dialogs_test.go` |
 | B68 | ✅ 已修 | Runtime/Security | **修复：** Pi/PTY/Git 共用服务环境过滤；真实 spawn/PTY 测试和反向验证通过。保留正常 API、代理及 Pi 环境，不等同同 UID 的 OS 隔离。原问题：Pi 与 PTY 子进程直接继承桥的完整 `os.Environ()`，包括 `PI_BRIDGE_TOKEN`、`PI_BRIDGE_DEVICE_TOKEN`；agent bash、项目扩展或终端命令可读出桥/设备凭据。 | `internal/runtime/manager.go`；`internal/terminal/terminal.go` |
 | B69 | ✅ 已修 | Management/Security | 写入使用随机独占 0600 临时文件、文件 Sync、rename 和目录 Sync；固定路径 symlink 不再被触碰。同步不明返回 outcome_unknown，临时文件统一清理。 | `internal/management/config.go`；`config_safety_test.go` |
 | B70 | 中 | Product | HTMX 有模型配置原始 JSON 编辑和 discover/test，但没有调用已支持的 `config.catalog`；不是 Pi Web 式可视化模型字段编辑器，供应商目录/参数预设未接线。 | `pi-webui-htmx/src/modules/models.ts`；`pi-webui-htmx/src/templates/shell.html`；`pi-webui-htmx/src/types/protocol.ts` |
@@ -171,7 +171,7 @@
 | S05 共用只读索引 / 扫描预算 | B06、B11、B12、B13、B27、B28、B29、B37、B38、B43、B52、B72、U04、U08 | 文件身份与完整行验证；标题/lazy/tree 复用；替换、50 MiB、深树、超多目录与取消测试 | ⚠️ 待实现 |
 | S06 HTTP 大内容 / 导出 | B07、B33、B45、B76、B77、U05 | 小控制帧+有界资源；上传计算 Pi 编码；只读导出0 worker、临时配额与清理 | ⚠️ 待实现 |
 | S07 UI SessionScope / 意图 | B03、U01、U02、U03、U06、U09、U10、U11、U12、U13、U14、U17、U18、U20、U21 | 目标发起时捕获、响应处理前守卫、并发预留；逐 await 切换、草稿/队列与 rAF 行为验证 | ⚠️ 待实现 |
-| S08 扩展资源状态机 | B16、B36、B48、B67 | 分类/期限/写入回执；非法回复可重试，超大/过期/关闭不留幽灵 pending | ⚠️ 待实现 |
+| S08 扩展资源状态机 | B16、B36、B48、B67 | 分类/期限/写入回执；非法回复可重试，超大/过期/关闭不留幽灵 pending | ✅ B16/B48/B67 已修并回归；B36 待实施 |
 | S09 relay 持久身份 / 部署 | B19、B20、B21、B22、B23、B24、B35、B41、B46、B55、B63、B78 | 持久与易失状态分离；TTL/连接预算/安全 Cookie/WSS；重启、写失败、撤销与 HTTPS 反代测试 | ⚠️ 待实现 |
 | S10 受限 Git runner | B18、B25、B26、B42、B56 | 禁隐式 helper、流式预算、unborn 支持；标记脚本不执行、截断可见、后代收敛 | ✅ P1 实现与两仓联测 |
 | S11 HTTP 缓存 / 内容资源 | B39、B60、B61、U07 | qvalue/identity/Vary 矩阵，先查缓存；反复挂载释放 URL/组件资源 | ✅ B39/B60/B61 已修并两仓联测；U07 待实现 |
