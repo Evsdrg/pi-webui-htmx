@@ -1,55 +1,44 @@
 # Bridge Protocol v1
 
-状态：v1 契约。当前已实现 A–E 阶段全部命令；实现能力以 `GET /api/v1/capabilities` 的
-`methods` 为准，未列入的方法一律返回 `unsupported_method`，不得伪造成功。
+更新：2026-09-27。本页保留 **当前 v1 的入口与方法**，另列已审查的契约缺口和目标语义。本轮没有改产品实现、`protocolVersion` 或 manifest；新字段/方法只有实现并协商后才可调用。方案及验收见 [architecture.md](../../docs/architecture.md)，问题见 [code-audit.md](../../docs/code-audit.md)。
 
-## 传输和认证
+## 1. 当前入口与鉴权
 
-本地桥提供 HTTP + WebSocket；云隧道是后续传输适配。A 阶段仅绑定 loopback，使用显式 Bearer token。浏览器通过认证 POST 换取 HttpOnly、SameSite=Strict cookie，再连接同源 WS；原生客户端可在 WS upgrade 发送 Authorization。URL query 不接收 token。Origin 与 Host 检查独立于 token。
+本地桥提供 HTTP 与 WS；relay/tunnel 后端存在，但 HTMX 云端整链路尚未接通。浏览器通过 Bearer 认证换取 HttpOnly、SameSite=Strict Cookie 后连接同源 WS；原生客户端可在 upgrade 发 Authorization。Host、Origin 与 token 是独立检查。桥侧不以 query 接受 token；**当前 relay 设备 tunnel 仍用 query token，属于 B24 待修项**。
 
-- `GET /healthz`：只返回健康状态，不泄露路径、模型或进程信息。
-- `POST /api/v1/auth`：Authorization: Bearer token；设置会话 cookie。
-- `GET /api/v1/capabilities`：版本、方法、功能缺口、限额。
-- `GET /api/v1/sessions?limit=50&offset=0`：磁盘会话目录，不启动 worker。
-- `GET /api/v1/sessions/{id}/history?limit=50&before=ENTRY&leafId=LEAF`：所选分支历史，不启动 worker。
-- `GET /api/v1/ws`：升级 WS，文本 JSON 帧。
+| 入口 | 用途 |
+|---|---|
+| `GET /healthz` | 健康检查，不返回模型、路径或进程信息 |
+| `POST /api/v1/auth` | Bearer 换 Cookie |
+| `GET /api/v1/capabilities` | 版本、方法、能力、限额；当前 phase/部分限额仍有 B80 硬编码 |
+| `GET /api/v1/sessions?limit=50&offset=0` | 磁盘会话目录，不启动 worker |
+| `GET /api/v1/sessions/{id}/history?limit=50&before=ENTRY&leafId=LEAF` | 所选持久分支历史，不启动 worker |
+| `GET /api/v1/ws` | 文本 JSON 命令/响应/事件 |
+| `/`、`/assets/*`、`/ui/*` | 配置 `--ui-dir` 后的模板、资产和片段 |
 
-默认请求/响应不缓存（Cache-Control: no-store）。反向代理模式、云端身份与配对属于后续阶段，A 阶段不接受任意可信代理头。
+业务响应默认 no-store；内容哈希静态资产有独立缓存策略。反代信任与 Secure Cookie 的目标规则见架构 S09，当前不能据文档假设 HTTPS 回源路径已修复。
 
-## 封装
+## 2. 封装
 
 ```json
 {"version":1,"kind":"command","requestId":"req-1","sessionId":"pi-session-id","method":"session.prompt","params":{"text":"Hello"}}
 ```
 
-- version：必须为 1。
-- kind：客户端命令为 command；服务端为 response/event/control。
-- requestId：每个命令必须非空、长度受限；连接内不得重用。
-- sessionId：Pi session ID，不是任意路径；仅创建时省略。
-- method/params：由 allowlist 和方法 schema 验证，不开放任意 Pi RPC 透传。
-
-成功：
+- version 必须为 1；客户端 kind 为 command，服务端为 response/event/control。
+- requestId 必填且受长度限制；客户端对每次新的用户操作生成新 ID。
+- sessionId 是受管 Pi session ID，不是任意路径；创建类调用可省略。
+- 方法/参数使用 allowlist；不存在的能力返回 unsupported_method，不开放任意 Pi RPC。
 
 ```json
 {"version":1,"kind":"response","requestId":"req-1","ok":true,"data":{"accepted":true}}
+{"version":1,"kind":"response","requestId":"req-1","ok":false,"error":{"code":"worker_not_running","message":"请先显式启动会话"}}
 ```
 
-失败：
+错误码：`invalid_request`、`unsupported_version`、`unsupported_method`、`invalid_params`、`not_found`、`conflict`、`busy`、`limit_exceeded`、`worker_not_running`、`worker_exited`、`timeout`、`outcome_unknown`、`pi_error`、`resync_required`、`internal`；接入层还包括 `unauthorized`、`host_denied`、`origin_denied`。错误不含正文/密钥。任何新增错误码必须同步 TS 类型和兼容协商。
 
-```json
-{"version":1,"kind":"response","requestId":"req-1","ok":false,"error":{"code":"worker_not_running","message":"Start the session explicitly"}}
-```
+## 3. 当前方法清单
 
-错误码：`invalid_request`、`unsupported_version`、`unsupported_method`、`invalid_params`、
-`not_found`、`conflict`、`busy`、`limit_exceeded`、`worker_not_running`、`worker_exited`、
-`timeout`、`outcome_unknown`、`pi_error`、`resync_required`、`internal`，
-以及接入层的 `unauthorized`、`host_denied`、`origin_denied`。
-错误信息不包含 token、模型 key 或会话正文。
-
-## 命令
-
-`GET /api/v1/capabilities` 返回权威清单，测试断言其中每个方法都不会返回
-`unsupported_method`。当前分组：
+运行时 `capabilities.methods` 是是否实现的入口依据，但方法存在不代表没有 [审查缺陷](../../docs/code-audit.md)。
 
 | 分组 | 方法 |
 |---|---|
@@ -66,144 +55,89 @@
 | 模型配置 | `config.models`、`config.models.raw`、`config.models.write`、`config.models.discover`、`config.models.test`、`config.catalog` |
 | 资源清单 | `config.packages`、`config.settings`、`config.trust` |
 
-共同约束：
+共同边界：cwd 必须在允许根内；恢复时匹配会话头。网络不能选择 Pi 可执行文件/附加参数/任意环境。文件/Git/PTY 有工作区边界，但不构成 Pi 工具沙箱。settings/trust/packages 只读；插件安装、更新、卸载不提供网络接口。
 
-- `session.start` 的 cwd 必须在启动配置允许的根内；客户端不能传可执行文件、额外 CLI 参数或任意环境变量
-- 恢复会话时 cwd 必须与会话头一致，不允许借 cwd 改写原会话所属项目
-- `session.switch` 只接受受管会话目录内的文件
-- `session.set_thinking` 必须落在 `session.thinking_levels` 返回的列表内
-- `session.export_html` 只接受桥构造的导出目录加受限文件名
-- `files.*`、`git.*`、`terminal.*` 全部限制在授权工作区内
-- `config.settings`/`config.trust`/`config.packages` 只读，密钥字段递归打码
-- `config.models.write` 原子写入，落盘前做结构校验；密钥字段原样保留
-- `config.models.discover`/`test`/`catalog` 访问外部地址，URL 只允许 http(s)，
-  自定义头部拒绝控制字符，供应商错误码透出不吞掉
-- 远程安装/更新 Pi 包刻意不实现
+### 排队的两种维度
 
-## 事件
+- 单条消息的目标：`prompt.params.streamingBehavior` 为 `steer` 或 `followUp`。
+- 投递设置：`session.set_queue_mode` 使用 `{kind:"steering"|"followUp", mode:"all"|"one-at-a-time"}`。
+- `steeringMode/followUpMode` 不能告诉 UI 用户下一条消息想发到哪个队列。当前 UI 把 steer 传作 kind 且混淆两者，B03/U11 尚未修。
+
+### 配置与秘密
+
+当前 models 配置遵循 Pi 数组 schema，`api` 是协议标识，`baseUrl` 是 URL；raw 试图脱敏，write 尝试以临时文件替换。B01/B02/B49/B69 说明脱敏、恢复、摘要和安全写入仍不完整，**不能承诺原样保存必定保住所有密钥**。
+
+目标 S04：revision 检查、模型按 id 合并、所有自定义 header 默认保密、明确 keep/replace/remove 秘密操作、独占随机临时文件及可靠写盘。拒绝通过网页新增 Pi 的 `!command` 配置值；本机已有表达式只允许原样保留。discover/test 不执行这类表达式，专用 client 默认拒绝重定向。新增 revision/秘密操作形状须协商或升级协议，不能静默替换当前 v1 raw 响应。
+
+## 4. 事件与恢复
 
 ```json
-{"version":1,"kind":"event","sessionId":"...","streamId":"worker","epoch":"worker-generation","seq":42,"event":"pi.event","data":{"type":"message_update","assistantMessageEvent":{"type":"text_delta","contentIndex":0,"delta":"Hello"}}}
+{"version":1,"kind":"event","sessionId":"...","streamId":"worker","epoch":"generation","seq":42,"event":"pi.event","data":{"type":"message_update","assistantMessageEvent":{"type":"text_delta","contentIndex":0,"delta":"Hello"}}}
 ```
 
-epoch 每次 worker 启动改变；seq 在该 worker 内递增。A 阶段保留 Pi 原始事件作为 pi.event 载荷，并明确依赖基线版本，不假装已完成跨 agent 的统一消息投影。worker 的退出/状态变化使用 bridge.worker_state。
+Pi 原事件通过 `pi.event` 传递并绑定基线版本；不是跨 agent 通用协议。按 contentIndex 组装 delta，message_end.message 替换成权威值；agent_end 不等于 settled。worker 状态使用 bridge.worker_state。
 
-Pi message_update 不带累计 message，浏览器按 contentIndex 组装增量；message_end.message 是完整权威值。不要仅凭 agent_end 宣告 settled。agent_settled、直接 bash 的终态、扩展交互/重试状态共同决定是否可回收。
+**当前存在：** 有界订阅、epoch/seq、replay、持久回执和 unknown 状态。**当前缺口：** B04/B05/B30/B31/B47/B58/B65 等仍可造成重复派发、事件窗口丢失或恢复错误。
 
-订阅前先注册有界接收队列，再返回订阅确认，之后发送事件。网络端写入由单一 writer 串行化，多个命令可在后台等待各自 Pi 回复，避免 abort 被阻塞。每个客户端有独立容量上限；超限关闭慢订阅/连接，Pi 继续执行。
+目标 S01/S02：
 
-## 重连、去重与不确定结果
+1. 须持久化的变更按主体/设备/requestId 加 method/session/params 指纹，跨连接原子 claim，派发前可靠写 intent、终态后写 receipt。只读/连接操作、PTY 临时输入、控制与对话回复使用整体规划的独立策略，不逐按键 Sync，不让日志故障挡住取消。
+2. 重启仅有 intent 则 unknown，不重发。只能保证有效保留期内至多派发一次，不承诺 exactly-once；保留窗口和 degraded 状态必须可见。
+3. 同 ID 不同指纹 conflict；同 ID pending 等待或返回 pending，不能启动第二次执行。记录已淘汰时“查无记录”不等于未执行。
+4. replay 快照与 live 注册原子化；确认给出 epoch/fence，依次输出 replay 与后续事件。
+5. worker 启动和 session rebind 都换 epoch；UI 只接受当前连接确认的 epoch，不被迟到旧事件改变。
+6. omitted/resync 立即重读持久历史并标记 live 缺口；不伪造丢失 delta。
+7. 已受理任务独立于连接寿命；未知结果客户端只对账，不自动重发 prompt/bash 等变更命令。
 
-同 epoch 且游标仍在补发环内时补发；epoch 不匹配或序号已被淘汰时返回
-`resync_required`。补发环按 epoch 隔离，条数与字节双上限，身份变更后序号归零。
-新订阅返回当前 epoch/seq；无法恢复中途丢失的 delta 时客户端重新读持久历史，
-等待后续权威 `message_end`。
-
-`requestId`、`seq`、`entryId` 是三个维度：前者用于跨重启去重，第二个是传输游标，
-最后一个是持久历史游标，不可混用。
-
-跨重启去重语义：
-
-- 同一 `requestId` 已执行过（回执为 `ok`/`error`/`unknown`）时直接回放结论，
-  响应带 `duplicate: true`，绝不重新执行
-- 回执为 `rejected`（协议层拒绝，命令从未送达 Pi）时允许客户端重试
-- 连接内 `seen` 表作为回执不可用时的第二道防线
-
-结果处理：
-
-- 客户端不自动重发 prompt、bash 等可变更命令
-- 命令已写入 stdin 但超时或进程退出时可能已生效，返回 `outcome_unknown`
-- ws 断开不取消已接受的请求；桥关闭与 worker 停止有自己的终止边界
-- 缺少中途快照时明确标记缺口，不伪造补齐
-- 有待回复扩展对话时 worker 判定为忙，拒绝非强制停止；强制停止前先取消全部对话
-
-## 历史
-
-HTTP 响应：
+## 5. 历史与资源
 
 ```json
 {"sessionId":"...","leafId":"last-durable-entry","leafSource":"disk","entries":[],"oldestEntryId":null,"hasMore":false}
 ```
 
-- 页大小按原始树条目计数，非 UI 可见消息数量。
-- entries 始终按祖先到后代排序。before 排除自身，并且必须属于选定 leaf 的祖先链。
-- 缺省 leafId 取磁盘可恢复叶子，不声称等于 live Pi 当前内存中的导航位置。
-- 会话 ID 由受管根内文件头解析，不能把 URL ID 当绝对路径。
-- 初版仅支持 v3。文件、行、索引条目和输出字节都有上限；超限显式返回错误，不用 0/空数组假装无历史。
-- 完整损坏记录、重复 ID、缺父节点、循环均显式报错；正在追加的末尾半行忽略。
-- 历史读取不修改文件，不触发 Pi 自动迁移、不启动 worker
-- 搜索同样只读，命中数、文件数、单文件体积、单行字节都有上限，达到即停并标记 `truncated`
-- 删除优先使用 `trash`；删除后索引立即失效
-
-后续 HTML fragment 接口渲染同一 page projection，并提供稳定 entryId/groupId 和分页占位；DOM 不因补页重新折叠已有内容。
-后续 HTML fragment 接口渲染同一 page projection，并提供稳定 entryId/groupId 和分页占位；DOM 不因补页重新折叠已有内容。
+- entries 祖先到后代排列；before 排除边界且应属于所选 leaf 祖先链。默认磁盘叶子不声称是活跃 Pi 内存导航位置。
+- 原始条目 limit 不是 UI 消息数；回合对齐可额外取记录，但仍受硬字节/条目上限。
+- ID 通过受管根下的文件头索引解析；列表/普通历史只读、不启动 Pi，不重写/迁移 JSONL。
+- 目标校验包括完整坏行、重复 ID、断链、循环；仅忽略尾部半行。B12/B13 是当前缓存/快速扫描违例。
+- 搜索应受命中、访问文件、目录、字节、时间、并发上限约束；B28/B43/B52/B72 未完成前不宣称所有限制已强制执行。
+- 删除目标是拒绝活跃 writer、失败不永久降级；当前 B08/B62 尚未修。
 
 ### 惰性内容
 
-`entries` 的每条记录可带 `lazy`，只列块下标与类型，不带内容本身：
+历史投影只带块位置，不带正文/base64：
 
 ```json
 {"lazy":[{"blockIndex":0,"kind":"thinking"},{"blockIndex":1,"kind":"image"}]}
 ```
 
-取内容走 HTTP，不占 WS 命令面：
-
-```
-GET /ui/sessions/{id}/lazy?kind=thinking&entryId=&blockIndex=
-GET /ui/sessions/{id}/lazy?kind=tool-image&entryId=&blockIndex=
+```text
+GET /ui/sessions/{id}/lazy?kind=thinking&entryId=ENTRY&blockIndex=0
+GET /ui/sessions/{id}/lazy?kind=tool-image&entryId=ENTRY&blockIndex=1
 ```
 
-- `thinking` 返回 `{"thinking":"..."}`；`tool-image` 返回图片字节
-- `blockIndex` 必须是非负整数；上限 4096
-- MIME 白名单 png/jpeg/webp/gif/bmp/avif，SVG 拒收（可执行内容）
-- 图片上限 10 MB，思考文本上限 512 KB，超限显式报错
-- 从磁盘现读，不缓存——内容可能被后续 fork/compact 改变
-- 历史页因此不含 base64 与思考正文：实测 436 KB 会话文件对应 5.6 KB 片段
+thinking 返回 JSON，tool-image 返回图片字节；索引/格式/字节均校验，SVG 不作为受支持的图片。定位必须保留每个真实 entryId，不能拿整轮最后 assistant 代替（B11）。目标使用同一已验证文件索引读取正文，不缓存整份内容（B38）。
 
-### 文件索引与图片
+### 工作区文件
 
-```
-files.index   {"path":"...","query":"..."}
-files.image   {"path":"..."}
-GET /ui/file-image?path=
-```
+- `files.index` 无 query 返回 `{files:[...],truncated}`，有 query 返回 `{matches:[{path,isDir}]}`；这是同方法的两种显式模式，不能在其他接口随意套用“数组/对象都接受”。
+- git 优先索引，非 Git 走有界目录遍历。当前 B26/B27 仍存在先完整读取再截断的问题。
+- **当前 `files.image` WS 返回 base64，`GET /ui/file-image?path=...` 才返回二进制。** `files.read` 拒绝二进制；图片按魔数检测。
+- 目标 S06：大内容走 HTTP 范围/分页/下载，WS 只传引用；保留小 v1 请求时先检查序列化长度，超限显式报错而非取消整个连接。
 
-- `files.index` 无 query 返回 `{files:[...],truncated}`（上限 5000）；
-  有 query 返回 `{matches:[{path,isDir}]}`（上限 50），由服务端排序
-- git 仓库走 `git ls-files`，非仓库退回复制目录 BFS（深度 8、硬上限 5 万）
-- `files.image` 与 `/ui/file-image` 按字节返回，不经 UTF-8 转换；
-  `files.read` 遇到二进制返回带可读原因的 `unsupported`
-- 图片格式按魔数判定而非扩展名
+## 6. 限额、能力与可观测性
 
-## 运行限额与可观测性
+当前默认：WS 请求 1 MiB、响应 512 KiB；Pi JSONL 8 MiB；单事件 256 KiB。这些边界不同，不能用一个“支持 8 MiB 图片”的 UI 数字代替完整链路计算。详细错配见 [communication.md](../../docs/communication.md)。
 
-限额集中在配置，不散落在业务逻辑中：
+目标由同一配置/方法描述生成：实际限额、方法期限、只读/副作用分类、存储健康与保留窗口、可用大内容接口。每连接/全局/每主体分别限额，HTTP 与 tunnel 不得绕开配额。
 
-| 类别 | 上限 |
-|---|---|
-| 进程 | worker 数、终端数、启动超时、请求超时、关闭宽限、空闲超时 |
-| 帧 | stdout 单行字节、HTTP/WS 帧字节、连接发送队列字节 |
-| 订阅 | 每 worker 订阅数、每订阅消息数与字节、补发环条数与字节 |
-| 会话 | 历史文件字节、单页字节、条目数、会话文件数、搜索命中数 |
-| 去重 | 每连接 requestId 数、回执内存条数、回执文件字节与轮转数 |
-| 指标 | 方法名 64 个、错误码截断到 32 字符 |
-| 隧道 | 虚拟连接数、空闲时间、发送队列字节 |
+metrics 需鉴权，使用有界方法/错误标签；日志只记录关联 ID、方法、状态、耗时及类别，不记录正文、URL token、apiKey 或秘密 header。
 
-`/healthz` 只返回健康状态，不含路径与会话信息；`/api/v1/metrics` 需鉴权，
-输出指标、索引、回执、worker、终端与隧道状态，不含正文与密钥。
-日志只记录 requestId、sessionId、方法、状态、耗时与错误类别。
-指标按桥、worker 与子进程分别统计，不以进程地址空间 VSZ 代替实际内存占用。
+## 7. relay 与版本演进
 
-## 云端隧道
+当前方向信封为 relay→bridge 的 `{from,data}` 与 bridge→relay 的 `{to,data}`；缺 to 不广播。同 clientId 重连应替换旧连接，但 B57 说明死 pump 复用仍需修。relay 接触转发明文，不应落盘或日志记录秘密；不能称为端到端加密。
 
-浏览器经 relay 连接本地桥时，帧外面包一层最小路由封装：
+目标 S12 在同源设备前缀下转发受控 HTTP 资源与 WS 命令，补齐 HTMX 云链路；分块/取消/credit/鉴权都属于新传输能力，当前接口不能假装已经支持。
 
-```json
-{"to":"<目标 clientId>","from":"<来源 clientId>","data":<原始业务帧>}
-```
+本次完整修复按 [整体规划](../../docs/repair-plan.md) 的 P6 集中升级到 v2，配套更新桥/UI/manifest/TS/工具；P1–P5 中可保持形状的修复继续按当前 v1 验证。当前版本号和代码均未改动。独立可选能力仍可协商，但不能在 v1 下暗改订阅、重复结果、配置秘密和资源引用语义。
 
-- relay 只读 `to`/`from` 做转发，绝不解析 `data`
-- 桥到 relay 必须带 `to`，缺失即丢弃，不做广播
-- relay 到桥带 `from`，桥据此把回复发回正确标签页
-- 同一 `clientId` 重连会顶掉旧连接；多标签需各自使用不同 clientId
-- relay 不落盘会话正文、不接触模型密钥；设备与用户令牌只存 SHA-256
+新版写入口上线后，旧写协议明确拒绝并提示升级；不保留旧盲写/去重路径作为回退。必要旧读取适配必须有期限并复用相同业务服务。Journal 的离线迁移、保守导入与不可恢复旧快照的回滚边界见整体规划。本文目标说明不是启用新能力的依据。

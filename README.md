@@ -1,260 +1,115 @@
 # Pi Bridge（Go）
 
-一个用 Go 写的本地桥：管理独立的 `pi --mode rpc` 子进程，向浏览器提供受控的 HTTP/WebSocket 接口。
-目标是把 agent 运行时从网页服务器里拆出去，让内存随进程退出真正归还。
+本地 Go 桥连接浏览器与独立 `pi --mode rpc` 子进程。目标是适配 HTMX 工作台、直接读取 Pi 数据，并使 agent 内存随进程退出释放。桥不嵌入 Pi SDK，不另建一份会话正文数据库。
 
-**当前进度：A 阶段（本地闭环）。** 只实现了下面列出的能力；未列出的都在后续阶段，未实现的功能一律明确报错，不会假装成功。
+**状态（2026-09-27）：** 本地工作台和 relay/tunnel 后端已有实现；源码审查发现的可靠性、安全与交互边界尚待修复，云端 HTMX 整链路尚未接通。旧 A–E 阶段不再作为完成保证。已完成 P0 的测试夹具、入口清单和本地联测基础建设；P1–P7 的产品修复尚未完成，见整体规划。
 
-## 已实现
+## 文档入口
 
-| 能力 | 说明 |
+| 文档 | 内容 |
 |---|---|
-| 显式启动/恢复会话 | 只有客户端明确要求时才拉起 Pi；列表与历史查询不会启动 |
-| 发送提示词 | 只返回「已接受」，不伪造任务完成 |
-| 中断 | 先 `clear_queue` 再 `abort`，避免 abort 后队列继续执行 |
-| 停止工作进程 | 默认拒绝忙会话，`force` 必须显式；分级停止 stdin → SIGTERM → SIGKILL |
-| 事件订阅 | 有界队列，慢订阅者被摘除并关闭，绝不阻塞 Pi 输出 |
-| 空闲回收 | 空闲超时后退出进程，内存随之归还 |
-| 会话列表与历史 | 只读磁盘 v3 JSONL，按分支分页，不启动 Pi、不改写文件 |
-| 鉴权 | Bearer token 或 HMAC Cookie；Host 与 Origin 独立校验 |
-| 限额 | 连接数、在途命令数、帧大小、队列字节、单页体积 |
+| [整体实施规划](docs/repair-plan.md) | P0–P7 依赖、跨代码影响矩阵、协议/状态迁移与回归门槛 |
+| [架构与修复决策](docs/architecture.md) | S01–S12 共用方案、取舍与验收条件；明确待实现 |
+| [通信约定](docs/communication.md) | HTTP/WS/Pi 分层、作用域、受理/恢复和背压 |
+| [当前 v1 协议](api/v1/protocol.md) | 已有入口/方法与目标语义的区别 |
+| [Pi 兼容矩阵](docs/pi-compatibility.md) | Pi 0.85.1、桥、UI 和刻意排除/暂缓项 |
+| [审查台账](docs/code-audit.md) | 问题、证据、方案归属与待修状态 |
+| [UI 包契约](../pi-webui-htmx/docs/contract.md) | 模板/构建/前端行为与版本配套 |
 
-## 未实现（后续阶段）
+## 当前能力
 
-模型与思考强度切换、压缩与重试控制、fork/clone/切换会话、树导航、工具动态配置、bash、终端 PTY、文件与 Git、模型与凭据管理、插件技能安装、事件补发（replay）、跨重启去重、云端 relay 与隧道、扩展对话界面（当前直接取消）。
+| 状态 | 能力 |
+|---|---|
+| ✅ 已接线 | 显式创建/恢复、发送/取消、模型/思考切换、压缩/重试、分支操作、bash |
+| ✅ 已接线 | 只读会话列表/历史、搜索、惰性思考/图片、文件/Git、PTY、扩展对话 |
+| ✅ 已接线 | 模型配置原始 JSON 编辑、discover/test、包版本只读清单 |
+| ⚠️ 有实现但有审查缺陷 | 持久去重、重放、身份变更、relay 凭据/配对、资源预算及配置保护 |
+| ⚠️ 未完成解耦 | 历史树、HTML 导出当前仍需要 worker |
+| ❌ 尚未接通 | 云浏览器经 relay 使用完整 HTMX/图片/上传/下载工作台 |
 
-## 运行
+具体方法查 capabilities.methods 和协议清单。方法存在、基线测试通过，均不代表台账中的边界已经修好。
+
+## 本地运行
+
+先在相邻 `pi-webui-htmx` 执行 `pnpm install --frozen-lockfile && pnpm build`，再在本仓运行：
 
 ```bash
-export PI_BRIDGE_TOKEN="至少 32 个随机字符"
+export PI_BRIDGE_TOKEN="$(openssl rand -hex 32)"
 go run ./cmd/pi-bridge \
   --workspace /srv/projects/pi \
   --listen 127.0.0.1:30142 \
   --pi "$(command -v pi)" \
-  --state-dir /tmp/pi-bridge-state \
-  --idle-timeout 2m \
-  --max-workers 4
+  --state-dir "$HOME/.local/state/pi-bridge" \
+  --ui-dir ../pi-webui-htmx \
+  --idle-timeout 2m --max-workers 4
 ```
 
-参数说明：
+- `--workspace` 是授权工作区；本地桥当前要求环回监听，不直接暴露公网。
+- `--pi`、额外运行参数由本机运维配置，不接受网页选择。
+- `--state-dir` 保存桥状态、隔离会话和临时资源；长期使用不要放 `/tmp`。
+- `--agent-dir` 可指定 Pi 配置；默认隔离目录避免自动使用真实用户配置。共享生产会话目录不能解决与外部 CLI 同时写的问题。
+- 扩展默认关闭；显式开启 `--extensions` 也不等于授权全部项目执行，更不提供沙箱。
+- 不配置 `--ui-dir` 时只提供 API；配置后必须有模板和 Vite 产物，没有内嵌/CDN 兜底。UI rebuild 后重启桥，确保模板、manifest 与哈希资源一致。
 
-- `--workspace`：必填，唯一允许的工作区根；Pi 只能在这个目录下启动
-- `--listen`：**只接受环回 IP**，A 阶段不提供公网监听
-- `--pi`：Pi 可执行文件路径，来自本机配置，不接受网络请求指定
-- `--state-dir`：桥自有的会话与配置目录，缺省在用户缓存目录下
-- `--agent-dir`：Pi 配置目录，缺省使用隔离的 `state-dir/agent`，避免污染真实 `~/.pi/agent`
-- `--extensions`：默认关闭。开启后加载 Pi 已配置资源，但**项目信任仍保持拒绝**
-- `--idle-timeout` / `--max-workers`：空闲回收时间与并发上限
+## 核心接口
 
-## 接口
+- `/healthz`：健康状态；`/api/v1/auth`：Bearer 换 Cookie。
+- `/api/v1/capabilities`：当前版本、方法和限额（B80 的硬编码待修）。
+- `/api/v1/sessions`、`/api/v1/sessions/{id}/history`：只读磁盘，不启动 Pi。
+- `/api/v1/ws`：命令、回执、事件；`/ui/*`：HTMX 片段及受控资源。
 
-| 端点 | 方法 | 说明 |
-|---|---|---|
-| `/healthz` | GET | 仅健康状态，不含路径与会话信息 |
-| `/api/v1/auth` | POST | Bearer 换取 HttpOnly Cookie |
-| `/api/v1/capabilities` | GET | 版本、方法清单、缺口与限额 |
-| `/api/v1/sessions?limit&offset` | GET | 会话目录分页 |
-| `/api/v1/sessions/{id}/history?limit&leafId&before` | GET | 所选分支历史分页 |
-| `/api/v1/ws` | WS | 命令、响应与事件 |
+`requestId` 是请求关联/去重键，`epoch/seq` 是传输游标，`entryId` 是持久历史标识。prompt accepted 不等于完成；timeout/outcome_unknown 不能自动重发。浏览器断开不等于取消已受理工作。
 
-WS 命令：
+## 本轮选定的修复方向（未实现）
 
-- 进程与会话：`worker.list`、`session.start`、`session.state`、`session.prompt`、
-  `session.abort`、`session.stop`、`session.subscribe`、`session.unsubscribe`
-- 排队：`session.steer`、`session.follow_up`、`session.set_queue_mode`
-- 模型：`session.models`、`session.set_model`、`session.cycle_model`、
-  `session.thinking_levels`、`session.set_thinking`、`session.cycle_thinking`
-- 压缩与重试：`session.compact`、`session.set_auto_compaction`、`session.set_auto_retry`、`session.abort_retry`
-- 分支：`session.new`、`session.switch`、`session.fork`、`session.clone`、
-  `session.tree`、`session.fork_messages`、`session.entries`
-- bash：`session.bash`、`session.abort_bash`、`session.bash_output`
-- 终端：`terminal.open`、`terminal.input`、`terminal.resize`、`terminal.close`、`terminal.list`
-- 文件与 Git：`files.list`、`files.stat`、`files.read`、`files.roots`、`git.status`、`git.diff`
-- 扩展对话：`session.ui_response`、`session.pending_dialogs`
-- 其他：`session.stats`、`session.set_name`、`session.last_assistant`、`session.commands`、
-  `session.export_html`、`sessions.search`、`sessions.delete`
-- 模型配置：`config.models`、`config.models.raw`、`config.models.write`、
-  `config.models.discover`、`config.models.test`、`config.catalog`
-- 资源清单：`config.packages`、`config.settings`、`config.trust`
+1. 本地/tunnel 共用 Executor 与预算；须持久去重的变更在派发前可靠写 intent，恢复 unknown，限制保留窗口内至多派发一次，不承诺 exactly-once。PTY 输入、订阅和安全控制分别处理，不逐按键同步写盘。
+2. replay 与 live 注册原子化；连接拥有订阅和取消资源，身份变化换 epoch，发送失败销毁连接。
+3. Manager 用稳定 workerID 和 session 预留完成身份事务；删除前收敛 writer，trash 失败不永久降级。
+4. 同一配置 schema 处理数组/脱敏/恢复；revision、秘密保留操作、安全临时写入、默认拒绝重定向，禁止远程新增 `!command` 凭据表达式。
+5. 历史/tree/title/lazy 共用验证后的偏移索引；大内容走 HTTP，有总预算和取消，控制帧保持小。
+6. UI SessionScope 在 htmx 处理响应前拦截旧结果，固定命令目标，区分用户选择与权威回读。
+7. relay 先修持久身份、TTL、部署信任和连接回收，再补同源 HTTP+WS 设备路由；不能只补浏览器 WS 封装就宣告完成。
 
-协议细节见 [`api/v1/protocol.md`](../api/v1/protocol.md)，模块边界见 [`docs/architecture.md`](docs/architecture.md)，Pi 兼容矩阵见 [`docs/pi-compatibility.md`](docs/pi-compatibility.md)。
+详细问题映射与验收条件都在架构/台账中，不为每个症状再造一份独立补丁逻辑。
 
-## 设计约束
+## 模型配置与执行边界
 
-1. **桥不导入 Pi SDK。** 只能通过 stdin/stdout 对话，从语言层面避免把 agent 堆回网页进程。
-2. **请求寿命长于浏览器连接。** 断开只停止等待，不取消已接受的任务。
-3. **`requestId`、`seq`、`entryId` 是三个维度。** 前者用于连接内防重，后者是传输游标，最后一个是持久历史游标，不可混用。
-4. **有副作用命令结果不明时返回 `outcome_unknown`**，客户端不得自动重试。
-5. **stdin 写入串行化，但不互等完成**，否则长命令会挡住取消。
-6. **stdout 必须持续消费**，慢客户端只影响自己。
-7. **历史读取只做只读扫描**，不会触发 Pi 的格式迁移或自动改写。
+`config.models.*` 由前端触发；桥提供原语。Pi 的 models 是数组，api 是协议标识，baseUrl 才是 HTTP 地址。当前 raw/write 的秘密保护、摘要计数和固定临时文件有已知缺陷；不能将“临时文件+rename”概括为所有安全/并发问题已解决。
 
-## 实测（本机，2026-09-26）
+config.packages 只读清单与版本，不安装/更新。只读 Git 同样要防 fsmonitor/external diff/textconv 等隐式执行。Pi 工具和显式 PTY 本身具有执行能力；工作区根与环境过滤不是对它们的系统隔离。
 
-隔离配置、未加载扩展、未发送提示词：
+## 云端部署状态
 
-| 进程 | RSS | 线程 |
-|---|---:|---:|
-| `pi-bridge` 桥自身 | **10.2 MiB** | 9 |
-| `pi --mode rpc` 工作进程 | **145 MiB** | 43 |
-| 合计 | **约 155 MiB** | — |
+当前 cmd/pi-relay、主动 tunnel 和设备路由存在，但凭据持久化、配对 TTL、HTTPS 反代及连接生命周期等尚有问题，HTMX 客户端也未完成云链路。旧的“一次性 add-user 后直接启动即可使用”流程不能作为已验收部署教程。
 
-对照同期 Pi Web 的 `next-server` 约 984 MiB。
+目标部署：持久状态目录、明确 public origin、受信反代、WSS、upgrade 认证、原子持久化凭据、按设备授权的同源 HTTP/WS 适配。新增 CLI 配置和 HTTP tunnel 尚未落地，不提供虚构可用的参数示例。TLS relay 可见转发明文；不落盘不等于端到端加密。
 
-已验证：
-
-- 真实 Pi 握手成功，`get_state` 返回真实 `sessionId`
-- `session.stop` 后工作进程退出，进程表同步清空
-- 对桥发 `SIGKILL` 后**无残留 Pi 进程**（`Pdeathsig` + 独立进程组生效）
-- 未发送提示词时隔离会话目录不产生 `.jsonl`，无副作用
-- 列表与历史查询全程 0 个工作进程
-
-注意：Pi 的 shim 会 exec，因此 `ps` 里命令名是 `pi` 而不是 `node .../pi`，
-用 `ps -C node` 抓不到它。
-
-## 测试
+## 测试与证据
 
 ```bash
 go vet ./...
 go test -race ./...
-
-# 需要 UI 包的测试（未设置时自动跳过）
 PI_WEBUI_DIR=../pi-webui-htmx go test -race ./internal/transport/
 ```
 
-- 单元测试使用 `testdata/fake-pi` 这个可控的假 Pi，**不调用真实模型、不产生费用**
-- 真实 Pi 只做隔离配置下的握手与退出验证，见下方「真实 Pi 冒烟」
-- 测试覆盖 JSONL 分帧（含 U+2028 不被切分、末尾半行、超限）、分支分页、断链/重复 ID/自环、越界 cwd、符号链接逃逸、鉴权、Host/Origin、requestId 防重、未实现方法拒绝、并发写入、背压、空闲回收、进程退出
-
-### 测试代码的布局
-
-| 位置 | 内容 | 说明 |
-|---|---|---|
-| `internal/**/*_test.go` | 单元与集成测试（31 个文件，约 5.6k 行） | 与生产代码同包，Go 惯例，可直接访问内部符号 |
-| `internal/testutil/` | 跨包测试辅助 | 目前只有假 Pi 的按需构建 |
-| `testdata/fake-pi/` | 假 Pi 源码（测试夹具） | 由 `testutil.FakePi()` 按需编译，**不提交编译产物** |
-| `tools/smoke-client/` | 手工冒烟客户端 | 需要真实 Pi，**不**参与 `go test` |
-
-假 Pi 的编译产物不进仓库：`go test` 首次运行时会自动构建到系统临时目录，
-多个包共用同一份。因此新克隆的仓库无需任何准备步骤即可跑测试。
-若构建失败，测试直接失败而不是静默跳过——避免「测试通过」变成假象。
-
-## 真实 Pi 冒烟
-
-冒烟客户端在 `tools/smoke-client`，与自动化测试分开——
-它需要真实 Pi，只用于手工验证，不参与 `go test`。
-
-```bash
-go build -o /tmp/pi-bridge   ./cmd/pi-bridge
-go build -o /tmp/smoke       ./tools/smoke-client
-export PI_BRIDGE_TOKEN="0123456789abcdef0123456789abcdef"
-/tmp/pi-bridge --workspace /srv/projects/pi \
-  --pi "$(command -v pi)" \
-  --state-dir /tmp/pi-bridge-smoke \
-  --idle-timeout 30s --max-workers 1 &
-BRIDGE=$!
-sleep 1
-# --hold：启动后不停止，用于测量工作态内存
-# --dialog：触发扩展对话并持续读事件
-/tmp/smoke --token "$PI_BRIDGE_TOKEN" --cwd /srv/projects/pi/pi-web
-kill -TERM $BRIDGE; wait $BRIDGE 2>/dev/null
-```
-
-冒烟标准：握手成功、`worker.list` 返回空表、桥退出后没有残留的 `pi` 进程。
-默认不发送提示词；需要时显式加 `--dialog`。
-
-## 刻意不做的能力
-
-| 能力 | 原因 |
+| 位置 | 用途 |
 |---|---|
-| 远程安装/卸载/更新 Pi 包 | 等于任意代码执行。包在本机 CLI 用 `pi install` 管理，桥只列清单与版本 |
-| 任意 CLI 命令透传 | 会绕过全部参数与路径校验，`PrefixArgs` 只来自运维配置 |
-| `session.import` | 导入会改写会话文件，先不做成网络接口 |
-| 会话写入接口 | 会话正文由 Pi 独占写入，桥不提供 `files.write` 之类入口 |
-| OAuth 设备码登录 | 只接 API key；设备码流程需要浏览器回调和令牌暂存 |
-| Web Push | 需要公网推送服务与出站连接，内网部署下收益不成比例 |
+| internal/**/*_test.go | 与生产代码同包的单元/集成测试 |
+| internal/testutil | 跨包辅助；假 Pi 按需构建 |
+| testdata/fake-pi | 可控夹具源码，不提交编译产物 |
+| tools/smoke-client | 手工真实 Pi 冒烟，不属于自动付费模型测试 |
 
-## 模型配置与资源清单
+FakePi 已按测试进程使用独占构建目录，TestMain 在测试结束后清理，见 T01。真实 Pi 冒烟使用隔离配置，只做握手/状态/退出，不加载生产秘密或发送付费请求。
 
-模型配置的**操作由前端触发**，桥只提供原语：
+2026-09-27 的 P0 本地联测：Go race/vet/gofmt、UI 72 项、typecheck、build、check 通过；首屏 gzip 36.64 KiB。两仓独立 CI 已配置但托管运行尚未验证。跨仓验证必须显式设置 `PI_WEBUI_DIR` 并运行 `scripts/verify-pair.sh`，缺 UI 直接失败；[方法与入口清单](docs/method-inventory.md) 和 Go/TS/模板静态契约同时检查。其他审查反例仍须随各项修复进入正式回归测试。
 
-| 命令 | 作用 |
-|---|---|
-| `config.models` | 已配置的 provider/模型摘要，密钥打码 |
-| `config.models.raw` | 原始文档供前端编辑 |
-| `config.models.write` | 原子写入 `models.json`，落盘前做结构校验 |
-| `config.models.discover` | 向供应商 `/models` 查询可用模型 |
-| `config.models.test` | 用一次最小 GET 验证凭据是否可用 |
-| `config.catalog` | models.dev 目录，用于按型号补全参数 |
-| `config.packages` | 已安装插件/技能清单 + 是否有新版本 |
+## 资源、压缩与已知限制
 
-`config.models.discover` 的 URL 构造与 Pi Web 的 `buildModelsListURL` 一致：
-Anthropic 补 `/v1` 与 `limit=1000`，Google 补 `/v1beta` 与 `pageSize=1000`，
-已是 `/models` 结尾则不再拼接。鉴权头按 `api` 类型选择 `x-api-key` /
-`x-goog-api-key` / `Authorization`，自定义头部优先且拒绝控制字符。
+- 2026-09-26 隔离、无扩展、未发送 prompt 的历史测量：桥约 10.2 MiB RSS，Pi 约145 MiB。这不是本轮新测量，不能代表长会话/启用插件或与不同工作负载 Pi Web 的公平对比。
+- 桥已经有 br/gzip 和有界资产缓存，但 qvalue、identity/Vary 与命中仍读文件的问题见 B39/B60/B61。产物 gzip 预算不是实际页面传输量。
+- History 已有有界扫描缓存；它不是持久磁盘索引，同 size/mtime 替换与部分读取路径未复用问题仍在。
+- 当前 Linux 正常停止采用进程组；Pdeathsig 不保证桥 SIGKILL 后所有后代消失。目标生产模式使用受监督的 systemd cgroup，手工启动明确为较弱保证。
+- 非 Linux PTY 当前有编译缺口，不能宣传为完整可构建的显式拒绝路径。
+- 跨桥/外部 CLI 的非合作写入不受桥内互斥保证。
 
-写入是「临时文件 + rename」的原子替换，落盘前拒绝缺 `providers`、
-`providers` 非对象、`api` 非 http(s)、模型 ID 为空等明显损坏的文档。
-
-`config.packages` 只读：列出 `settings.json` 的 `packages`，对 npm 来源
-并发查询 registry 版本并标注 `hasUpdate`。**不提供安装、卸载、更新**。
-
-## 云端部署
-
-```bash
-# 1. 启动 relay（云上）
-export PI_RELAY_SECRET="至少 32 个随机字符"
-pi-relay --listen 0.0.0.0:30143 --add-user alice      # 打印一次性用户令牌
-pi-relay --listen 0.0.0.0:30143 --add-device dev-1    # 打印一次性设备密钥
-pi-relay --listen 0.0.0.0:30143 --host relay.example.com
-
-# 2. 本地桥登记配对码（用设备密钥）
-curl -X POST https://relay.example.com/api/relay/pair \
-  -d '{"deviceId":"dev-1","secret":"<设备密钥>","name":"我的机器"}'
-
-# 3. 用户在浏览器用配对码领取设备，得到 deviceToken
-curl -X POST https://relay.example.com/api/relay/claim \
-  -H "Authorization: Bearer <用户令牌>" -d '{"pairingCode":"<配对码>"}'
-
-# 4. 本地桥主动外连（无需入站端口）
-export PI_BRIDGE_DEVICE_TOKEN="<deviceToken>"
-pi-bridge --workspace /srv/projects/pi \
-  --relay wss://relay.example.com --device-id dev-1 --device-name "我的机器"
-```
-
-relay 的硬约束：
-
-- 只搬运字节，只读路由帧的 `to`/`from`，绝不解析业务载荷
-- 不落盘会话正文，不接触模型密钥
-- 设备令牌与用户令牌只存 SHA-256，Cookie 编码 `exp.owner.sig`，服务端不存会话
-- 配对码一次性、按码限流；未归属设备不能建隧道
-- TLS 由反向代理终止；relay 本身不做证书管理
-
-## 响应压缩
-
-桥对静态资产与动态片段都做 `br` / `gzip` 协商：
-
-- **静态资产**：首次请求时按协商算法预压缩并缓存。文件名带内容哈希，
-  内容不会变，因此缓存永不失效；上限 1024 条 / 64 MB，超出整体清空
-  （不做 LRU 簿记，成本高于收益）。
-- **动态片段**：按请求压缩，写入器走 `sync.Pool` 复用。小于 1 KB 不压缩
-  ——错误与确认回执占大多数，压缩收益抵不上一次分配。
-- 一律带 `Vary: Accept-Encoding`，否则共享缓存会把压缩版发给不支持的客户端。
-
-实测（首屏 + 首次数据）：不压缩 141 KB → gzip 39.6 KB → brotli 34.9 KB。
-
-**曾有的 bug**：`Compress` 无论协商成什么都用 gzip 压缩器，而响应头写的是
-`Content-Encoding: br`，浏览器全部解不开。单测只覆盖 gzip 所以漏掉；
-现在 `internal/transport` 有一个端到端测试按响应头选解析器，
-并断言用另一种编码解析必须失败。
-
-## 已知限制
-
-- A 阶段进程监督仅实现 Linux（独立进程组 + `Pdeathsig`），其他平台显式报错
-- 同一桥内保证一个会话只有一个写入进程；**不解决**与外部 `pi` CLI 的文件级互斥
-- 历史读取是请求内扫描，超大会话受 `Limits` 约束；磁盘索引属于后续阶段
-- 事件没有补发：断线后需重新读取持久历史，等权威 `message_end`
-- 连接内 `requestId` 防重有上限（1024），跨重启的 exactly-once 未实现
-- 隧道模式下同一 `clientId` 重连会顶掉旧连接，多标签需各自使用不同 clientId
-- 非 Linux 平台进程监督未实现（当前显式报错）
-- 与外部 `pi` CLI 的文件级互斥未解决，仅保证桥内单写者
+OAuth/额度查询、插件远程安装等排除项，以及 Web Push 暂缓、PWA/版本检查等未立项项，统一见兼容矩阵；不要把“未实现”自行改写成“用户不要”。

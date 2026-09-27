@@ -1,106 +1,61 @@
 # Pi 兼容矩阵
 
-基线：本机 @earendil-works/pi-coding-agent 0.85.1。状态把上游支持与桥实现分开；上游存在命令不代表桥已支持。A 阶段只实现协议列出的子集。
+核对日期：2026-09-27。基线：本机 `@earendil-works/pi-coding-agent` 0.85.1。
 
-## 证据
+本文区分 **上游支持、当前代码存在、验证范围、待实现方案**。原 A–E 阶段表示建设顺序，不再用作完成或可靠性保证。审查问题见 [code-audit.md](code-audit.md)，修复设计见 [architecture.md](architecture.md)。P0 测试基础建设已完成；以下产品问题仍待修复。
 
-已完整核对包内 README.md、docs/rpc.md、docs/session-format.md。实现验收还需对照包内 dist/modes/rpc/rpc-mode.js、rpc-types.d.ts、dist/core/session-manager.js，并使用隔离进程做无模型请求握手。
+## 源码依据
 
-本机包目录：
+Pi 包内 `docs/rpc.md`、`docs/session-format.md`、`dist/modes/rpc/rpc-mode.js`、`rpc-types.d.ts` 和 `dist/core/session-manager.js`；桥以 `internal/transport/server.go` 的 `SupportedMethods`、`internal/runtime/` 与 `internal/pi/` 为准；UI 以 `src/modules/` 与 `ui-manifest.json` 为准。Pi Web 对照目录为相邻的 `../pi-web`，它的 SDK 能力不等于标准 RPC 能力。运行程序只通过 `--pi` 选可执行文件，不硬编码本机包安装路径。
 
-`/opt/devTools/files/pnpm/global/v11/1944e6-18d6e892633ca2c8-0/node_modules/.pnpm/@earendil-works+pi-coding-agent@0.85.1_ws@8.21.3/node_modules/@earendil-works/pi-coding-agent`
+## 命令与功能现状
 
-这些绝对路径是核对依据，不能硬编码进程序。运行时通过 --pi 配置可执行文件。
-
-## 命令与功能
-
-| 功能 | Pi 0.85.1 | 桥计划 | 注意事项 |
+| 能力 | Pi 0.85.1 / 所有权 | 当前桥与 UI | 边界及审查项 |
 |---|---|---|---|
-| 启动 RPC | ✅ --mode rpc | A | 不存在标准 ready；get_state 做握手 |
-| 创建/恢复 | ✅ CLI --session / --session-dir | A | 显式启动；列表/历史不启动 |
-| 发消息 | ✅ prompt | A | success 表示接受/排队，不是结束 |
-| 打断 | ✅ clear_queue + abort | A | abort 单独使用会继续尚存队列 |
-| 实时输出 | ✅ message_start/update/end 等 | A | update 是增量，不带累计 message |
-| 完全收敛 | ✅ agent_settled | A | agent_end 之后可能重试或继续 |
-| 状态 | ✅ get_state | A | 不应透传模型对象中的私有 headers/配置 |
-| 换模型/强度 | ✅ set_model/set_thinking_level | C | 能力列表来自当前 Pi，不能猜 level |
-| steering/follow-up | ✅ steer/follow_up 或 prompt.streamingBehavior | A/C | A 支持 prompt 的明确排队选项；独立管理 C |
-| 压缩/重试 | ✅ compact/set_auto_compaction/set_auto_retry/abort_retry | C | 单独 abort_compaction 不在标准命令表 |
-| Bash | ✅ bash/abort_bash | C | 不是 PTY；输出超大时有 fullOutputPath |
-| fork/clone | ✅ fork/clone | C | 会改变 worker session ID；runtime 必须先支持重绑定 |
-| 切换会话 | ✅ switch_session/new_session | C | 可能被扩展取消；不能直接透传破坏进程表 |
-| 树/原始条目 | ✅ get_tree/get_entries | C | append 游标不是分支分页游标 |
-| 原始历史阅读 | ✅ v3 JSONL | A | 桥读盘，不调用 get_messages 拉整份内容 |
-| 统计/导出/命名 | ✅ get_session_stats/export_html/set_session_name | C/E | 导出路径需授权；历史不得自己拼追加写入 |
-| 命令目录 | ✅ get_commands | C | 不包含内置 TUI /settings、/hotkeys |
-| 工具动态读取/设置 | ⚠️ 文档未列 get_tools/set_tools | C/E | 先核对源码；A 返回 unsupported，不伪造成功 |
-| 分支原地导航 | ⚠️ 未列 navigate_tree/fork_branch | C/E | SDK/Pi Web 能力不能当作 RPC 支持 |
-| reload | ⚠️ 未列 RPC reload | C/E | TUI /reload 不等于 RPC 命令 |
-| select/confirm/input/editor | ✅ extension_ui_request/response | C | Pi ctx.hasUI=true，A 对 dialog 明确取消，不能永久挂起 |
-| notify/status/widget/title/editor text | ✅ fire-and-forget UI 事件 | A/C | A 可转发，富界面 C |
-| 自定义 TUI component | 🚫 custom() 返回 undefined | E 评估 | 需要网页替代，不做终端控件直译 |
-| footer/header/editor component 等 | 🚫 RPC 下 no-op | E 评估 | capabilities 必须如实说明 |
-| PTY/Git/文件/技能配置 UI | 不是 Pi RPC 标准职责 | C/E | 在桥独立实现 |
+| RPC 启动、创建、恢复 | `--mode rpc`、`--session` | ✅ 已接线 | `get_state` 握手；列表、普通历史不启动 worker |
+| prompt / 取消 / 状态 | `prompt`、`clear_queue`、`abort`、`get_state` | ✅ 已接线，⚠️ 边界待修 | 接受不等于完成；B04/B30/B31、U03/U13 |
+| 增量与完成事件 | `message_update`、`message_end`、`agent_settled` | ✅ 已接线，⚠️ 恢复待修 | B05/B65、U15/U16；不能声称无损重连 |
+| 模型、思考强度 | `get_available_models`、`set_model`、thinking 命令 | ✅ 已接线 | 首次选择可能被回读覆盖，U02 |
+| steering / follow-up | 两类队列及其各自投递模式 | ⚠️ 参数与 UI 建模有误 | `streamingBehavior: steer` 与 queue `kind: steering` 不同；B03/U11 |
+| 压缩、自动压缩、自动重试 | 标准 RPC 命令 | ✅ 已接线，⚠️ 超时/读回限制 | B66/U14；Pi 状态没有自动重试的可靠读回字段 |
+| bash | RPC `bash`、`abort_bash` | ✅ 桥命令存在 | 不是 PTY；完整输出与 WS 大小错配 |
+| new / switch / fork / clone | 标准 RPC 身份变更 | ✅ 已接线，⚠️ 生命周期待修 | B09/B10/B64/B65；冲突必须在副作用之前处理 |
+| 树、原始条目 | RPC `get_tree`、`get_entries` | ⚠️ 当前仍依赖 worker | B06/U04；拟增加磁盘分页投影，不能把 append 游标当分支分页 |
+| 历史、搜索、思考/图片读取 | Pi v3 JSONL | ✅ 桥只读实现 | B11–B13、B28/B29/B37/B38/B43/B52/B72 |
+| 导出、命名、统计 | RPC 支持；Pi Web 另有文件导出路径 | ✅ 桥存在，⚠️ 导出需 worker | B45/B76/B77；独立只读导出是待实现方案 |
+| select / confirm / input / editor | 需要 UI 回执 | ✅ 交互闭环存在 | B16/B48/B67；超时、非法回复和过大请求不能留下永久 pending |
+| notify / setStatus / setWidget / setTitle / set_editor_text | fire-and-forget | ✅ 通用通道，无插件专属代码 | **setStatus 不需要回执**；B36 的状态缓存尚未按 session 隔离 |
+| 自定义 TUI、footer/header/editor component | RPC 下不转发或 no-op | 🚫 不伪装支持 | 如需网页能力，应由上游提供标准通道 |
+| 工具动态配置、原地树导航、reload | 未确认为标准 RPC 命令 | ⚠️ 不承诺支持 | TUI / SDK 方法存在不构成桥支持证据 |
+| PTY / 文件 / Git | 桥独立职责 | ✅ 已接线，⚠️ 边界待修 | 不是 Pi RPC 的安全沙箱 |
+| 模型配置、供应商 discover/test | 桥管理面 | ⚠️ 原始 JSON 编辑已接线 | 凭据恢复、写入与重定向待修；models.dev `config.catalog` 尚未接 UI |
+| relay / 主动隧道 | 桥独立职责 | ⚠️ 后端存在，❌ 云端 UI 未接通 | B19–B24/B35/B54 等；不作为可交付云部署声明 |
 
 ## 必须保留的语义
 
-1. LF 是唯一 RPC 记录分隔符；U+2028/U+2029 不切行。CRLF 可接受。
-2. 所有 request id 由桥生成内部唯一值，外部 requestId 不直接与扩展 dialog id 混用。
-3. message_end.message 权威；流式渲染按 contentIndex 和事件构造。
-4. tool_execution_update.partialResult 是累计工具输出，不能当字符串 delta 拼接。
-5. get_entries(since) 包含所有分支、元数据、压缩前历史。
-6. 初版不会启动 Pi 来读取磁盘历史，避免扩展初始化/格式迁移产生副作用。
-7. 没有保存的 project trust 时 RPC 使用 Pi 的非交互默认；A 默认 --no-approve，明确不自动批准项目扩展。
-8. --offline 只禁启动联网，不代表 prompt 不能调用模型。测试不得发送真实 prompt。
-9. 默认不自动加载用户全局 MC/模型配置做冒烟。真实 Pi 测试使用临时 agent-dir，关闭扩展/技能/上下文发现。
-10. 初版对未知协议/会话版本显式拒绝；新版测试通过前不扩展兼容声明。
+1. RPC 只按 LF 分帧，可接受 CRLF；U+2028/U+2029 不切行。外部 requestId、内部 RPC id、dialog id 相互独立。
+2. prompt 响应表示接受、排队或处理；后续失败走事件。`message_end.message` 是完整消息，`tool_execution_update.partialResult` 是累计输出，不能当 delta 拼接。
+3. `agent_end` 不等于全部收敛；队列、重试、压缩、直接 bash、扩展对话分别跟踪。
+4. 普通列表和历史只读 JSONL，不加载 AgentSession，不触发 Pi 格式迁移。Pi 是会话正文唯一写入方；桥内互斥不能约束不合作的外部 CLI。
+5. Pi 的 `models` 是数组，模型 `api` 是协议标识，不是 URL；`baseUrl` 才是地址。读、脱敏、恢复、摘要和校验必须使用同一 schema。
+6. 当前大树失败链已确认包括桥的 `MaxFrame=8 MiB` 和 `Client.read()` 超限关闭连接；约 9 MiB 的端到端失败**不能据此判定 Pi 自身有约 9 MiB 上限**。
+7. 默认不自动批准项目扩展；启用扩展不是执行隔离。`--offline` 只约束启动联网，不代表 prompt 不会访问模型。
+8. 真实 Pi 冒烟使用隔离 agent-dir，不加载生产 MC/密钥，不发送付费模型请求。流式和故障测试使用可控假 Pi。
 
-## UI 层（pi-webui-htmx）
+## 验证范围
 
-桥通过 `--ui-dir` 加载 UI 包；为空时只提供 JSON/WS API。
-`internal/presentation` 只渲染模板与提供静态资源，不持有任何会话状态。
+✅ 2026-09-27 审查结束时：`go vet ./...`、`go test -race ./...` 通过；UI 72 项 Vitest、typecheck、build、check 通过，首屏静态依赖闭包 gzip 36.63 KiB / 40 KiB。既有浏览器验收覆盖普通发送、分页、扩展确认、终端关闭、移动布局等路径。
 
-已接通：`/`、`/assets/<hash>`、`/ui/sessions`、`/ui/sessions/{id}/history`、
-`/ui/models`、`/ui/packages`、`/ui/files`、`/ui/diff`、
-`/ui/extensions/status`、`/ui/extensions/widgets`、`/ui/extensions/dialogs`。
+⚠️ 这些通过项不是对审查缺陷的否定。跨连接重复命令、重放窗口、超大响应、身份变更和迟到响应等边界已有额外反例；修复前仍为未解决。非 Linux 目前还存在 PTY 编译失败，不能写成“可构建但显式拒绝”。历史 SIGKILL 冒烟只覆盖直接 Pi 进程，不能证明子孙进程全部回收。
 
-两条实现约束来自本轮实测：
+⚠️ Pi Web checkout 缺少完整依赖，本轮对照以源码为证据，不据其失败测试推断产品质量。没有进行公网 relay、受管 cgroup、全文件系统组合或全部浏览器的完整认证。
 
-1. **`setStatus` 等待回执是 Pi RPC 的硬要求。** 不回复会让 worker 永久停在
-   `waiting_input`、空闲回收失效。桥按 method 分两类，fire-and-forget 的
-   绝不进 `pendingDialogs`。
-2. **`pendingDialogs` 必须存完整载荷**，只有 ID 时 HTTP 端点渲染不出
-   title/options。`PendingDialogPayloads()` 与 `PendingDialogs()` 分工。
+## 范围决定
 
-## 验收清单
-
-### 已通过（2026-09-26，本机）
-
-- [x] `go vet ./...` 与 `go test -race ./...` 全部通过
-- [x] 用可执行假 worker 验证启动、接受回复、异步事件和同时发送取消
-- [x] Unicode 分隔符/CRLF/超大帧/半帧 EOF 的 JSONL framing 测试
-- [x] 完整损坏历史记录、末尾半行、分支、重复 ID、断链、自环测试
-- [x] `session.list`/`history` 不触发 worker 启动
-- [x] 无授权、错误 Host、跨源 Origin、越界 cwd、符号链接逃逸被拒绝
-- [x] 慢订阅者被摘除且不阻塞 stdout；写入背压下 `Notify` 不挂起
-- [x] 浏览器断线不取消已启动任务；桥关闭/SIGKILL 后回收自己创建的进程
-- [x] 真实 Pi 隔离配置握手与退出；无模型请求、无生产会话修改
-- [x] 工作态实测：桥 10.2 MiB + Pi 工作进程 145 MiB
-- [x] UI 包经 `--ui-dir` 加载，11 个模板 + Vite 产物解析
-- [x] 浏览器实测：浏览历史不启动 Pi、翻页零重复、扩展 confirm 全闭环、
-      终端关闭后注册表归零、桥重启后自动重连、axe WCAG 2A/2AA 违例 0
-
-### 未完成
-
-- [ ] 非 Linux 平台进程监督（当前显式报错）
-- [ ] 与外部 `pi` CLI 的文件级互斥（未解决，仅限桥内单写者）
-- [ ] 隧道模式下按 clientId 的多标签路由（当前同 clientId 重连会顶掉旧连接）
-
-### 刻意不实现
-
-| 能力 | 原因 |
-|---|---|
-| 远程安装/卸载 Pi 包 | 等于任意代码执行；包在本机 CLI 管理，桥只读结果 |
-| 任意 CLI 命令透传 | 绕过全部参数与路径校验 |
-| `session.import` | 导入会改写会话文件 |
-| 会话写入接口 | 会话正文由 Pi 独占写入 |
+| 状态 | 能力 | 原因或后续 |
+|---|---|---|
+| 🚫 明确不做 | OAuth 设备码登录、供应商额度查询 | 用户只使用 API 凭据 |
+| 🚫 明确不做 | 插件/技能远程安装、更新、搜索及任意 CLI 透传 | 远程执行面；包由本机 CLI 管理，网页只读清单与版本 |
+| 🚫 不提供 | 任意会话正文写入、session.import | 会话持久化归 Pi |
+| ⚠️ 暂缓 | Web Push | 当前无需推送链路；不是永远禁止 |
+| ⚠️ 未立项 | PWA、版本检查/更新、PDF、Minimap、多语言、worktree 等 | 不能把未实现推断为用户明确不要；另行确定产品范围 |

@@ -10,10 +10,12 @@
 package testutil
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"sync"
+	"testing"
 )
 
 var (
@@ -26,7 +28,8 @@ var (
 //
 // 构建目标放在 os.TempDir() 下而不是仓库内的 testdata/bin/：
 //   - 避免把编译产物写进工作区，也避免污染 git status
-//   - 并行运行的多个包可以共用同一个产物（sync.Once 保证只构建一次）
+//   - 同一测试进程内由 sync.Once 复用；不同包/checkout 使用独占目录
+//   - 使用假 Pi 的包必须在 TestMain 调用 Run，全部测试退出后统一清理
 //
 // 构建失败时返回错误，调用方应直接让测试失败——
 // 静默跳过会让「测试通过」变成假象。
@@ -37,24 +40,40 @@ func FakePi() (string, error) {
 	return binary, buildErr
 }
 
-// build 编译 testdata/fake-pi 到临时目录。
+// Run 执行测试并清理本进程的假 Pi；应由使用 FakePi 的包在 TestMain 调用。
+// m.Run 返回前测试的 Cleanup 已执行，worker 已停止，不提前删除共享产物。
+func Run(m *testing.M) int {
+	code := m.Run()
+	if binary != "" {
+		if err := os.RemoveAll(filepath.Dir(binary)); err != nil {
+			fmt.Fprintln(os.Stderr, "清理假 Pi 临时目录失败：", err)
+			if code == 0 {
+				code = 1
+			}
+		}
+	}
+	return code
+}
+
+// build 编译 testdata/fake-pi 到本次构建独占的临时目录。
 func build() (string, error) {
 	repoRoot, err := findRepoRoot()
 	if err != nil {
 		return "", err
 	}
-	src := filepath.Join(repoRoot, "testdata", "fake-pi")
-	if _, err := os.Stat(filepath.Join(src, "main.go")); err != nil {
-		// fake-pi.go 是单文件 main 包，允许两种文件名。
-		if _, err2 := os.Stat(filepath.Join(src, "fake-pi.go")); err2 != nil {
-			return "", err
-		}
-	}
+	return buildIn(repoRoot)
+}
 
-	out := filepath.Join(os.TempDir(), "pi-bridge-fake-pi")
+func buildIn(repoRoot string) (string, error) {
+	dir, err := os.MkdirTemp("", "pi-bridge-fake-pi-")
+	if err != nil {
+		return "", err
+	}
+	out := filepath.Join(dir, "fake-pi")
 	cmd := exec.Command("go", "build", "-o", out, "./testdata/fake-pi")
 	cmd.Dir = repoRoot
 	if b, err := cmd.CombinedOutput(); err != nil {
+		_ = os.RemoveAll(dir)
 		return "", &BuildError{Output: string(b), Err: err}
 	}
 	return out, nil

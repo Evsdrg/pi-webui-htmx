@@ -1,217 +1,136 @@
-# 前端 ↔ 桥 通信设计
+# 前端 ↔ 桥 ↔ Pi 通信约定
 
-本文固定 `pi-webui-htmx` 与 `pi-bridge-go` 之间的通信方式。
-契约的强制部分在 [`api/v1/protocol.md`](../api/v1/protocol.md)，
-本文解释**为什么这样设计**，以及哪些是 Pi 的硬约束推出来的结论。
+更新：2026-09-27。本文描述分层、顺序和失败语义。[protocol.md](../api/v1/protocol.md) 记录 v1 接口现状；[architecture.md](architecture.md) 的 S01–S12 是待实现修复设计，[repair-plan.md](repair-plan.md) 统一实施依赖、影响与迁移。**标为目标的流程尚未生效，不能用于声称当前实现已经安全恢复。**
 
----
+## 1. 三层职责
 
-## 1. 三层，不是一层
-
-```
-浏览器 ──1. HTTP/HTML──▶ 桥 ──▶ UI 包模板渲染
-       ──2. WS/JSON────▶ 桥 ──▶ 命令与事件
-       ──3. stdio/JSONL─▶ pi ──▶ 真正的 agent
+```text
+浏览器 ── HTTP：页面/片段/受控资源 ──▶ Go presentation / store
+       ── WS：命令/回执/事件/PTY ────▶ Go transport / runtime
+                                            │
+                                            └── stdin/stdout JSONL ──▶ pi --mode rpc
 ```
 
-| 层 | 协议 | 内容 | 为什么 |
-|---|---|---|---|
-| 1 | HTTP + htmx | HTML 片段 | 请求-响应类界面：侧栏、历史、设置、文件、模型、包清单 |
-| 2 | WebSocket + JSON | 命令、事件、终端 IO | 双向、有序、需要回执 |
-| 3 | stdio JSONL | Pi RPC | Pi 自己的协议，桥不过度包装 |
+- htmx 负责完整 HTML 片段；TypeScript 处理双向命令、流式增量和组件生命周期。不是“只有流式可以用 JS”，发送、模型选择、对话回执等当前都走 WS。
+- 选择 WS 是为了复用双向连接、鉴权和背压实现；不是宣称 HTTP+SSE 无法实现这些语义。WebSocket 字节有序也不等于并发业务命令有执行顺序。
+- bridge 不嵌入 Pi SDK。普通历史直接读 JSONL；树/导出只读解耦尚未完成。
+- **目标 S06：** 大文件、图片、bash 完整输出、上传、导出走 HTTP 数据通道，WS 只传控制和小元数据。当前 `files.read/files.image` 仍可把大内容放进 WS，存在限额错配。
 
-**不要用 htmx 做流式对话。** Pi Web 的教训是逐 token 重渲染整条消息会丢光标、
-闪烁。第 1 层只负责「一整块已经确定的 HTML」。
+## 2. Pi 约束
 
-**不要用 SSE 替代 WS。** prompt/steer/follow-up/abort、扩展对话回执、
-终端输入都是双向的。SSE 得再配一条 POST，跨源时两条连接各自鉴权，
-且无法保证同 session 内的顺序。
-
----
-
-## 2. Pi 的三个硬约束（决定了大部分设计）
-
-### 2.1 命令响应 ≠ 任务完成
-
-`docs/rpc.md` 原话：*The command response is emitted after the prompt is
-accepted, queued, or handled. Failures after acceptance are reported through
-the normal event and message stream, not as a second `response`.*
-
-所以：
-
-- UI 收到 `ok:true` 只能理解为「已受理」
-- 真正结果从事件流的 `agent_settled` 来
-- 受理后失败**不会**有第二条 response
-
-### 2.2 只有 delta，没有快照
-
-`message_update` 明确写了 *Contains a delta event without a cumulative
-message snapshot*。完整内容只出现在两处：
-
-- `text_end.content` —— 单个内容块结束时
-- `message_end.message` —— 整条消息结束时
-
-**推论：断线重连不能靠补发 delta 恢复正在生成的文本。**
-补发环（replay）只对「还没丢的序号」有效；一旦序号被淘汰，
-客户端必须重新读持久历史，然后等下一个 `message_end`。
-桥不得伪造「已恢复」——缺口要显式告知。
-
-### 2.3 扩展 UI 是两类，不是一类
-
-`createExtensionUIContext` 里：
-
-- `select`/`confirm`/`input`/`editor` 阻塞等回执
-- `setStatus`/`setWidget`/`notify`/`setTitle`/`set_editor_text` 是 fire-and-forget
-- `setFooter`/`setHeader`/`custom`/`onTerminalInput` 等 12 个方法**不往 RPC 转**
-
-推论：桥必须按方法分类。把 fire-and-forget 也登记成待回复对话，
-会让 worker 永久停在 `waiting_input` 并挡住空闲回收
-（这个 bug 真实存在过，见 `internal/runtime/manager.go` 的 `needsDialogResponse`）。
-
----
-
-## 3. 命令面
-
-### 3.1 单一 WebSocket
-
-一个连接同时承载命令与事件。握手：
-
-```json
-{"version":1,"kind":"command","requestId":"ui-1","sessionId":"...","method":"session.subscribe"}
-```
-
-订阅后该 session 的事件推到同一连接。多 session 用多条 subscribe。
-
-### 3.2 requestId 三重作用
-
-| 作用 | 范围 | 实现 |
-|---|---|---|
-| 响应关联 | 单次调用 | `pending[id]` |
-| 连接内防重 | 连接生命周期 | `seen` 表，有上限 |
-| 跨重启去重 | 桥重启后仍有效 | 有界追加日志（回执） |
-
-跨重启语义：
-
-- 回执 `ok`/`error`/`unknown` → 直接回放结论，**绝不重新执行**
-- 回执 `rejected`（协议层拒绝，命令从未送达 Pi）→ 允许重试
-- 无回执 → 正常执行
-
-**`unknown` 是个真实状态**，不是错误。命令已写入 stdin 但超时或进程退出，
-可能已生效。此时返回 `outcome_unknown`，客户端必须自己去对账，
-不能当作失败重试。
-
-### 3.3 取消不被堵住
-
-`internal/pi/client.go` 把控制帧和命令帧分成两个队列：
-
-```
-notifies (256) ──优先──┐
-                       ├─▶ 单一写协程 ──▶ stdin
-writes   (64)  ────────┘
-```
-
-控制帧（扩展回执、取消对话）优先于命令帧。否则一个卡住的长命令
-会让 `abort` 排在后面，Pi 继续跑。
-
-控制帧队列**不得**在满时杀死连接——那会让整个会话一起死。
-满时返回 `ErrLimit`，调用方知道没送达。
-
----
-
-## 4. 背压与限额
-
-原则：**慢消费者绝不影响 Pi，也绝不被无限缓冲拖垮桥。**
-
-| 位置 | 限额 | 超出后的行为 |
-|---|---|---|
-| Pi stdout 读取 | 持续读取，不暂停 | — |
-| 单事件帧 | 256 KiB | 发 `bridge.event_omitted` + `resyncRequired` |
-| 每订阅者 | 32 条 / 1 MiB | 摘除该订阅者并关闭 |
-| 补发环 | 256 条 / 1 MiB，按 epoch 隔离 | 老序号返回 `resync_required` |
-| WS 单帧 | 请求 1 MiB / 响应 512 KiB | 拒绝 |
-| 连接队列 | 1 MiB | 拒绝 |
-| 在途命令 | 16 | `limit_exceeded` |
-| 回执日志 | 4096 条 / 4 MiB × 3 轮转 | 淘汰最旧 |
-
-事件超限时**不丢弃了事**：发一个明确的 `resyncRequired` 帧，
-客户端据此重新读历史。静默丢失比显式缺口更难调试。
-
----
-
-## 5. 滚动位置
-
-这是 Pi Web 的真实 bug，必须在前端契约里解决。
-
-**Pi Web 的做法**（`lib/chat-lazy-load.ts`）：
-
-```ts
-captureScrollDistance(scrollHeight, scrollTop) => scrollHeight - scrollTop
-restoreScrollTop(scrollHeight, saved) => Math.max(0, scrollHeight - saved)
-```
-
-这个公式只在**新增高度全部位于视口上方**时正确。而 Pi Web 按单条消息
-切片分页，刀常落在一轮对话中间，于是：
-
-- 已在屏幕上的 assistant 被重新折进 `ProcessDetailsGroup`
-- 新增高度有一部分在当前这一轮**内部**
-- 保持「离底部距离」等于把底部钉死，中间被撑开
-- 用户正在读的那段向下移
-
-而且修正 effect 只依赖 `visibleCount`，长度没越过 50 时根本不执行。
-
-**我们的做法**：从结构上排除，而不是补公式。
-
-1. **整轮渲染**：一个历史片段只含完整回合，插入位置永远在轮边界
-2. **桥下发滚动模式**：响应头 `X-Scroll-Mode: prepend|append`
-   - `prepend`：保持离底部距离（新增内容全在上方）
-   - `append`：滚到新片段
-3. **孤儿 assistant 单独成轮**，不并入上一轮，避免翻页时被重新折叠
-
-模板不写滚动逻辑，全部由桥的响应头决定。
-
----
-
-## 6. 云端隧道
-
-浏览器经 relay 连本地桥时，帧外面包一层最小路由封装：
-
-```json
-{"to":"<目标 clientId>","from":"<来源 clientId>","data":<原始业务帧>}
-```
-
-- relay **只读 `to`/`from`**，绝不解析 `data`
-- 桥到 relay 必须带 `to`，缺失即丢弃，不做广播
-- 同一 `clientId` 重连会顶掉旧连接；多标签各自用不同 clientId
-- relay 不落盘会话正文、不接触模型密钥
-
-设备撤销必须**立即**中断活跃隧道与浏览器连接，不能只等自然掉线。
-
----
-
-## 7. 不做的事
-
-| 不做 | 理由 |
+| 事实（Pi 0.85.1） | 系统含义 |
 |---|---|
-| 二进制协议（protobuf/cbor/msgpack） | JSON 可读、可 `curl` 调试、TS 类型直接对应。流量不是瓶颈 |
-| htmx 做流式 | 逐 token 替换 HTML 会丢光标、闪烁 |
-| SSE 替代 WS | 双向场景下 SSE 要配 POST，顺序与鉴权都更麻烦 |
-| 桥侧累积完整会话 | 会话由 Pi 独占；桥只保留有界的传输状态 |
-| 伪造无损重连 | Pi 只有 delta 没有快照，缺口必须显式 |
-| WebRTC | 本地直连场景下 WS 已够；P2P 打洞在 NAT 后不稳定 |
-| 长轮询降级 | WS 不可用时直接报错，不做半可用状态 |
+| prompt response 表示 accepted/queued/handled | 回执不是任务完成；接受后的失败走事件流 |
+| message_update 只有 delta | 重放窗口缺失时不能重建中途完整消息 |
+| text_end / message_end 有完整内容 | 使用权威结果替换局部投影，不能拼接重复文本 |
+| tool_execution_update.partialResult 为累计结果 | 不能当 delta 追加 |
+| agent_settled 表示 agent 队列/重试最终收敛 | 直接 bash、扩展对话、PTY 仍有独立生命周期 |
+| dialog 与 fire-and-forget 是两类 | 只有 select/confirm/input/editor 进入 pending |
 
----
+setStatus 不需要回执。Pi timeout 可能自行结束对话；桥必须收敛本地 pending，不能用“曾经收到过 dialog”永久阻止回收。
 
-## 8. 变更规则
+## 3. 标识与作用域
 
-| 变更 | 是否破坏契约 |
-|---|---|
-| 增删模板、改样式、改类名 | ❌ |
-| 给响应**增加**字段 | ❌ |
-| **重命名或删除**字段 | ✅ |
-| 改 URL | ✅ |
-| 增加对桥命令的依赖 | ✅（要进 `requiredMethods`） |
-| 改错误码集合 | ✅ |
-| 改 `protocolVersion` | ✅ |
+| 标识 | 含义 | 不能替代 |
+|---|---|---|
+| requestId | 一次用户命令的关联/去重键 | sessionId、entryId |
+| 内部 RPC id | bridge↔Pi 调用关联 | 外部 requestId、扩展 dialog id |
+| workerID | 一个进程实例 | 会随 fork/switch 改变的 sessionId |
+| epoch + seq | 一个 worker 身份代次中的传输游标 | JSONL 持久 entryId |
+| entryId + blockIndex | 持久记录及其内容块 | 回合末尾 assistant ID |
+| UI generation / request sequence | 页面作用域与面板读取的新旧关系 | 命令在服务端的取消证明 |
+| connection generation | 同 clientId 重连的新连接 | 用户/设备授权身份 |
 
-UI 可以随时改样子，不能单方面改协议。
+目标：requestId 在认证主体/设备下唯一，重试同 ID 必须同指纹；UI 请求发起时捕获目标，在等待后不得重新读取全局 sessionId。身份变化同时更换 epoch，旧事件不能切回旧 epoch。
+
+## 4. 命令受理与崩溃语义（目标 S01）
+
+以下可靠日志次序只适用于须持久化的变更；只读、连接订阅、临时 PTY 输入及安全控制使用整体规划中的各自策略。不能把逐按键输入同步写盘，也不能让存储故障堵住取消。
+
+```text
+认证 → 解码/权限/实际字节校验 → 配额/目标预留
+     → 原子 claim(requestId, fingerprint)
+     → durable intent + Sync
+     → Pi 入队/写入 → Pi response 或 unknown
+     → durable terminal receipt → 回客户端
+```
+
+- 当前实现只在命令完成后记录回执，仍有 B04/B30/B31/B47/B58 的窗口；不能声称已经完成跨重启 at-most-once。
+- 同请求并发只有一个执行者；其余等待/查询该请求。同 ID 不同参数 conflict。持久 intent 没终态，恢复为 outcome_unknown，绝不自动重发。
+- 这是**有效记录保留范围内至多派发一次**；Pi 与日志不能原子提交，不能承诺 exactly-once，也不能保证有 intent 就一定执行过。
+- 无回执不证明没执行：记录可能已过保留期或被运维删除。客户端始终不自动重发变更命令。被明确拒绝且尚未派发的请求可以按协议重试。
+- 任意变更命令需要可靠记录时，存储不可用就拒绝；读取/对账/安全取消不应被连带禁用。
+- 连接中断取消的是等待与输出，不取消已受理执行。长命令期限来自同一方法策略；UI 等待期限不得短于服务端宣告期限。超时不会自动生成一次新的执行。
+
+### 取消的优先级
+
+当前 Pi client 已分 `notifies(256)` 与 `writes(64)`，单 writer 优先读取 notify。**这不代表所有 abort RPC 已进入优先队列**。目标是服务端准入和 stdin 写入两层都给安全控制命令保留有界容量，并按方法分类接线。
+
+优先级不能打断已经在写的帧；所以命令帧也必须小且有写入期限。Notify 入队也不是 stdin 写成功；dialog 消费需要可观察的写入结果。
+
+## 5. 原子订阅与恢复（目标 S02）
+
+```text
+worker 短锁内：验证 epoch/afterSeq → replay 截止 fence → 注册 live queue
+锁外同一 writer：subscription confirmation → replay(<=fence) → live(>fence)
+```
+
+- 确认携带当前身份代次；UI 只信当前连接/订阅对应确认，不从任意事件猜 epoch。当前 Workbench.subscribe 未消费确认的身份数据，需在客户端建立确认状态后才派发该订阅的业务事件；只改服务器发送顺序不能替代这个调用方修改。
+- replay + live 积压共用容量预算。窗口不足、事件省略、队列溢出、身份变化必须发 resync 或关闭需重连的订阅，不能静默遗漏。
+- UI 在 omitted/resync 时立即重读持久历史，清除“不完整 live 已恢复”的假象；正在生成的部分标记缺口，等 message_end。
+- 退订销毁底层订阅任务，Close 销毁全部 attachment。发送失败的虚拟连接必须注销；同 clientId 重连使用新对象，旧 Close 不得删新对象。
+
+## 6. 大小、时间与背压
+
+当前代码默认值（不是所有路径都已统一执行）：
+
+| 边界 | 当前默认 | 已知差距 |
+|---|---:|---|
+| bridge↔Pi JSONL 单帧 | 8 MiB | 超限会关闭 bridge 的 RPC client；大树失败不能直接归咎 Pi |
+| 浏览器 WS 请求/响应 | 1 MiB / 512 KiB | base64 图片、文件和完整输出可超过可传输上限 |
+| 单事件 | 256 KiB | 过大 dialog 尚有永久等待风险 |
+| 订阅队列 | 32 条 / 1 MiB | tunnel 退订/并发访问尚有缺陷 |
+| 重放环 | 256 条 / 1 MiB | 注册与重放快照尚未原子化 |
+| 回执内存/日志 | 4096 条 / 每文件 4 MiB / 最多 3 个轮转文件 | 不构成未经修复的可靠去重保证 |
+| runtime 操作等待 | 30 秒 | UI compact 120 秒不能改变服务端期限 |
+
+目标规则：
+
+1. 同一本限额配置生成 capabilities，UI 读实际值；用户 limit 只能降低服务端上限。条数、字节、并发、时间分开限制。
+2. 所有数据在入队/分配/启动 goroutine **之前**检查或预留预算；实际 reader 施加 N+1 字节上限，不仅 Stat 检查。
+3. 受控超限返回 limit_exceeded/truncated 并尽可能保住连接；非法 framing 才关闭对应故障连接。Pi stdout 持续消费，不向 Pi 传播浏览器背压。
+4. JSON/base64/路由转义后的完整长度才是线上的字节。上传上限不能独立于 Pi 的 8 MiB；推荐的附件预算见 S06，未实施前仍是旧限制。
+5. 未完成控制操作有保留容量，数据下载/输出慢客户端可被取消，不挤占 abort。
+
+## 7. 页面读取、流式与滚动
+
+目标 S07：每次页面读取持有 session generation、面板序号和目标节点；切换时取消旧读请求。htmx `beforeOnLoad` 在响应头处理前拒绝过期响应，`beforeSwap` 再检查目标；Promise 返回后检查已经来不及。
+
+滚动由前端根据用户位置决定：
+
+- 切换前已贴底才跟随新内容；正在读历史时保留稳定 entryId+视口偏移。
+- prepend、append、replace 各有策略，`X-Scroll-Mode` 只是诊断/提示，服务端看不到用户是否贴底。
+- 分页优先在回合边界；长回合仍受字节/条目硬限额，不能为了“整轮”无限读取。后续分段需要稳定 group/segment ID，避免重组已显示 DOM。
+- Markdown/图片/公式异步增高后继续锚点校正，UI 不由响应头无条件拉到底部。
+
+## 8. 云端链路（目标 S09/S12，当前未接通）
+
+目标是浏览器仍使用同源 HTTP 与 WS：
+
+```text
+浏览器 /devices/<id>/... → 云 relay 授权/设备路由
+                        → 有界 tunnel → 本地相同 HTTP/Executor
+```
+
+- 设备前缀是待实现路由示意，不是当前可用 URL；同标签页固定设备，切换设备重建 UI scope。
+- 现有 tunnel 的 `from/data` 与 `to/data` 信封只解决 WS 路由，尚不足以转发 HTMX 片段、资产、上传和下载。
+- 新 HTTP tunnel 必须使用允许的资源类型/路径、request ID、分块、credit/取消和预算，不能提供任意 URL 代理；route 开销单独计入线上帧限制。
+- relay 认证后填可信主体/设备路由，本地桥验证隧道身份及授权；浏览器不能伪造 from 或借另一设备读取资源。
+- 设备 token 在 upgrade Authorization；非环回 WSS；明确 public origin 和受信代理来源。TLS 中继可见内容，不落盘不等于 E2EE。
+- 本地与云端使用同一版本的模板/资源/协议。HTTP+WS+图片+导出+上传闭环通过前，不能把后端 tunnel 已有等同云产品已可用。
+
+## 9. 变更纪律
+
+新增可选字段/方法可以能力协商；完整修复涉及订阅、请求结果、秘密与资源语义，整体规划已选择在 P6 成对升级为 v2。此前仍保留当前 v1 的明确形状，不提前改版本；发布后不保留旧盲写/去重路径作回退。不得继续靠无期限猜形状掩盖协议漂移。
+
+范围选择、默认值、错误码由对应契约维护；本文件解释次序，不复制另一份方法清单。迁移与回滚按整体规划执行，每个修复必须有与源码行为相符的判定性测试，模板正则不替代端到端接线。
