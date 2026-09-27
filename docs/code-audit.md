@@ -22,11 +22,11 @@
 | B06 | ✅ 已修 | Bridge | **修复：** 超限帧不再杀死与 Pi 的连接——用已读头部定位调用方、吞掉行尾保持流对齐，只让那一条命令失败并返回明确错误。回归用回环 fake 验证第二条命令仍成功；反例（超限即 fail）稳定失败。原 9 MiB 探针的归因已按源码纠正为桥自身 8 MiB 帧上限。 | `internal/pi/client.go`；`internal/jsonl/reader.go`；`client_test.go` |
 | B07 | ✅ 已修 | Bridge/UI | **修复：** 大内容改走 HTTP `/ui/file-text`（不依赖 UI 包、支持压缩）；WS 版 `files.read` 加 448 KiB 安全预算，超限截断并标记 `truncated`，不再把超限帧交给连接层。前端优先 HTTP、失败才退回 WS 预览。 | `internal/transport/server.go`；`pi-webui-htmx/src/modules/workspace.ts` |
 | B08 | ✅ 已修 | Bridge | **修复：** 删除前先 `StopSession` 停掉该会话 worker，失败时非 force 明确拒绝、force 下仍尽力再停；结果带 `stoppedWorker`。原问题：worker 忙时也能删文件，Pi writer 仍存活。 | `internal/runtime/manager.go`；`internal/transport/server.go` |
-| B09 | 中 | Bridge | `SwitchSession` 从 basename 直接解析 ID，不能识别 Pi 的 `timestamp_ID.jsonl` 标准命名。 | `pi-bridge-go/internal/runtime/identity.go` |
-| B10 | 中 | Bridge | fork/clone 重绑定后停止的 Pi 进程仍可留在 manager 注册表。 | `pi-bridge-go/internal/runtime/manager.go`；`internal/runtime/identity.go` |
+| B09 | ✅ 已修 | Bridge | **修复：** 新增 `sessionIDFromFileName`，取下划线后最后一段，无下划线时退回整个 basename。回归覆盖标准命名、裸 ID、无扩展名与畸形尾段。 | `internal/runtime/identity.go`；`identity_test.go` |
+| B10 | ✅ 已修 | Runtime | **修复：** 退出清理改为按「当前映射」删除，不再用启动时捕获的 sessionId。回归验证 fork 后回收时注册表彻底清空；反例下 `forked-fake-session` 永久残留。 | `internal/runtime/manager.go`；`identity_test.go` |
 | B11 | 中 | Bridge/UI | 多个 assistant entry 的 thinking 占位符关联错 entry：较早思考块不可取回，后续块可能重复出现。 | `pi-bridge-go/internal/presentation/` |
-| B12 | 中 | Bridge | scan cache 仅以 path/size/mtime 验证；同路径、同长度、保留 mtime 的原子替换可命中旧索引，叶子 ID 与实际记录不一致。 | `pi-bridge-go/internal/sessions/cache.go` |
-| B13 | 中 | Bridge | 快速历史扫描可放过完整且已换行、但正文损坏的旧记录，与“完整损坏行显式报错”的契约不符。 | `pi-bridge-go/internal/sessions/scan.go` |
+| B12 | ✅ 已修 | Sessions | **修复：** 缓存键加入文件身份（dev+ino，平台适配）；取不到身份时一律不命中、也不写入。回归用 rename + 保留 mtime + 等长替换复现原缺陷。 | `internal/sessions/cache.go`；`identity_lin.go`；`cache_test.go` |
+| B13 | ✅ 已修 | Sessions | **修复：** 快路径补 `balancedJSON` 结构配平校验（O(n)、零分配），覆盖未被本页选中的损坏记录；反向用例确认含转义引号与嵌套括号的合法记录不误伤。 | `internal/sessions/head.go`；`scan.go`；`scan_test.go` |
 | B14 | ✅ 已修 | Tunnel | **修复：** subs 改为保存真实订阅句柄，退订与重复订阅都先 Close 旧订阅。回归做 12 轮订阅/退订后核对 worker 订阅数归零（反例下为 8，即上限）。 | `internal/transport/tunnel.go`；`tunnel_test.go` |
 | B15 | ✅ 已修 | Tunnel | **修复：** 隧道命令与本地 WS 共用 `admit` 与全局 `operations` 预算。原问题：隧道路径完全绕过桥级并发上限。 | `internal/transport/tunnel.go`；`claims.go` |
 | B16 | ✅ 已修 | Bridge | **修复：** 先校验参数再摘除对话；回执送达失败时把对话还回等待表。回归覆盖「非法回执后可合法重试」。 | `internal/runtime/dialogs.go`；`dialogs_test.go` |
@@ -69,7 +69,7 @@
 | B41 | 中 | Relay | `Server.Close()` 注释称关闭全部连接，但只关闭 tunnels、不遍历 `s.clients`；活动浏览器 WS 在调用 `Close()` 后仍保持打开。定向 WS 测试已复现。 | `internal/relay/server.go`；`relay-close-probe.log` |
 | B42 | ✅ 已修 | Bridge | **修复：** 状态设 64 KiB 原始字节及条目双限，预留 JSON/WS 空间，返回完整记录及 truncated，UI 显示截断。精确边界及转义预算回归通过。原问题：`GitStatus` 的 2 MiB stdout 截断被 `gitOutput` 丢弃；10000 个未跟踪文件的探针只返回 9119 条且无 `truncated` 字段，接口静默显示不完整状态。超过 512 KiB 的列表还会超出 WS 响应帧上限。 | `internal/workspace/git.go`；`git-status-limit-probe.log` |
 | B43 | 中 | Bridge | 全文搜索最多遍历 200 个文件、单文件 16 MiB；超大文件会标截断但不计入 `scanned`，因此实际 I/O 可越过文件数预算；`ctx` 只在文件之间检查，单文件扫描期间取消不生效。并发搜索可放大磁盘与 CPU 消耗。 | `internal/sessions/search.go` |
-| B44 | 中 | Build | `GOOS=darwin GOARCH=arm64 go test -exec=true ./...` 编译失败：`internal/terminal/terminal.go` 在通用文件直接使用 Linux-only `SysProcAttr.Pdeathsig`。这与 runtime `process_other.go` 声称非 Linux 显式报错的可构建路径不一致。 | `internal/terminal/terminal.go`；`cross-darwin.log` |
+| B44 | ✅ 已修 | Build | **修复：** 终端平台差异收敛到 `proc_lin.go`/`proc_oth.go`，非 Linux 显式报错。linux/darwin/windows 三平台 `go build` 与 `go vet` 均通过。 | `internal/terminal/{terminal,proc_lin,proc_oth}.go` |
 | B45 | 中 | Bridge | Pi Web 为 Pi 导出的 HTML 把 `sortChildren/mapNodes/markActive` 改为迭代实现，专门修复 5000+ 深树栈溢出；桥直接透传 Pi `export_html` 文件，没有同等处理，长线性会话导出后浏览器仍可能栈溢出。 | `internal/runtime/session_ops.go`；`pi-web/app/api/sessions/[id]/export/route.ts` |
 | B46 | 中 | Relay | `AddUser` 不限制 owner 字符；用户名包含 `.` 时 `SignCookie` 产出的 `exp.owner.sig` 被 `CheckCookie(strings.Split(...))` 拆成多段，浏览器 cookie 永远认证失败。句点用户名探针已复现。 | `internal/relay/users.go`；`relay-owner-cookie-probe.log` |
 | T01 | ✅ 已修 | Tests | 假 Pi 改为每个测试进程独占临时目录；sync.Once 仅复用进程内产物，runtime/transport/testutil 在 TestMain 统一清理。并发构建及编译失败清理测试通过，恢复旧固定路径后反例按预期失败。 | `internal/testutil/fakepi.go`；三个包的 `main_test.go`/`TestMain`；P0 |
