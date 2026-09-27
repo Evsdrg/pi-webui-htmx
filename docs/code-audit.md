@@ -64,7 +64,7 @@
 | B36 | 中 | Bridge | `setStatus` 快照只按 key 全局存储，不含 sessionId；不同 Pi worker 的同名状态互相覆盖，切换会话可能看到另一会话的扩展状态。Pi Web 将状态保存在 per-session state。 | `internal/transport/extension_state.go`；`internal/transport/server.go`；`pi-web/hooks/useAgentSession.ts` |
 | B37 | 中 | Bridge | 会话列表首次补标题时，`titleForPage` 为每条当前页会话从文件头扫描到尾，以找最新 `session_info`。多个长会话时列表请求重复读取大量完整 JSONL；这条路径不使用 History 的 scan cache。 | `internal/sessions/metadata.go`；`internal/sessions/index.go` |
 | B38 | 中 | Bridge | 每次惰性加载 thinking/tool image 都由 `rawEntry` 从 JSONL 文件头逐行扫描到目标条目；History 建好的偏移索引/scan cache 未复用，展开多个旧块会重复扫描长会话。 | `internal/sessions/lazy.go`；`internal/sessions/cache.go` |
-| B39 | 低 | Bridge | `Renderer.Asset` 在查询压缩缓存前先 `os.ReadFile` 原始资产；压缩命中仍每次分配并读完整 JS/CSS，抵消缓存的部分收益。 | `internal/presentation/presentation.go` |
+| B39 | ✅ 已修 | Bridge | **修复：** 压缩命中先返回缓存，未命中才读原文；回归用「预热后删除原文件仍可命中」验证。原问题：命中前仍 `os.ReadFile` 并分配完整 JS/CSS。 | `internal/presentation/presentation.go`；`compress_test.go` |
 | B40 | 高 | Runtime | Linux `Pdeathsig=SIGTERM` 只作用于 Pi/terminal 的直接子进程，不会发给整个进程组；桥被 SIGKILL 后，忽略 SIGTERM 的 shell/扩展后代仍存活。带孙进程的 helper 反例已复现。 | `internal/runtime/process_linux.go`；`internal/terminal/terminal.go`；`pdeath-probe.log` |
 | B41 | 中 | Relay | `Server.Close()` 注释称关闭全部连接，但只关闭 tunnels、不遍历 `s.clients`；活动浏览器 WS 在调用 `Close()` 后仍保持打开。定向 WS 测试已复现。 | `internal/relay/server.go`；`relay-close-probe.log` |
 | B42 | ✅ 已修 | Bridge | **修复：** 状态设 64 KiB 原始字节及条目双限，预留 JSON/WS 空间，返回完整记录及 truncated，UI 显示截断。精确边界及转义预算回归通过。原问题：`GitStatus` 的 2 MiB stdout 截断被 `gitOutput` 丢弃；10000 个未跟踪文件的探针只返回 9119 条且无 `truncated` 字段，接口静默显示不完整状态。超过 512 KiB 的列表还会超出 WS 响应帧上限。 | `internal/workspace/git.go`；`git-status-limit-probe.log` |
@@ -107,8 +107,8 @@
 | B57 | 高 | Tunnel | tunnel sender 写失败后 `virtualConn.pump` 退出，但连接仍留在 `virtual` 映射；同一 `clientId` 重连复用死连接，后续响应入队却无人发送。定向测试复现。 | `internal/transport/tunnel.go`；`tunnel-pump-probe.log` |
 | B58 | 高 | Storage | 启动忽略末尾半行后仍以 append 打开回执日志，新回执会接在损坏 JSON 后；关闭重开后该新回执不可读取。定向测试复现。 | `internal/storage/receipts.go`；`receipt-tail-probe.log` |
 | B59 | 中 | Management | `npm:@scope/pkg@version` 的版本后缀未从 npm 包名剥离；已安装版本读取路径错误，registry URL 也把版本约束当包名。锁定版本夹具复现读取为空。 | `internal/management/packages.go`；`pinned-package-probe.log` |
-| B60 | 中 | HTTP | `PickEncoding` 忽略 qvalue；`Accept-Encoding: br;q=0, gzip;q=1` 仍选择 br，违反客户端明确禁用项。定向测试复现。 | `internal/presentation/presentation.go`；`encoding-qvalue-probe.log` |
-| B61 | 中 | HTTP | 静态资产仅在选中压缩编码时设置 `Vary: Accept-Encoding`；identity 响应缺失 Vary，CDN/共享缓存可能把 brotli 资产发给不支持的客户端。 | `internal/transport/server.go` |
+| B60 | ✅ 已修 | HTTP | **修复：** 解析 qvalue，省略视为 1，未列出且无 `*` 视为不可接受，同名重复取最严格，非法 q 视为禁用。回归覆盖 `*`、`*;q=0`、`br;q=0`、同名重复与畸形 q。原问题：忽略 qvalue，`br;q=0` 仍选 br。 | `internal/presentation/presentation.go`；`compress_test.go` |
+| B61 | ✅ 已修 | HTTP | **修复：** `Vary` 无条件声明；端到端测试按 8 种 Accept-Encoding 校验 Vary、Content-Encoding 与解压结果。原问题：仅压缩分支设置，identity 缺 Vary。 | `internal/transport/server.go`；`server_test.go` |
 | B62 | 中 | Sessions | `trash` 命令存在但执行失败时，`Delete` 回退到 `os.Remove` 永久删除；用户无法恢复。故障脚本探针复现。 | `internal/sessions/delete.go`；`delete-trash-probe.log` |
 | B63 | 高 | Relay | 非环回 `--listen` 配合默认空 `--host` 仍可启动；空 host 会同时跳过 Host/Origin 校验，且 HTTP listener 不强制 TLS，误部署可明文暴露认证令牌与 Cookie。 | `cmd/pi-relay/main.go`；`internal/relay/server.go` |
 | B64 | 高 | Runtime | `SwitchSession` 先令 Pi 切到目标文件，再调用 `Rebind` 检查目标 worker 冲突；若目标会话已活跃，冲突发生时 Pi 已切换，旧键下的 worker 仍可 `Prompt`，可能形成双写。 | `internal/runtime/identity.go`；`internal/runtime/manager.go` |
@@ -174,7 +174,7 @@
 | S08 扩展资源状态机 | B16、B36、B48、B67 | 分类/期限/写入回执；非法回复可重试，超大/过期/关闭不留幽灵 pending | ⚠️ 待实现 |
 | S09 relay 持久身份 / 部署 | B19、B20、B21、B22、B23、B24、B35、B41、B46、B55、B63、B78 | 持久与易失状态分离；TTL/连接预算/安全 Cookie/WSS；重启、写失败、撤销与 HTTPS 反代测试 | ⚠️ 待实现 |
 | S10 受限 Git runner | B18、B25、B26、B42、B56 | 禁隐式 helper、流式预算、unborn 支持；标记脚本不执行、截断可见、后代收敛 | ✅ P1 实现与两仓联测 |
-| S11 HTTP 缓存 / 内容资源 | B39、B60、B61、U07 | qvalue/identity/Vary 矩阵，先查缓存；反复挂载释放 URL/组件资源 | ⚠️ 待实现 |
+| S11 HTTP 缓存 / 内容资源 | B39、B60、B61、U07 | qvalue/identity/Vary 矩阵，先查缓存；反复挂载释放 URL/组件资源 | ✅ B39/B60/B61 已修并两仓联测；U07 待实现 |
 | S12 云适配 / 能力与回归 | B34、B54、B80、D01、D02、T01 | 同源 HTTP+WS 云链路，方法/限额同源，版本协商，CI与隔离夹具 | ✅ P0 夹具/CI配置/联测；⚠️ 其余待实施 |
 
 实施顺序采用整体规划 P0–P7；S 编号仍作为领域归属，不再维护另一份粗粒度施工顺序。每批验证全部受影响入口/调用方与迁移，允许边界固定后的 UI/只读叶子模块并行，不允许复制执行器或以旧危险路径作为回退；台账只在专项验收通过后关闭。

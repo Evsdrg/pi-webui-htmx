@@ -252,10 +252,12 @@ func (s *Server) serveUI(w http.ResponseWriter, r *http.Request) bool {
 		// 文件名带内容哈希，可长期不可变缓存。
 		w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
 		w.Header().Set("Content-Type", mime)
+		// Vary 必须无条件声明：共享缓存按 Accept-Encoding 区分变体，
+		// 只在压缩分支设置会让 identity 响应缺少 Vary，
+		// 代理可能把 brotli 变体回给不支持它的客户端。
+		w.Header().Set("Vary", "Accept-Encoding")
 		if encoding != "" {
-			// Vary 必须声明，否则共享缓存会把压缩版发给不接受编码的客户端。
 			w.Header().Set("Content-Encoding", encoding)
-			w.Header().Set("Vary", "Accept-Encoding")
 		}
 		w.WriteHeader(200)
 		_, _ = w.Write(body)

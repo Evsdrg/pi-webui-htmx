@@ -202,29 +202,106 @@ func funcMap() template.FuncMap {
 var Encodings = []string{"br", "gzip"}
 
 // PickEncoding 按 Accept-Encoding 选编码；客户端不支持时返回空字符串。
-// 只认完整 token，不解析 qvalue——浏览器的默认头部就够用，
-// 手写 qvalue 解析容易在边界上出错，收益却接近零。
+//
+// 解析 qvalue：`br;q=0, gzip;q=1` 表示客户端明确禁用 br，只能选 gzip。
+// 省略 q 视为 1；未列出且无 `*` 视为不可接受。同分时按 Encodings 顺序
+// （br 压缩率更高）取先者。
 func PickEncoding(accept string) string {
 	if accept == "" {
 		return ""
 	}
-	fields := strings.Split(accept, ",")
-	has := func(name string) bool {
-		for _, field := range fields {
-			// 形如 "br;q=1.0" 或 " gzip"，取分号前的一段并去空白。
-			token := strings.TrimSpace(strings.SplitN(field, ";", 2)[0])
-			if strings.EqualFold(token, name) {
-				return true
-			}
-		}
-		return false
+	// 头部来自客户端，限制长度避免异常输入下的无谓解析。
+	if len(accept) > 1024 {
+		accept = accept[:1024]
 	}
+	weights := map[string]float64{}
+	star := -1.0
+	for _, field := range strings.Split(accept, ",") {
+		name, q, ok := parseAcceptField(field)
+		if !ok {
+			continue
+		}
+		if name == "*" {
+			star = q
+			continue
+		}
+		// 同名重复出现时取最严格的（最小权重），避免用后面的项覆盖明确禁用。
+		if prev, exists := weights[name]; exists && prev <= q {
+			continue
+		}
+		weights[name] = q
+	}
+	best, bestQ := "", 0.0
 	for _, name := range Encodings {
-		if has(name) {
-			return name
+		q, explicit := weights[name]
+		if !explicit {
+			if star < 0 {
+				continue
+			}
+			q = star
+		}
+		if q <= 0 {
+			continue
+		}
+		if q > bestQ {
+			best, bestQ = name, q
 		}
 	}
-	return ""
+	return best
+}
+
+// parseAcceptField 解析 `name;q=0.5` 一项，返回规范化名称与权重。
+func parseAcceptField(field string) (string, float64, bool) {
+	field = strings.TrimSpace(field)
+	if field == "" {
+		return "", 0, false
+	}
+	name, param, _ := strings.Cut(field, ";")
+	name = strings.ToLower(strings.TrimSpace(name))
+	// 只接受 token 字符，拒绝畸形项而不是猜测其含义。
+	if name == "" || len(name) > 32 {
+		return "", 0, false
+	}
+	for _, ch := range name {
+		if !isTokenChar(ch) {
+			return "", 0, false
+		}
+	}
+	q := 1.0
+	if param != "" {
+		key, value, found := strings.Cut(strings.TrimSpace(param), "=")
+		if !found || !strings.EqualFold(strings.TrimSpace(key), "q") {
+			// 无法识别的参数不影响可用性，按默认权重处理。
+			return name, q, true
+		}
+		parsed, ok := parseQValue(strings.TrimSpace(value))
+		if !ok {
+			// 非法 q 视为明确禁用：宁可退回 identity 也不发客户端拒绝的编码。
+			return name, 0, true
+		}
+		q = parsed
+	}
+	return name, q, true
+}
+
+// parseQValue 解析 0 到 1 之间、最多三位小数的权重。
+func parseQValue(value string) (float64, bool) {
+	if len(value) > 5 {
+		return 0, false
+	}
+	dot := strings.IndexByte(value, '.')
+	if dot >= 0 && len(value)-dot-1 > 3 {
+		return 0, false
+	}
+	parsed, err := strconv.ParseFloat(value, 64)
+	if err != nil || parsed < 0 || parsed > 1 {
+		return 0, false
+	}
+	return parsed, true
+}
+
+func isTokenChar(ch rune) bool {
+	return ch > 0x20 && ch < 0x7f && !strings.ContainsRune("()<>@,;:\\\"/[]?={} \t", ch)
 }
 
 // Asset 按真实文件名返回静态资源，并按 encoding 返回预压缩变体。
@@ -238,15 +315,19 @@ func (r *Renderer) Asset(name, encoding string) (body []byte, mime string, ok bo
 		return nil, "", false
 	}
 	// 资源按请求读取，由操作系统文件缓存复用，桥不常驻全部原文。
+	// 压缩命中时必须先返回缓存：否则每次请求仍会读完整原文并分配，
+	// 缓存只省下 CPU，省不掉这次 IO 与分配。
+	if encoding != "" {
+		if cached, found := r.cachedAsset(name, encoding); found {
+			return cached, a.mime, true
+		}
+	}
 	raw, err := os.ReadFile(a.path)
 	if err != nil {
 		return nil, "", false
 	}
 	if encoding == "" {
 		return raw, a.mime, true
-	}
-	if cached, found := r.cachedAsset(name, encoding); found {
-		return cached, a.mime, true
 	}
 	compressed, err := compressBytes(raw, encoding)
 	if err != nil {

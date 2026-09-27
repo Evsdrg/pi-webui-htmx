@@ -1034,3 +1034,82 @@ func Test小片段不标ContentEncoding(t *testing.T) {
 		t.Fatal("未压缩响应不是预期 HTML")
 	}
 }
+
+// Test静态资产始终声明Vary 覆盖 B61：identity 响应以前不带 Vary，
+// 共享缓存可能把 brotli 变体回给不支持的客户端。
+// 同时覆盖 B60：br;q=0 时不得仍选 br。
+func Test静态资产始终声明Vary(t *testing.T) {
+	dir := t.TempDir()
+	write := func(rel, body string) {
+		path := filepath.Join(dir, filepath.FromSlash(rel))
+		if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(body), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("src/templates/shell.html", `<html><body>{{.SessionID}}</body></html>`)
+	write("ui-manifest.json", `{"protocolVersion":1,"requiredMethods":[],"templates":{"shell":"templates/shell.html"},"build":{"entry":"src/entry/app.ts"}}`)
+	write("dist/.vite/manifest.json", `{"src/entry/app.ts":{"file":"assets/app-abc123.js","isEntry":true,"css":[]}}`)
+	write("dist/assets/app-abc123.js", "console.log(1)")
+	t.Setenv("PI_WEBUI_DIR", dir)
+	s, _, _ := newTestServer(t)
+
+	cases := []struct{ accept, wantEncoding string }{
+		{"", ""},
+		{"identity", ""},
+		{"br", "br"},
+		{"gzip", "gzip"},
+		{"br, gzip", "br"},
+		{"br;q=0, gzip;q=1", "gzip"},
+		{"br;q=0", ""},
+		{"*", "br"},
+	}
+	for _, tc := range cases {
+		name := tc.accept
+		if name == "" {
+			name = "empty"
+		}
+		t.Run(name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, "/assets/app-abc123.js", nil)
+			req.Host = "127.0.0.1:30142"
+			req.Header.Set("Authorization", "Bearer "+testToken)
+			if tc.accept != "" {
+				req.Header.Set("Accept-Encoding", tc.accept)
+			}
+			rec := httptest.NewRecorder()
+			s.ServeHTTP(rec, req)
+			if rec.Code != http.StatusOK {
+				t.Fatalf("状态码 %d", rec.Code)
+			}
+			if got := rec.Header().Get("Vary"); got != "Accept-Encoding" {
+				t.Fatalf("Accept-Encoding %q 缺少 Vary: %q", tc.accept, got)
+			}
+			if got := rec.Header().Get("Content-Encoding"); got != tc.wantEncoding {
+				t.Fatalf("Accept-Encoding %q -> %q，期望 %q", tc.accept, got, tc.wantEncoding)
+			}
+			body := rec.Body.Bytes()
+			switch tc.wantEncoding {
+			case "":
+				if string(body) != "console.log(1)" {
+					t.Fatalf("identity 响应应保持原文: %q", body)
+				}
+			case "gzip":
+				zr, err := gzip.NewReader(bytes.NewReader(body))
+				if err != nil {
+					t.Fatal(err)
+				}
+				plain, err := io.ReadAll(zr)
+				if err != nil || string(plain) != "console.log(1)" {
+					t.Fatalf("gzip 解压结果不符: %q %v", plain, err)
+				}
+			case "br":
+				out, err := io.ReadAll(brotli.NewReader(bytes.NewReader(body)))
+				if err != nil || string(out) != "console.log(1)" {
+					t.Fatalf("brotli 解压结果不符: %q %v", out, err)
+				}
+			}
+		})
+	}
+}

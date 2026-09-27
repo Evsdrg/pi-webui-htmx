@@ -48,10 +48,23 @@ func TestPickEncoding按客户端能力选择(t *testing.T) {
 		"br;q=1.0, gzip;q=0.8": "br",
 		"identity":             "",
 		"deflate, br;q=0.5":    "br",
-		"*":                    "",
+		"*":                    "br",   // 通配符覆盖未列出的编码
+		"*;q=0.5, gzip":        "gzip", // 显式项优先于通配符
+		"*;q=0":                "",     // 通配符禁用且无显式项
+		"br;q=0, gzip;q=1":     "gzip", // 明确禁用 br
+		"br;q=0":               "",     // br 被禁且未列出其他编码
+		"gzip;q=0":             "",     // 同上，不能违反客户端意愿
+		"br;q=0, br;q=1":       "",     // 同名重复取最严格项
+		"br;q=1, gzip;q=1":     "br",   // 同分取压缩率更高者
+		"br;q=abc":             "",     // 非法 q 视为禁用，退回 identity
 		"GZIP":                 "gzip",
 		"x-gzip, br":           "br",
-		"gzip;q=0":             "gzip", // 不解析 qvalue：浏览器默认头部不需要
+		"br;q=1.000":           "br", // 三位小数合法
+		"br;q=0.001":           "br", // 极低但仍合法可用
+		"br; q = 0.5":          "br", // 参数两侧空白可容忍
+		"br;charset=utf8":      "br", // 无法识别的参数不改变可用性
+		"deflate":              "",
+		"br, br, br":           "br",
 	}
 	for accept, want := range cases {
 		if got := PickEncoding(accept); got != want {
@@ -244,4 +257,54 @@ func TestCompress并发安全且复用写入器(t *testing.T) {
 func assetName(i int) string {
 	const hex = "0123456789abcdef"
 	return "chunk-" + string(hex[i%16]) + string(hex[(i/16)%16]) + "-" + strconv.Itoa(i) + ".js"
+}
+
+// Test压缩命中不再读原文件 覆盖 B39：命中缓存时不得再 ReadFile，
+// 否则缓存只省 CPU 不省 IO 与分配。
+func Test压缩命中不再读原文件(t *testing.T) {
+	dir := t.TempDir()
+	assets := filepath.Join(dir, "dist", "assets")
+	if err := os.MkdirAll(assets, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	name := "app-abc123.js"
+	path := filepath.Join(assets, name)
+	if err := os.WriteFile(path, []byte(strings.Repeat("const value = 12345;//\n", 400)), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	must := func(rel, body string) {
+		p := filepath.Join(dir, filepath.FromSlash(rel))
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	must("src/templates/shell.html", `<html><body>{{.SessionID}}</body></html>`)
+	must("ui-manifest.json", `{"protocolVersion":1,"requiredMethods":[],"templates":{"shell":"templates/shell.html"},"build":{"entry":"src/entry/app.ts"}}`)
+	must("dist/.vite/manifest.json", `{"src/entry/app.ts":{"file":"assets/app-abc123.js","isEntry":true,"css":[]}}`)
+	r, err := LoadFromDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, _, ok := r.Asset(name, "br")
+	if !ok {
+		t.Fatal("首次压缩结果缺失")
+	}
+	// 预热后删除原文件：命中的缓存必须仍然可返回。
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	again, _, ok := r.Asset(name, "br")
+	if !ok {
+		t.Fatal("压缩缓存命中不应依赖原文件存在")
+	}
+	if !bytes.Equal(first, again) {
+		t.Fatal("压缩缓存命中返回了不同内容")
+	}
+	// 未预热的编码在原文缺失时应明确失败，不能静默给空响应。
+	if _, _, ok := r.Asset(name, "gzip"); ok {
+		t.Fatal("原文缺失且未预热时应失败")
+	}
 }
