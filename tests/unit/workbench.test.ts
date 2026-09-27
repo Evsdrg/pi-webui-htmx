@@ -271,3 +271,80 @@ it('默认排队模式用协议一致的 steering，不是 steer', async () => {
     expect(document.querySelector<HTMLInputElement>('input[name="queue-kind"][value="followUp"]')!.checked).toBe(true);
   });
 });
+
+describe('等待期间切换会话的归属', () => {
+  // U03/U13：发送与 command 以前在 await 之后读 this.sessionId，
+  // 等待期间切会话会把操作投到新会话上。
+  it('启动 worker 期间切会话，消息不投给新会话', async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    fake.request.mockImplementation(async (method: string) => {
+      if (method === 'session.start') await gate;
+      return undefined;
+    });
+    (document.getElementById('prompt') as HTMLTextAreaElement).value = 'hello';
+    document.querySelector<HTMLFormElement>('#composer')!.requestSubmit();
+    await vi.waitFor(() => expect(fake.request.mock.calls.some((c) => c[0] === 'session.start')).toBe(true));
+
+    // 在 worker 启动等待途中切到另一个会话。
+    workbench.selectSession('s2', '/tmp/other', '另一个会话');
+    release();
+    await vi.waitFor(() => expect(document.getElementById('connection-notice')!.textContent).toContain('未发送'));
+    // 关键安全属性：绝不能投到切换后的会话。
+    expect(fake.request.mock.calls.some((c) => c[0] === 'session.prompt' && c[1] === 's2')).toBe(false);
+    // 输入内容必须保留，用户才能重发。
+    expect((document.getElementById('prompt') as HTMLTextAreaElement).value).toBe('hello');
+  });
+
+  it('状态刷新期间切会话，command 仍发往原会话', async () => {
+    // 这一条让流程真正走到命令发送：切换发生在 ensureWorker 内部，
+    // 早于它的守卫会先返回，测不到目标那一行。
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    fake.request.mockImplementation(async (method: string) => {
+      if (method === 'session.state') await gate;
+      if (method === 'session.start') return { sessionId: 's1', cwd: '/fixture' };
+      return {};
+    });
+    // auto-compaction 的 change 处理器走的就是 command()（U03 的同一路径）。
+    const box = document.getElementById('auto-compaction') as HTMLInputElement;
+    box.checked = false;
+    box.dispatchEvent(new Event('change', { bubbles: true }));
+    // 等它进入 ensureWorker 内部的状态刷新。
+    await vi.waitFor(() => expect(fake.request.mock.calls.some((c) => c[0] === 'session.state')).toBe(true));
+    workbench.selectSession('s2', '/tmp/other', '另一个会话');
+    release();
+    await vi.advanceTimersByTimeAsync(10);
+    await vi.waitFor(() => expect(fake.request.mock.calls.some((c) => c[0] === 'session.set_auto_compaction')).toBe(true));
+    const call = fake.request.mock.calls.find((c) => c[0] === 'session.set_auto_compaction');
+    // 必须是发起时归属的 s1，不能被改成 s2。
+    expect(call?.[1]).toBe('s1');
+  });
+});
+
+describe('附件按会话隔离', () => {
+  // U01：selectSession 以前不清理全局附件数组，上一会话的图片
+  // 会留在新会话里并被发送出去。
+  it('切换会话后附件被清空', async () => {
+    const input = document.getElementById('attach-input') as HTMLInputElement;
+    // 通过 drop 路径挂一个附件（不依赖 FileReader 的真实读取结果）。
+    const box = document.getElementById('attachments')!;
+    box.hidden = false;
+    box.replaceChildren(Object.assign(document.createElement('div'), { className: 'attachment', textContent: '遗留图片' }));
+    expect(box.childElementCount).toBe(1);
+
+    workbench.selectSession('s2', '/tmp/other', '另一个会话');
+    expect(box.childElementCount).toBe(0);
+    expect(box.hidden).toBe(true);
+    expect(input).toBeDefined();
+  });
+
+  it('同一会话内刷新不清空附件', async () => {
+    const box = document.getElementById('attachments')!;
+    box.hidden = false;
+    box.replaceChildren(Object.assign(document.createElement('div'), { className: 'attachment', textContent: '当前图片' }));
+    // 仍在本会话：只做状态刷新，附件必须保留。
+    await workbench.reconcile();
+    expect(box.childElementCount).toBe(1);
+  });
+});

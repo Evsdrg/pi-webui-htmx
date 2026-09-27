@@ -5,6 +5,8 @@ import { addFiles, toWire, formatSize } from './attachments';
 import type { Attachment } from './attachments';
 import type { Capabilities, EventMessage, Message, Method, WorkerInfo } from '@/types/protocol';
 import { closeDialog, el, openDialog } from './dom';
+import { SessionScope } from './scope';
+import type { Scope } from './scope';
 
 const DIALOGS = new Set(['select','confirm','input','editor']);
 interface State { sessionId: string; sessionName?: string; isStreaming: boolean; isCompacting: boolean; thinkingLevel?: string; model?: { id: string; provider: string; name: string }; pendingMessageCount?: number; steeringMode?: string; followUpMode?: string; autoCompactionEnabled?: boolean }
@@ -14,14 +16,20 @@ export class Workbench {
   private capabilities = new Set<Method>();
   private abort = new AbortController();
   private sessionId = document.body.dataset.sessionId ?? '';
+  /**
+   * 会话作用域。切会话时代次递增，所有在途凭证立即失效——
+   * 这是「等待期间切会话不要把操作投到新会话」的唯一依据（U03/U13）。
+   */
+  private scope = new SessionScope(this.sessionId);
   private cwd = '';
-  private generation = 0;
   private run: RunState = 'idle';
   private sending = false;
   private diskSession = !!this.sessionId;
   private cursor = new EventCursor();
   private live = new LiveView(el('live'));
   private attachments: Attachment[] = [];
+  /** 附件批次的串行队列，见 attach 的说明（U20）。 */
+  private attachQueue: Promise<void> = Promise.resolve();
   private statuses = new Map<string, string>();
   private widgets = new Map<string, { lines: string[]; placement: string }>();
   private commands: { name: string; description: string }[] = [];
@@ -158,28 +166,43 @@ export class Workbench {
     if (!this.capabilities.has(method)) return Promise.reject(new BridgeError('unsupported_method', `当前桥不支持 ${method}`));
     return this.bridge.request<T>(method, session, params, method === 'session.compact' ? 120_000 : 30_000);
   }
-  private async ensureWorker(): Promise<WorkerInfo> {
-    const generation = this.generation;
+  private async ensureWorker(scope: Scope = this.scope.current$()): Promise<WorkerInfo> {
     const oldId = this.sessionId;
     if (!oldId && !this.cwd) { await this.newSession(); throw new Error('请先选择工作目录，再发送消息。'); }
-    const info = await this.request<WorkerInfo>('session.start', { cwd: this.cwd });
-    if (generation !== this.generation) throw new Error('会话已切换，未继续发送操作。');
-    if (!oldId) { this.sessionId = info.sessionId; this.cwd = info.cwd; document.body.dataset.sessionId = this.sessionId; history.replaceState(null, '', `/?session=${encodeURIComponent(info.sessionId)}`); }
+    const info = await this.request<WorkerInfo>('session.start', { cwd: this.cwd }, oldId);
+    if (!scope.alive()) throw new Error('会话已切换，本条消息未发送；内容已保留，请手动重发。');
+    if (!oldId) {
+      // 新会话 ID 由 worker 分配，必须经 scope 提交，让后续操作都归属新会话。
+      this.scope.switchTo(info.sessionId);
+      this.sessionId = info.sessionId; this.cwd = info.cwd;
+      document.body.dataset.sessionId = this.sessionId;
+      history.replaceState(null, '', `/?session=${encodeURIComponent(info.sessionId)}`);
+    }
     this.cwd = info.cwd; el('session-cwd').textContent = this.cwd;
     await this.subscribe();
     // 刚启动的 worker 才知道当前模型；不刷新会让下拉停留在「默认模型」，
     // 与 Pi 实际使用的模型不一致。
-    await this.refreshState(generation);
+    await this.refreshState(scope);
     return info;
   }
-  private async command<T = unknown>(method: Method, params?: unknown): Promise<T> { await this.ensureWorker(); return this.request<T>(method, params); }
+  /**
+   * command 把目标会话固定为发起时那一个。
+   *
+   * 以前是 await ensureWorker() 之后再用 this.request 的默认参数读
+   * this.sessionId——等待期间切会话，操作就落到了新会话上（U03）。
+   * 现在 target 在发起时取定，整条链路都显式传它。
+   */
+  private async command<T = unknown>(method: Method, params?: unknown, scope: Scope = this.scope.current$()): Promise<T> {
+    await this.ensureWorker(scope);
+    return this.request<T>(method, params, scope.sessionId);
+  }
   // refreshState 读取一次会话状态并同步界面。
-  // 只按 generation 守卫：状态读取发生在已处理的事件之后，内容是更新的；
+  // 只按会话作用域守卫：状态读取发生在已处理的事件之后，内容是更新的；
   // 若再用 seq 比较，一流式输出就会让刷新永远放弃，模型下拉停留在占位项。
-  private async refreshState(generation = this.generation): Promise<void> {
+  private async refreshState(scope: Scope = this.scope.current$()): Promise<void> {
     let state: State;
     try { state = await this.request<State>('session.state'); } catch { return; }
-    if (generation !== this.generation) return;
+    if (!scope.alive()) return;
     if (state.sessionName) el('session-title').textContent = state.sessionName;
     if (state.model) { this.currentModel = { provider: state.model.provider, id: state.model.id, name: state.model.name }; this.selectModel(state.model.provider, state.model.id, state.model.name); }
     await this.refreshThinking(state.thinkingLevel);
@@ -198,16 +221,16 @@ export class Workbench {
     if (id === this.sessionId) this.subscribed = id;
   }
   private async reconcile(): Promise<void> {
-    const generation = this.generation;
+    const scope = this.scope.current$();
     const workers = await this.request<WorkerInfo[]>('worker.list', undefined, '');
-    if (generation !== this.generation) return;
+    if (!scope.alive()) return;
     const worker = workers.find((w) => w.sessionId === this.sessionId);
     if (!worker) { this.setRun('idle'); return; }
     this.cwd = worker.cwd; el('session-cwd').textContent = this.cwd;
     await this.subscribe();
     const stateSeq = this.cursor.seq;
     const state = await this.request<State>('session.state');
-    if (generation !== this.generation || stateSeq !== this.cursor.seq) return;
+    if (!scope.alive() || stateSeq !== this.cursor.seq) return;
     const wasBusy = this.run !== 'idle';
     const busy = state.isStreaming || state.isCompacting || (state.pendingMessageCount ?? 0) > 0;
     this.setRun(busy ? (state.isCompacting ? 'compacting' : 'running') : 'idle');
@@ -219,13 +242,17 @@ export class Workbench {
     await this.refreshDialogs();
   }
   private selectSession(id: string, cwd: string, title: string, push = true): void {
-    this.saveCurrentDraft(); const previous = this.sessionId; this.generation++;
+    this.saveCurrentDraft(); const previous = this.sessionId; this.scope.switchTo(id);
     if (previous && this.bridge.connected) void this.request('session.unsubscribe', undefined, previous).catch(() => {});
     this.sessionId = id; this.subscribed = ''; this.cwd = cwd; this.diskSession = !!id; this.cursor.reset(); this.live.clear();
     this.statuses.clear(); this.widgets.clear(); this.renderExtensions(); this.commands = [];
     el('turns').replaceChildren(); el('older-slot').replaceChildren(); el('ext-dialog-slot').replaceChildren();
     el('welcome').hidden = !!id; el('session-title').textContent = title; el('session-cwd').textContent = cwd || '选择工作目录，开始对话';
-    el<HTMLTextAreaElement>('prompt').value = readDraft(this.draftKey());
+    // 发送进行中不覆盖输入框：那条消息还没发出去，切换会话后
+    // 用户要能在这里继续重发（U13）。其余情况照常载入目标会话草稿。
+    // 附件按会话隔离：上一会话的图片不能留在新会话里被发送出去（U01）。
+    this.clearAttachments();
+    if (!this.sending) el<HTMLTextAreaElement>('prompt').value = readDraft(this.draftKey());
     document.body.dataset.sessionId = id; this.setRun('idle'); this.notice(''); closeMobileSidebar();
     if (push) history.pushState(null, '', id ? `/?session=${encodeURIComponent(id)}` : '/');
     this.markSelected(); el('chat-scroll').dataset.resetScroll = 'true';
@@ -242,23 +269,28 @@ export class Workbench {
   private async send(): Promise<void> {
     const input = el<HTMLTextAreaElement>('prompt'); const message = input.value.trim();
     if (!message || this.sending) return;
-    this.sending = true; this.updateControls(); const generation = this.generation; const draftKey = this.draftKey();
+    this.sending = true; this.updateControls(); const scope = this.scope.current$(); const draftKey = this.draftKey();
     // 排队意图必须在 ensureWorker 之前取：它会刷新会话状态，
     // 而刷新会把单选按钮重置成 Pi 的当前值，晚一步读就丢了用户的选择。
     const busy = this.run !== 'idle';
     const queuedKind = busy ? this.queueKind() : undefined;
     try {
-      await this.ensureWorker();
-      if (generation !== this.generation) return;
+      await this.ensureWorker(scope);
+      if (!scope.alive()) {
+        // 会话已切换：不能把消息投到新会话（U13），也不静默丢弃。
+        // 抛出而不是 return，让 catch 统一给出可见提示；输入与附件未清空。
+        throw new Error('会话已切换，本条消息未发送；内容已保留，请手动重发。');
+      }
       if (!busy) {
         const choice = el<HTMLSelectElement>('model-select').selectedOptions[0];
-        if (choice?.dataset.provider && choice.dataset.modelId) await this.request('session.set_model', { provider: choice.dataset.provider, modelId: choice.dataset.modelId });
+        if (choice?.dataset.provider && choice.dataset.modelId) await this.request('session.set_model', { provider: choice.dataset.provider, modelId: choice.dataset.modelId }, scope.sessionId);
         this.live.begin(message); this.setRun('running'); el('welcome').hidden = true;
       }
       const images = this.attachments;
-      if (busy && queuedKind) await this.sendQueued(message, queuedKind, images);
-      else await this.request('session.prompt', { text: message, ...(images.length ? { images: toWire(images) } : {}) });
-      if (generation !== this.generation) return;
+      // 目标会话固定为发起时那一个：等待期间切换也不改投（U13）。
+      if (busy && queuedKind) await this.sendQueued(message, queuedKind, images, scope);
+      else await this.request('session.prompt', { text: message, ...(images.length ? { images: toWire(images) } : {}) }, scope.sessionId);
+      if (!scope.alive()) return;
       if (input.value.trim() === message) input.value = '';
       saveDraft(draftKey, ''); this.saveCurrentDraft();
       this.clearAttachments();
@@ -398,15 +430,15 @@ export class Workbench {
     try {
       while (this.dialogsDirty && this.sessionId) {
         this.dialogsDirty = false;
-        const id = this.sessionId; const generation = this.generation;
+        const id = this.sessionId; const scope = this.scope.current$();
         const pending = await this.request<{ ids: string[] }>('session.pending_dialogs');
-        if (generation !== this.generation) continue;
+        if (!scope.alive()) continue;
         const shown = Array.from(el('ext-dialog-slot').querySelectorAll<HTMLElement>('[data-dialog-id]')).map((node) => node.dataset.dialogId!).sort();
         const wanted = [...pending.ids].sort();
         if (JSON.stringify(shown) === JSON.stringify(wanted)) continue;
         if (!wanted.length) { el('ext-dialog-slot').replaceChildren(); continue; }
         await window.htmx.ajax('get', `/ui/extensions/dialogs?sessionId=${encodeURIComponent(id)}`, { target: '#ext-dialog-slot', swap: 'innerHTML' });
-        if (generation === this.generation) this.openExtensionDialog();
+        scope.write(() => this.openExtensionDialog());
       }
     } finally { this.dialogsLoading = false; }
   }
@@ -561,7 +593,22 @@ export class Workbench {
     } catch (error) { console.warn('@ 补全加载失败', error); }
   }
 
+  /**
+   * attach 串行处理附件批次。
+   *
+   * 必须串行：addFiles 的额度判断读的是「调用时」的数组，两个并发批次
+   * 各自看到旧的空数组，随后合并成 16 张，越过 8 张上限（U20）。
+   * 队列让每一批都在上一批落地之后才判断额度。
+   */
   private async attach(files: FileList | File[]): Promise<void> {
+    const previous = this.attachQueue;
+    // 无论上一批成功与否都要释放队列，否则一次失败会永久堵住后续附件。
+    const run = previous.then(() => this.attachBatch(files)).catch((error) => { this.fail(error); });
+    this.attachQueue = run.then(() => undefined, () => undefined);
+    return run;
+  }
+
+  private async attachBatch(files: FileList | File[]): Promise<void> {
     const { added, rejected } = await addFiles(files, this.attachments);
     if (rejected.length) this.notify(rejected.join('；'), 'warning');
     if (!added.length) return;
@@ -595,15 +642,15 @@ export class Workbench {
   private setConnection(online: boolean): void { el('conn-state').textContent = online ? '已连接' : '未连接'; el('conn-state').className = `state state-${online ? 'online' : 'offline'}`; if (online) this.notice(''); this.updateControls(); }
   private setRun(state: RunState): void { this.run = state; el('session-state').textContent = {idle:'就绪',running:'运行中',retrying:'重试中',compacting:'压缩中',waiting_input:'等待确认'}[state]; this.updateControls(); }
   private updateControls(): void { el<HTMLButtonElement>('send-button').disabled = !this.bridge.connected || this.sending || !el<HTMLTextAreaElement>('prompt').value.trim(); el('abort-button').hidden = this.run === 'idle'; const hint = el('queue-hint'); const busy = this.run !== 'idle'; hint.hidden = !busy; if (busy) hint.textContent = this.queueKind() === 'steering' ? '本轮结束后插入指令' : '排到队列末尾，本轮完成后追加'; el<HTMLSelectElement>('model-select').disabled = busy; el<HTMLSelectElement>('thinking-select').disabled = busy || !this.sessionId; }
-  // queueKind 读会话对话框里的 radio；缺省 steer，与 Pi 的默认一致。
   // queueKind 读会话对话框里的 radio；缺省 steering，与 Pi 的默认一致。
   // 取值必须与桥的协议一致：steering/followUp，不是 steer。
   private queueKind(): 'steering' | 'followUp' { return document.querySelector<HTMLInputElement>('input[name="queue-kind"]:checked')?.value === 'followUp' ? 'followUp' : 'steering'; }
   // sendQueued 在运行中发送：先把模式同步给桥，再带 streamingBehavior 提交。
   // 不先同步的话，用户改了 radio 但桥仍是旧模式，行为与界面显示不一致。
-  private async sendQueued(text: string, kind: 'steering' | 'followUp', images: Attachment[]): Promise<void> {
-    await this.request('session.set_queue_mode', { kind, mode: kind === 'steering' ? 'all' : 'one-at-a-time' });
-    await this.request('session.prompt', { text, streamingBehavior: kind, ...(images.length ? { images: toWire(images) } : {}) });
+  private async sendQueued(text: string, kind: 'steering' | 'followUp', images: Attachment[], scope: Scope): Promise<void> {
+    // 排队模式与消息都必须发往发起时那个会话，不能跟着 this.sessionId 漂移。
+    await this.request('session.set_queue_mode', { kind, mode: kind === 'steering' ? 'all' : 'one-at-a-time' }, scope.sessionId);
+    await this.request('session.prompt', { text, streamingBehavior: kind, ...(images.length ? { images: toWire(images) } : {}) }, scope.sessionId);
   }
   private notice(message: string): void { el('connection-notice').textContent = message; el('connection-notice').hidden = !message; }
   private notify(message: string, kind = 'info'): void { void import('./toast').then(({showToast}) => showToast(message, kind === 'error' ? 'error' : kind === 'warning' ? 'warning' : 'info')); }
