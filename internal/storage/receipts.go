@@ -4,11 +4,15 @@ package storage
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
+	"math"
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -20,19 +24,27 @@ import (
 type Outcome string
 
 const (
-	OutcomeOK       Outcome = "ok"
-	OutcomeError    Outcome = "error"
-	OutcomeUnknown  Outcome = "unknown"
+	// OutcomePending 表示命令已被接受、尚未得出结论。
+	// 重启时见到它只能回答 unknown：桥无法证明命令有没有到达 Pi。
+	OutcomePending Outcome = "pending"
+	OutcomeOK      Outcome = "ok"
+	OutcomeError   Outcome = "error"
+	// OutcomeUnknown 表示结果不可判定（崩溃、进程退出、回执写入失败）。
+	OutcomeUnknown Outcome = "unknown"
+	// OutcomeRejected 表示命令从未送达 Pi，客户端可用同一 requestId 重试。
 	OutcomeRejected Outcome = "rejected"
 )
 
 // Receipt 记录一条命令的回执，用于跨重启去重与对账。
+// Fingerprint 是 method+sessionId+params 的稳定散列：同一 requestId
+// 携带不同内容时必须报 conflict，而不是静默复用旧结论。
 type Receipt struct {
-	RequestID string    `json:"requestId"`
-	SessionID string    `json:"sessionId,omitempty"`
-	Method    string    `json:"method"`
-	Outcome   Outcome   `json:"outcome"`
-	At        time.Time `json:"at"`
+	RequestID   string    `json:"requestId"`
+	SessionID   string    `json:"sessionId,omitempty"`
+	Method      string    `json:"method"`
+	Outcome     Outcome   `json:"outcome"`
+	Fingerprint string    `json:"fingerprint,omitempty"`
+	At          time.Time `json:"at"`
 }
 
 // Limits 约束回执存储的体积。
@@ -73,6 +85,11 @@ func NewReceipts(dir string, limits Limits) (*Receipts, error) {
 	if err := r.loadTail(); err != nil {
 		return nil, err
 	}
+	// 必须先修尾部再打开追加句柄：崩溃留下的半行若不清掉，
+	// 新回执会接在坏 JSON 之后，那一行永远解析失败。
+	if err := r.repairTail(); err != nil {
+		return nil, err
+	}
 	if err := r.openCurrent(); err != nil {
 		return nil, err
 	}
@@ -90,9 +107,12 @@ func (r *Receipts) Close() error {
 	return err
 }
 
+// currentLogName 是当前日志文件名；轮转时它会被改名成 receipts.1.jsonl。
+const currentLogName = "receipts.jsonl"
+
 // currentPath 返回当前日志路径；轮转时递增序号。
 func (r *Receipts) currentPath() string {
-	return filepath.Join(r.dir, "receipts.jsonl")
+	return filepath.Join(r.dir, currentLogName)
 }
 
 func (r *Receipts) rotatedPath(n int) string {
@@ -117,6 +137,9 @@ func (r *Receipts) openCurrent() error {
 }
 
 // loadTail 从现有日志尾部加载回执，避免重启时全量读入。
+// 载入顺序必须是「新文件优先」：当前文件最新，轮转文件按序号升序
+// （receipts.1 比 receipts.2 新）。反序会让条数预算耗尽在最旧的文件上，
+// 较新的 receipts.1 反而读不进来，去重表缺少近期请求。
 func (r *Receipts) loadTail() error {
 	paths := []string{}
 	if entries, err := os.ReadDir(r.dir); err == nil {
@@ -132,15 +155,17 @@ func (r *Receipts) loadTail() error {
 		}
 	}
 	sort.Slice(paths, func(i, j int) bool {
-		// 当前文件排在轮转文件之前，轮转文件按序号倒序。
-		a, b := paths[i], paths[j]
-		if filepath.Base(a) == "receipts.jsonl" {
-			return true
-		}
-		if filepath.Base(b) == "receipts.jsonl" {
+		a, b := filepath.Base(paths[i]), filepath.Base(paths[j])
+		if a == b {
 			return false
 		}
-		return a > b
+		if a == currentLogName {
+			return true
+		}
+		if b == currentLogName {
+			return false
+		}
+		return rotatedIndex(a) < rotatedIndex(b)
 	})
 	budget := r.limits.MaxEntries
 	for _, path := range paths {
@@ -192,12 +217,84 @@ func (r *Receipts) loadTail() error {
 	return nil
 }
 
+// rotatedIndex 解析 receipts.N.jsonl 的序号；无法识别时排在最后。
+func rotatedIndex(name string) int {
+	rest, ok := strings.CutPrefix(name, "receipts.")
+	if !ok {
+		return int(math.MaxInt32)
+	}
+	num, ok := strings.CutSuffix(rest, ".jsonl")
+	if !ok {
+		return int(math.MaxInt32)
+	}
+	n, err := strconv.Atoi(num)
+	if err != nil || n < 0 {
+		return int(math.MaxInt32)
+	}
+	return n
+}
+
+// repairTail 把当前日志截回最后一个完整换行处。
+// 崩溃可能在写入中途留下半行；直接 append 会让新回执接在坏 JSON 之后，
+// 该行永远无法解析，去重记录就此丢失。
+func (r *Receipts) repairTail() error {
+	f, err := os.OpenFile(r.currentPath(), os.O_RDWR, 0600)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	defer f.Close()
+	info, err := f.Stat()
+	if err != nil {
+		return err
+	}
+	if !info.Mode().IsRegular() || info.Size() == 0 {
+		return nil
+	}
+	// 单行上限已知，只需回看这么多个字节就能定位最后一条完整记录。
+	window := int64(r.limits.LineBytes)
+	if window <= 0 {
+		window = 64 << 10
+	}
+	start := int64(0)
+	if info.Size() > window {
+		start = info.Size() - window
+	}
+	buf := make([]byte, info.Size()-start)
+	if _, err := f.ReadAt(buf, start); err != nil && err != io.EOF {
+		return err
+	}
+	idx := bytes.LastIndexByte(buf, '\n')
+	if idx < 0 {
+		// 没有任何完整行：整个文件都不可信。
+		if info.Size() > window {
+			// 超出窗口仍无换行，说明存在超长坏行；不动它，交给加载逻辑忽略。
+			return nil
+		}
+		return f.Truncate(0)
+	}
+	good := start + int64(idx) + 1
+	if good >= info.Size() {
+		return nil
+	}
+	return f.Truncate(good)
+}
+
 // put 写入内存索引并按条数淘汰；调用方需持有锁。
+// 同一 requestId 只保留时间更晚的一条：载入顺序是新→旧，
+// 运行期 pending→终态也是后写更新，旧结论不能覆盖新结论。
 func (r *Receipts) put(rec Receipt) {
-	if _, exists := r.byID[rec.RequestID]; !exists {
-		r.order = append(r.order, rec.RequestID)
+	if existing, ok := r.byID[rec.RequestID]; ok {
+		if !rec.At.After(existing.At) {
+			return
+		}
+		r.byID[rec.RequestID] = rec
+		return
 	}
 	r.byID[rec.RequestID] = rec
+	r.order = append(r.order, rec.RequestID)
 	for len(r.order) > r.limits.MaxEntries {
 		oldest := r.order[0]
 		r.order = r.order[1:]
