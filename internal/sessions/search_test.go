@@ -140,3 +140,38 @@ func TestSearch不修改文件(t *testing.T) {
 		t.Fatal("搜索不得修改会话文件")
 	}
 }
+
+// Test搜索超大行标记截断 覆盖 B28：
+// 遇到超过 LineBytes 的行时旧实现直接跳过该文件且不置 Truncated，
+// 后续命中被漏掉，却向调用方报告「结果完整」。
+func Test搜索超大行标记截断(t *testing.T) {
+	cwd := t.TempDir()
+	store, sessionDir := newStore(t, cwd)
+	// 第一条是普通命中；第二条大到超过 LineBytes；第三条又是命中。
+	// 如果超大行不被标记，第三条会被跳过而结果仍显示完整。
+	small := `{"type":"message","id":"e1","parentId":null,"timestamp":"t","message":{"role":"user","content":"命中词 甲"}}`
+	huge := `{"type":"message","id":"e2","parentId":"e1","timestamp":"t","message":{"role":"assistant","content":"命中词 ` + strings.Repeat("填充", 40000) + `"}}`
+	last := `{"type":"message","id":"e3","parentId":"e2","timestamp":"t","message":{"role":"user","content":"命中词 丙"}}`
+	writeSearchSession(t, sessionDir, cwd, "s-big", small+"\n"+huge+"\n"+last+"\n")
+
+	limits := DefaultSearchLimits()
+	limits.LineBytes = 64 << 10 // 64 KiB，远小于 huge 那一行
+	out, err := store.Search(context.Background(), "命中词", limits)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !out.Truncated {
+		t.Fatal("跳过超大行必须标记截断，否则调用方会以为结果完整")
+	}
+	// 至少要被标记；命中数以不重复为基线即可，具体取决于行的实际大小。
+	seen := map[string]bool{}
+	for _, m := range out.Matches {
+		if seen[m.EntryID] {
+			t.Fatalf("出现重复命中: %s", m.EntryID)
+		}
+		seen[m.EntryID] = true
+	}
+	if len(out.Matches) == 0 {
+		t.Fatal("超大行之外的命中不应被一并丢掉")
+	}
+}

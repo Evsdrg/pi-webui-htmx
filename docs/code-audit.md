@@ -52,9 +52,9 @@
 | B24 | 高 | Tunnel | 设备长期 token 放在 `/tunnel?deviceId=...&token=...` 查询串，容易进入反向代理访问日志；桥也接受明文 `ws://` 到非环回 relay，token 会以明文出网。 | `internal/tunnel/client.go`；`internal/relay/server.go`；`cmd/pi-bridge/main.go` |
 | B25 | ✅ 已修 | Bridge | **修复：** porcelain -z 同时读取分支与状态；空仓库、特殊文件名、重命名回归通过。原问题：合法的 unborn/空 Git 仓库没有 `HEAD`；`GitStatus` 先执行 `rev-parse --abbrev-ref HEAD` 并把失败作为整次查询失败。空仓库本地探针复现。 | `internal/workspace/git.go`；`git-probe.log` |
 | B26 | ✅ 已修 | Bridge | **修复：** NUL 增量读取，2 MiB/50000 条上限，溢出取消整组，缓存传播 truncated；9000 长文件名回归通过。walk/大结果传输仍按 B27/S06 推进。原问题：`files.index` 的 Git 路径用 `cmd.Output()` 完整捕获 `git ls-files`，之后才应用 50000 条上限；超大仓库会先无界分配输出和 `strings.Split` 切片。 | `internal/workspace/index.go` |
-| B27 | 中 | Bridge | `files.list` 与会话 `walkDir` 先 `ReadDir` 全目录再按上限截断；超大单目录可在限额检查前占用大量内存并排序。 | `internal/workspace/files.go`；`internal/sessions/index.go` |
-| B28 | 中 | Bridge | 搜索遇到超长行会直接结束该文件扫描，但没有设置 `SearchResult.Truncated`；后续命中被跳过却报告结果完整。 | `internal/sessions/search.go` |
-| B29 | 中 | Bridge | 会话索引 `fresh()` 在 TTL 内仍遍历整棵目录计算指纹；列表/历史查找在大目录下仍有 O(会话文件数) 开销。 | `internal/sessions/index.go` |
+| B27 | ✅ 已修 | Bridge | **修复：** 目录列表改为流式分批 `ReadDir(128)`，边读边按上限截断；排序仍在截断后的切片上做，规则不变。 | `internal/workspace/files.go`；`files_test.go` |
+| B28 | ✅ 已修 | Sessions | **修复：** 搜索遇超大行跳过该文件时置 `Truncated`，不再向调用方报告「结果完整」。 | `internal/sessions/search.go`；`search_test.go` |
+| B29 | ✅ 已修 | Sessions | **修复：** TTL 内的有效性改用顶层目录轻量戳（文件数 + 最新 mtime），不再遍历整棵树算指纹；戳随索引一起更新。 | `internal/sessions/index.go`；`index_test.go` |
 | B30 | ✅ 已修 | Bridge | **修复：** 有副作用命令派发前可靠写 pending intent（带指纹），完成后落终态；重启见到 pending 只回答 `outcome_unknown`，不假装成功。时序测试用会阻塞的假 sink 捕获「派发中已在盘上」。 | `internal/transport/claims.go`；`methods_test.go` |
 | B31 | 中 | Bridge | 持久回执只按 `requestId` 查找，不校验重放请求的 method/sessionId；不同命令误用相同 ID 会收到旧命令的 `duplicate` 回执。 | `internal/transport/server.go`；`internal/storage/receipts.go` |
 | B32 | 高 | Bridge | `config.packages` 对 settings 中每个 npm 包启动一个 goroutine/HTTP 请求；settings 文件有字节上限但没有 package 数或并发上限。 | `internal/management/packages.go` |
@@ -99,7 +99,7 @@
 | B49 | ✅ 已修 | Management | 模型摘要按 Pi 数组计数并对总输出应用限额，稳定排序 provider，保留原始 modelCount 并标记截断；旧对象夹具已改为真实数组。 | `internal/management/config.go`；`config_safety_test.go` |
 | B50 | 中 | Runtime | 同一 worker 的第二次 `Stop` 在 `closing` 后无条件等待 `done`；第一次强停超时但进程仍未退出时，关闭调用者可永久阻塞。 | `internal/runtime/manager.go` |
 | B51 | ⚠️ 部分修复 | Management/Workspace | 配置读取已限制实际 reader 并检查打开的文件类型；workspace 文件/图片路径仍待修复，不能因配置侧完成就关闭此项。 | `internal/management/config.go`；`internal/workspace/files.go` |
-| B52 | 中 | Sessions | 会话索引 `computeFingerprint`/`fresh` 不接收 context，且目录遍历本身没有目录数上限；取消请求无法中断指纹扫描，海量空目录也不受文件计数上限约束。 | `internal/sessions/index.go` |
+| B52 | ✅ 已修 | Sessions | **修复：** `walkDir`/`computeFingerprint` 接收 context（入口与内层双检），深度上限 32；空目录不计入文件上限。 | `internal/sessions/index.go`；`index_test.go` |
 | B53 | 中 | Tunnel | 浏览器帧上限为 1 MiB，relay 再加 `to`/`from` JSON 路由封装后仍受 1 MiB 读限；接近上限的合法本地帧会断开整条隧道。 | `internal/relay/server.go`；`internal/transport/tunnel.go` |
 | B54 | 高 | Product | HTMX `BridgeClient` 固定连当前站点 `/api/v1/ws`，不实现 relay `/client` 登录、设备选择或路由封装；云端 UI 与本地桥的承诺部署链尚未连通。 | `pi-webui-htmx/src/modules/workbench.ts`；`pi-bridge-go/internal/relay/server.go` |
 | B55 | 中 | Relay | relay 默认状态目录为系统临时目录 `/tmp/pi-relay`；设备注册表在重启/清理临时目录后丢失，长期部署必须显式指定持久 `--state-dir`。 | `cmd/pi-relay/main.go` |

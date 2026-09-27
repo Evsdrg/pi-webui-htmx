@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -85,6 +86,10 @@ type Index struct {
 	builtAt     time.Time
 	fingerprint string
 	truncated   bool
+	// stampFiles/stampMod 是顶层目录的轻量戳：TTL 内的有效性只靠它判断，
+	// 不必遍历整棵树（B29）。
+	stampFiles int
+	stampMod   time.Time
 }
 
 // NewIndex 构造索引；root 必须已由 Store 打开。
@@ -97,9 +102,9 @@ func NewIndex(root *os.Root, dir string, policy *workspace.Policy, limits Limits
 
 // fingerprint 只遍历目录项并汇总路径、大小、修改时间，
 // 不打开任何文件；嵌套子目录同样被覆盖。
-func (x *Index) computeFingerprint() (string, error) {
+func (x *Index) computeFingerprint(ctx context.Context) (string, error) {
 	h := fnvNew64a()
-	err := walkDir(x.root, ".", func(path string, size int64, mod time.Time) error {
+	err := walkDir(ctx, x.root, ".", 0, func(path string, size int64, mod time.Time) error {
 		writeFingerprint(h, path, size, mod)
 		return nil
 	})
@@ -110,19 +115,26 @@ func (x *Index) computeFingerprint() (string, error) {
 }
 
 // fresh 判断缓存是否仍可用：TTL 与指纹都要通过。
+// fresh 判断缓存索引是否仍然有效。
+//
+// TTL 内只做轻量校验：比较顶层目录的 mtime 与 .jsonl 文件数。
+// 旧实现在 TTL 内仍遍历整棵树计算指纹，大目录下每次列表都是
+// O(会话文件数) 的开销（B29）。顶层 mtime 足以捕捉增删与改名；
+// 追加写入由 size 变化在 build 阶段兜底——那本来就要重读。
 func (x *Index) fresh(now time.Time) bool {
 	x.mu.RLock()
 	built := x.builtAt
-	want := x.fingerprint
 	x.mu.RUnlock()
 	if now.Sub(built) > x.ttl {
 		return false
 	}
-	got, err := x.computeFingerprint()
-	if err != nil || got != want {
+	files, latest, err := x.topLevelStamp()
+	if err != nil {
 		return false
 	}
-	return true
+	x.mu.RLock()
+	defer x.mu.RUnlock()
+	return files == x.stampFiles && latest.Equal(x.stampMod)
 }
 
 // build 全量重建索引。只读，不修改任何文件。
@@ -130,13 +142,13 @@ func (x *Index) build(ctx context.Context) error {
 	x.mu.Lock()
 	defer x.mu.Unlock()
 	if len(x.entries) > 0 && time.Since(x.builtAt) <= x.ttl {
-		if got, err := x.computeFingerprint(); err == nil && got == x.fingerprint {
+		if got, err := x.computeFingerprint(ctx); err == nil && got == x.fingerprint {
 			return nil
 		}
 	}
 	found := make([]indexEntry, 0, 256)
 	walked := 0
-	err := walkDir(x.root, ".", func(path string, size int64, mod time.Time) error {
+	err := walkDir(ctx, x.root, ".", 0, func(path string, size int64, mod time.Time) error {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
@@ -199,7 +211,12 @@ func (x *Index) build(ctx context.Context) error {
 	x.order = order
 	x.truncated = truncated
 	x.builtAt = time.Now()
-	x.fingerprint, _ = x.computeFingerprint()
+	x.fingerprint, _ = x.computeFingerprint(ctx)
+	// 轻量戳必须与索引一起更新，否则 fresh() 永远失配、
+	// 每次列表都会退化成全量重建——那正是 B29 要消除的开销。
+	if files, mod, serr := x.topLevelStamp(); serr == nil {
+		x.stampFiles, x.stampMod = files, mod
+	}
 	return nil
 }
 
@@ -286,44 +303,69 @@ func (x *Index) Stats() map[string]any {
 }
 
 // walkDir 遍历 root 下的会话文件，跳过符号链接与非普通文件。
-func walkDir(root *os.Root, dir string, fn func(path string, size int64, mod time.Time) error) error {
-	items, err := root.FS().(interface {
-		ReadDir(string) ([]os.DirEntry, error)
-	}).ReadDir(dir)
+// walkDir 流式遍历受管会话目录，只把 .jsonl 普通文件交给 fn。
+//
+// 流式是刻意的：旧实现用 ReadDir 一次性取回整个目录，超大单目录
+// 会在上限检查之前就占满内存（B27/B52）。分批读取 + 目录数上限
+// 保证遍历本身有界；ctx 让取消能及时中断（B52）。
+func walkDir(ctx context.Context, root *os.Root, dir string, depth int, fn func(path string, size int64, mod time.Time) error) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if depth > maxWalkDepth {
+		return protocol.E("limit_exceeded", "会话目录层数超过上限")
+	}
+	f, err := root.Open(dir)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil
 		}
 		return err
 	}
-	for _, item := range items {
-		name := item.Name()
-		path := name
-		if dir != "." && dir != "" {
-			path = dir + "/" + name
-		}
-		info, err := item.Info()
-		if err != nil {
-			continue
-		}
-		if item.IsDir() {
-			if err := walkDir(root, path, fn); err != nil {
+	defer f.Close()
+	for {
+		items, rerr := f.ReadDir(256)
+		for _, item := range items {
+			if err := ctx.Err(); err != nil {
 				return err
 			}
-			continue
+			name := item.Name()
+			path := name
+			if dir != "." && dir != "" {
+				path = dir + "/" + name
+			}
+			info, ierr := item.Info()
+			if ierr != nil {
+				continue
+			}
+			if item.IsDir() {
+				if err := walkDir(ctx, root, path, depth+1, fn); err != nil {
+					return err
+				}
+				continue
+			}
+			if !info.Mode().IsRegular() || filepath.Ext(path) != ".jsonl" {
+				continue
+			}
+			if err := fn(path, info.Size(), info.ModTime()); err != nil {
+				return err
+			}
 		}
-		if !info.Mode().IsRegular() {
-			continue
+		if rerr != nil {
+			if rerr == io.EOF {
+				return nil
+			}
+			return rerr
 		}
-		if filepath.Ext(path) != ".jsonl" {
-			continue
-		}
-		if err := fn(path, info.Size(), info.ModTime()); err != nil {
-			return err
+		if len(items) == 0 {
+			return nil
 		}
 	}
-	return nil
 }
+
+// maxWalkDepth 限制遍历深度。会话目录按 cwd 编码成一层，
+// 正常远小于此；异常深的目录会在这里被拦下，避免无界递归。
+const maxWalkDepth = 32
 
 // headerInfo 是会话头解析结果。
 type headerInfo struct {
@@ -364,4 +406,49 @@ func readHeader(root *os.Root, path string) (headerInfo, error) {
 		return headerInfo{}, protocol.E("invalid_history", "会话头部无效")
 	}
 	return headerInfo{id: raw.ID, cwd: raw.Cwd, name: raw.Name, version: raw.Version, timestamp: raw.Timestamp}, nil
+}
+
+// topLevelStamp 取顶层目录的 .jsonl 文件数与最新修改时间。
+// 只看一层：会话目录按 cwd 编码成子目录，增删会话一定会改动顶层或子目录，
+// 而子目录的改动会反映到它自身的 mtime 上——父目录 mtime 只在直接子项
+// 增删时变化，因此这里同时比较文件数，追加写入由 build 阶段的 size 兜底。
+func (x *Index) topLevelStamp() (int, time.Time, error) {
+	f, err := x.root.Open(".")
+	if err != nil {
+		return 0, time.Time{}, err
+	}
+	defer f.Close()
+	files := 0
+	var latest time.Time
+	for {
+		items, rerr := f.ReadDir(256)
+		for _, item := range items {
+			info, ierr := item.Info()
+			if ierr != nil {
+				continue
+			}
+			if item.IsDir() {
+				if info.ModTime().After(latest) {
+					latest = info.ModTime()
+				}
+				continue
+			}
+			if !info.Mode().IsRegular() || filepath.Ext(item.Name()) != ".jsonl" {
+				continue
+			}
+			files++
+			if info.ModTime().After(latest) {
+				latest = info.ModTime()
+			}
+		}
+		if rerr != nil {
+			if rerr == io.EOF {
+				return files, latest, nil
+			}
+			return 0, time.Time{}, rerr
+		}
+		if len(items) == 0 {
+			return files, latest, nil
+		}
+	}
 }

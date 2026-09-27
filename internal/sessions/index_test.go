@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -137,4 +138,76 @@ func idFromIndex(i int) string {
 		i /= 10
 	}
 	return "s" + out
+}
+
+// Test索引TTL内不做全树遍历 覆盖 B29：
+// 旧实现在 TTL 内仍遍历整棵树计算指纹。判定方式是把指纹值破坏掉——
+// 若 fresh() 真的在算指纹，它必然失配并触发重建；改用轻量戳则不受影响。
+func Test索引TTL内不做全树遍历(t *testing.T) {
+	cwd := t.TempDir()
+	store, sessionDir := newStore(t, cwd)
+	for i := 0; i < 120; i++ {
+		writeNested(t, sessionDir, cwd, "sess-"+strconv.Itoa(i), time.Now().Add(time.Duration(i)*time.Second))
+	}
+	ctx := context.Background()
+	if _, err := store.List(ctx, 0, 200); err != nil {
+		t.Fatal(err)
+	}
+	// 破坏指纹：只有「TTL 内仍在算指纹」的实现会被它影响。
+	store.index.mu.Lock()
+	store.index.fingerprint = "已被破坏的指纹"
+	builtBefore := store.index.builtAt
+	store.index.mu.Unlock()
+
+	list, err := store.List(ctx, 0, 200)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(list.Items) != 120 {
+		t.Fatalf("二次列表条数异常: %d", len(list.Items))
+	}
+	store.index.mu.RLock()
+	builtAfter := store.index.builtAt
+	store.index.mu.RUnlock()
+	if !builtAfter.Equal(builtBefore) {
+		t.Fatal("TTL 内的列表触发了索引重建，说明仍在做全树指纹比较")
+	}
+}
+
+// Test指纹计算可被取消 覆盖 B52：
+// computeFingerprint 必须接收 context，否则取消无法中断全树扫描。
+func Test指纹计算可被取消(t *testing.T) {
+	cwd := t.TempDir()
+	store, sessionDir := newStore(t, cwd)
+	for i := 0; i < 30; i++ {
+		writeNested(t, sessionDir, cwd, "sess-"+strconv.Itoa(i), time.Now().Add(time.Duration(i)*time.Second))
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := store.index.computeFingerprint(ctx); err == nil {
+		t.Fatal("已取消的上下文应让指纹计算失败")
+	}
+}
+
+// Test空目录不受文件上限约束 覆盖 B52 的另一半：
+// 海量空目录不应被当成文件计数，但遍历深度仍受限制。
+func Test空目录不受文件上限约束(t *testing.T) {
+	cwd := t.TempDir()
+	store, sessionDir := newStore(t, cwd)
+	writeNested(t, sessionDir, cwd, "only", time.Now())
+	// 造一批空目录：数量远超会话文件上限。
+	base := filepath.Join(sessionDir, "empty")
+	for i := 0; i < 40; i++ {
+		if err := os.MkdirAll(filepath.Join(base, "d"+strconv.Itoa(i)), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	ctx := context.Background()
+	list, err := store.List(ctx, 0, 200)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(list.Items) != 1 {
+		t.Fatalf("空目录不应被当成会话: %+v", list.Items)
+	}
 }

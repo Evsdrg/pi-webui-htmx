@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -212,4 +213,60 @@ func initGitRepo(t *testing.T) string {
 	run("add", "README.md")
 	run("commit", "-q", "-m", "init")
 	return dir
+}
+
+// Test超大目录不整体载入 覆盖 B27：
+// 旧实现用 fs.ReadDir 一次性取回整个目录再排序截断，超大单目录
+// 会在限额检查之前就占满内存。这里用远超上限的条目数验证仍能正确截断，
+// 并且分批读取不会因为 readDir 的 EOF 语义提前结束。
+func Test超大目录不整体载入(t *testing.T) {
+	root := t.TempDir()
+	const total = 3000
+	for i := 0; i < total; i++ {
+		name := filepath.Join(root, "f"+strconv.Itoa(i)+".txt")
+		if err := os.WriteFile(name, []byte("x"), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// 混入目录，验证「目录在前」的排序在截断后依然成立。
+	for i := 0; i < 50; i++ {
+		if err := os.MkdirAll(filepath.Join(root, "d"+strconv.Itoa(i)), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	p, err := New([]string{root})
+	if err != nil {
+		t.Fatal(err)
+	}
+	limits := DefaultLimits()
+	limits.MaxEntries = 100
+	f, err := NewFiles(p, limits)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	entries, truncated, err := f.List(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 100 {
+		t.Fatalf("应按上限截断到 100，实际 %d", len(entries))
+	}
+	if !truncated {
+		t.Fatal("超大目录必须标记截断")
+	}
+	// 目录优先，且各自按名称有序。
+	seenFile := false
+	for i, e := range entries {
+		if !e.IsDir {
+			seenFile = true
+			continue
+		}
+		if seenFile {
+			t.Fatalf("第 %d 项目录排在文件之后，排序规则被破坏", i)
+		}
+		if i > 0 && entries[i-1].IsDir && entries[i-1].Name > e.Name {
+			t.Fatalf("目录未按名称有序: %s > %s", entries[i-1].Name, e.Name)
+		}
+	}
 }

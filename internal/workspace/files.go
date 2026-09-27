@@ -1,7 +1,7 @@
 package workspace
 
 import (
-	"io/fs"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -158,34 +158,49 @@ func (f *Files) List(path string) ([]Entry, bool, error) {
 	if !info.IsDir() {
 		return nil, false, protocol.E("invalid_params", "目标不是目录")
 	}
-	entries, err := fs.ReadDir(r.FS(), rel)
+	dirFile, err := r.Open(rel)
 	if err != nil {
 		return nil, false, protocol.E("pi_error", "无法读取目录")
 	}
-	sort.Slice(entries, func(i, j int) bool {
-		if entries[i].IsDir() != entries[j].IsDir() {
-			return entries[i].IsDir()
-		}
-		return entries[i].Name() < entries[j].Name()
-	})
+	defer dirFile.Close()
 	out := make([]Entry, 0, 64)
 	truncated := false
-	for i, e := range entries {
-		if i >= f.limits.MaxEntries {
-			truncated = true
+	// 流式分批读取，边读边按上限截断。旧写法用 fs.ReadDir 一次性取回
+	// 整个目录再排序，超大单目录会在限额检查之前就占满内存（B27）。
+	for !truncated {
+		items, rerr := dirFile.ReadDir(128)
+		for _, e := range items {
+			if len(out) >= f.limits.MaxEntries {
+				truncated = true
+				break
+			}
+			// 符号链接不展开，避免列出指向根外的内容。
+			info, ierr := e.Info()
+			if ierr != nil {
+				continue
+			}
+			out = append(out, Entry{
+				Name: e.Name(), Path: filepath.Join(path, e.Name()), IsDir: e.IsDir(),
+				Size: info.Size(), ModTime: info.ModTime().UTC().Format("2006-01-02T15:04:05Z"),
+			})
+		}
+		if rerr != nil {
+			if rerr == io.EOF {
+				break
+			}
+			return nil, false, protocol.E("pi_error", "无法读取目录")
+		}
+		if len(items) == 0 {
 			break
 		}
-		// 符号链接不展开，避免列出指向根外的内容。
-		child := filepath.Join(path, e.Name())
-		info, err := e.Info()
-		if err != nil {
-			continue
-		}
-		out = append(out, Entry{
-			Name: e.Name(), Path: child, IsDir: e.IsDir(),
-			Size: info.Size(), ModTime: info.ModTime().UTC().Format("2006-01-02T15:04:05Z"),
-		})
 	}
+	// 目录在前、各自按名称有序，与旧排序规则保持一致。
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].IsDir != out[j].IsDir {
+			return out[i].IsDir
+		}
+		return out[i].Name < out[j].Name
+	})
 	return out, truncated, nil
 }
 

@@ -67,7 +67,7 @@ func (s *Store) Search(ctx context.Context, query string, limits SearchLimits) (
 	needle := strings.ToLower(query)
 	out := SearchResult{Matches: []Match{}}
 	scanned := 0
-	walkErr := walkDir(s.root, ".", func(path string, size int64, _ time.Time) error {
+	walkErr := walkDir(ctx, s.root, ".", 0, func(path string, size int64, _ time.Time) error {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
@@ -108,8 +108,11 @@ func (s *Store) searchFile(path, needle string, limits SearchLimits, out *Search
 	for {
 		b, _, e := jsonl.Read(r, limits.LineBytes)
 		if e != nil {
-			// 末尾半行忽略；超大行直接跳过该文件，不中断整体搜索。
-			if jsonl.ErrTooLarge == e || jsonl.ErrIncomplete == e || isEOF(e) {
+			// 末尾半行忽略，那是 Pi 正在追加的正常状态。
+			// 超大行必须跳过并标记截断：静默跳过会让后续命中被漏掉，
+			// 却向调用方报告「结果完整」（B28）。
+			if errors.Is(e, jsonl.ErrTooLarge) {
+				out.Truncated = true
 				return nil
 			}
 			return nil
