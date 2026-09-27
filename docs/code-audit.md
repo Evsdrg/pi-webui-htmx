@@ -21,7 +21,7 @@
 | B05 | ✅ 已修 | Bridge | **修复：** `SubscribeWithReplay` 在单次持锁内完成「取快照 + 注册订阅」，并把 WS 与隧道两条入口的订阅逻辑收敛成一个共用实现。回归断言「快照末序号 == 注册序号」，反例（拆成两次加锁）5/5 稳定失败。 | `internal/runtime/manager.go`；`internal/transport/server.go`；`manager_test.go` |
 | B06 | 高 | Bridge | 大 `get_tree` 的端到端请求后，后续状态返回 `worker_exited`。源码确认桥默认 `MaxFrame=8 MiB`，`Client.read()` 在超限时 fail 并关闭 stdin/stdout；原约 9 MiB 探针只能证明此链路失效，不能归因成 Pi 自身约 9 MiB 限制。 | `internal/runtime/manager.go:Defaults`；`internal/pi/client.go:read`；`internal/runtime/session_ops.go` |
 | B07 | 高 | Bridge/UI | 桥接受 600 KiB 文件读取，但 JSON 响应超过 WS 帧上限并取消连接；常规文件预览会断线。 | `pi-bridge-go/internal/transport/server.go` |
-| B08 | 高 | Bridge | `sessions.delete` 能在 worker 忙时删除活动会话文件，而 Pi writer 仍存活。 | `pi-bridge-go/internal/sessions/delete.go`；`internal/transport/server.go` |
+| B08 | ✅ 已修 | Bridge | **修复：** 删除前先 `StopSession` 停掉该会话 worker，失败时非 force 明确拒绝、force 下仍尽力再停；结果带 `stoppedWorker`。原问题：worker 忙时也能删文件，Pi writer 仍存活。 | `internal/runtime/manager.go`；`internal/transport/server.go` |
 | B09 | 中 | Bridge | `SwitchSession` 从 basename 直接解析 ID，不能识别 Pi 的 `timestamp_ID.jsonl` 标准命名。 | `pi-bridge-go/internal/runtime/identity.go` |
 | B10 | 中 | Bridge | fork/clone 重绑定后停止的 Pi 进程仍可留在 manager 注册表。 | `pi-bridge-go/internal/runtime/manager.go`；`internal/runtime/identity.go` |
 | B11 | 中 | Bridge/UI | 多个 assistant entry 的 thinking 占位符关联错 entry：较早思考块不可取回，后续块可能重复出现。 | `pi-bridge-go/internal/presentation/` |
@@ -109,7 +109,7 @@
 | B59 | 中 | Management | `npm:@scope/pkg@version` 的版本后缀未从 npm 包名剥离；已安装版本读取路径错误，registry URL 也把版本约束当包名。锁定版本夹具复现读取为空。 | `internal/management/packages.go`；`pinned-package-probe.log` |
 | B60 | ✅ 已修 | HTTP | **修复：** 解析 qvalue，省略视为 1，未列出且无 `*` 视为不可接受，同名重复取最严格，非法 q 视为禁用。回归覆盖 `*`、`*;q=0`、`br;q=0`、同名重复与畸形 q。原问题：忽略 qvalue，`br;q=0` 仍选 br。 | `internal/presentation/presentation.go`；`compress_test.go` |
 | B61 | ✅ 已修 | HTTP | **修复：** `Vary` 无条件声明；端到端测试按 8 种 Accept-Encoding 校验 Vary、Content-Encoding 与解压结果。原问题：仅压缩分支设置，identity 缺 Vary。 | `internal/transport/server.go`；`server_test.go` |
-| B62 | 中 | Sessions | `trash` 命令存在但执行失败时，`Delete` 回退到 `os.Remove` 永久删除；用户无法恢复。故障脚本探针复现。 | `internal/sessions/delete.go`；`delete-trash-probe.log` |
+| B62 | ✅ 已修 | Sessions | **修复：** trash 存在却执行失败时报错取消，绝不退回 `os.Remove`；只有系统确实没有 trash 才真正删除。两条回归分别覆盖失败与缺失路径。 | `internal/sessions/delete.go`；`delete_test.go` |
 | B63 | 高 | Relay | 非环回 `--listen` 配合默认空 `--host` 仍可启动；空 host 会同时跳过 Host/Origin 校验，且 HTTP listener 不强制 TLS，误部署可明文暴露认证令牌与 Cookie。 | `cmd/pi-relay/main.go`；`internal/relay/server.go` |
 | B64 | 高 | Runtime | `SwitchSession` 先令 Pi 切到目标文件，再调用 `Rebind` 检查目标 worker 冲突；若目标会话已活跃，冲突发生时 Pi 已切换，旧键下的 worker 仍可 `Prompt`，可能形成双写。 | `internal/runtime/identity.go`；`internal/runtime/manager.go` |
 | B65 | ✅ 已修 | Events | **修复：** `resetReplay` 同时更换 epoch；旧 epoch 一律拒绝并强制重新同步，不再用「返回空」假装已同步。new/switch/fork/clone 四条路径都经 `Rebind`，覆盖完整。反例（只归零 seq）验证通过。 | `internal/runtime/identity.go`；`identity_test.go` |
