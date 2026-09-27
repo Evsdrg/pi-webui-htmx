@@ -269,7 +269,9 @@ func TestWS命令闭环与防重(t *testing.T) {
 		t.Fatalf("启动响应缺少 sessionId: %v", started)
 	}
 	// 回执存储启用时，重复 requestId 直接回放结论，绝不重新执行。
-	send(map[string]any{"version": 1, "kind": "command", "requestId": "r2", "method": "session.stop"})
+	// 必须用相同的方法与参数：同一 requestId 配不同内容是客户端错误，
+	// 只能报 conflict，不能回放另一条命令的结论。
+	send(map[string]any{"version": 1, "kind": "command", "requestId": "r2", "method": "session.start", "params": map[string]any{"cwd": cwd}})
 	m := read()
 	if m["ok"] != true {
 		t.Fatalf("重复 requestId 应回放结论: %v", m)
@@ -280,14 +282,25 @@ func TestWS命令闭环与防重(t *testing.T) {
 	if len(s.manager.List()) != 1 {
 		t.Fatalf("不得重复启动工作进程: %+v", s.manager.List())
 	}
-	// 协议层被拒的命令不落「已执行」回执，客户端可重试。
-	send(map[string]any{"version": 1, "kind": "command", "requestId": "r9", "method": "session.compact"})
+	// 同一 requestId 换内容必须被拒绝，不能静默复用旧结论。
+	send(map[string]any{"version": 1, "kind": "command", "requestId": "r2", "method": "session.stop"})
 	if m := read(); m["ok"] != false {
-		t.Fatalf("未实现方法应被拒绝: %v", m)
+		t.Fatalf("同一 requestId 配不同命令应被拒绝: %v", m)
 	}
-	send(map[string]any{"version": 1, "kind": "command", "requestId": "r9", "method": "worker.list"})
-	if m := read(); m["ok"] != true {
-		t.Fatalf("被拒的 requestId 应可重试: %v", m)
+	// 协议层被拒的命令不落「已执行」回执，客户端可重试。
+	// 重试必须用同一 requestId 重发同一条命令；换内容是客户端错误。
+	send(map[string]any{"version": 1, "kind": "command", "requestId": "r9", "method": "session.compact"})
+	first := read()
+	if first["ok"] != false {
+		t.Fatalf("未启动会话的命令应被拒绝: %v", first)
+	}
+	if code := replyCode(first); code == "conflict" {
+		t.Fatalf("首次失败不应是 conflict: %v", first)
+	}
+	send(map[string]any{"version": 1, "kind": "command", "requestId": "r9", "method": "session.compact"})
+	again := read()
+	if code := replyCode(again); code == "conflict" {
+		t.Fatalf("被拒的 requestId 应可重试: %v", again)
 	}
 	// 未启动的会话操作应返回 worker_not_running，而不是隐式启动。
 	send(map[string]any{"version": 1, "kind": "command", "requestId": "r3", "sessionId": "unknown", "method": "session.state"})
@@ -1112,4 +1125,11 @@ func Test静态资产始终声明Vary(t *testing.T) {
 			}
 		})
 	}
+}
+
+// replyCode 从响应帧里取协议错误码，供测试断言。
+func replyCode(m map[string]any) string {
+	errObj, _ := m["error"].(map[string]any)
+	code, _ := errObj["code"].(string)
+	return code
 }

@@ -76,6 +76,7 @@ type Server struct {
 	token, host  string
 	connections  chan struct{}
 	operations   chan struct{}
+	claims       *claims
 	tunnelBridge *TunnelBridge
 }
 
@@ -97,6 +98,7 @@ func New(manager *run.Manager, store *sessions.Store, terminals *terminal.Manage
 		host:        host,
 		connections: make(chan struct{}, 8),
 		operations:  make(chan struct{}, 16),
+		claims:      newClaims(1024),
 	}
 }
 
@@ -897,7 +899,6 @@ func (s *Server) serveWS(w http.ResponseWriter, r *http.Request) {
 		}
 		c.mu.Unlock()
 	}()
-	seen := map[string]bool{}
 	for {
 		typ, b, err := ws.Read(ctx)
 		if err != nil {
@@ -908,34 +909,10 @@ func (s *Server) serveWS(w http.ResponseWriter, r *http.Request) {
 			c.send(protocol.Reply("", nil, protocol.E("invalid_request", "需要一条 JSON 命令")))
 			continue
 		}
-		if req.Version != 1 {
-			c.send(protocol.Reply(req.RequestID, nil, protocol.E("unsupported_version", "仅支持版本 1")))
+		ok, urgent := s.admit(req, func(m protocol.Message) { c.send(m) })
+		if !ok {
 			continue
 		}
-		if req.Kind != "command" || req.RequestID == "" || len(req.RequestID) > 128 {
-			c.send(protocol.Reply("", nil, protocol.E("invalid_request", "命令必须带长度受限的 requestId")))
-			continue
-		}
-		// 跨重启去重：同一 requestId 已执行过就直接回放结论，绝不重新执行。
-		if rec, ok := s.receipts.Lookup(req.RequestID); ok && rec.Outcome != storage.OutcomeRejected {
-			c.send(protocol.Reply(req.RequestID, map[string]any{
-				"duplicate": true,
-				"outcome":   string(rec.Outcome),
-				"method":    rec.Method,
-				"at":        rec.At.UTC().Format(time.RFC3339Nano),
-			}, nil))
-			continue
-		}
-		if seen[req.RequestID] {
-			c.send(protocol.Reply(req.RequestID, nil, protocol.E("conflict", "requestId 已被使用，有副作用的命令请勿重试")))
-			continue
-		}
-		if len(seen) >= 1024 {
-			c.send(protocol.Reply(req.RequestID, nil, protocol.E("limit_exceeded", "请用新的 requestId 重新连接")))
-			return
-		}
-		seen[req.RequestID] = true
-		urgent := req.Method == "session.abort" || req.Method == "session.stop"
 		sem := c.normal
 		if urgent {
 			sem = c.urgent
@@ -943,6 +920,7 @@ func (s *Server) serveWS(w http.ResponseWriter, r *http.Request) {
 		select {
 		case sem <- struct{}{}:
 		default:
+			s.claims.finish(req.RequestID)
 			c.send(protocol.Reply(req.RequestID, nil, protocol.E("busy", "该连接的在途命令数已达上限")))
 			continue
 		}
@@ -951,6 +929,7 @@ func (s *Server) serveWS(w http.ResponseWriter, r *http.Request) {
 			case s.operations <- struct{}{}:
 			default:
 				<-sem
+				s.claims.finish(req.RequestID)
 				c.send(protocol.Reply(req.RequestID, nil, protocol.E("busy", "桥的在途命令数已达上限")))
 				continue
 			}
@@ -962,16 +941,7 @@ func (s *Server) serveWS(w http.ResponseWriter, r *http.Request) {
 					<-s.operations
 				}
 			}()
-			// 命令寿命有意长于浏览器连接：断开只停止等待，不取消已接受的任务。
-			opctx, stop := context.WithTimeout(s.manager.Context(), s.manager.Timeout())
-			defer stop()
-			s.metrics.CommandStarted(req.Method)
-			data, err := c.dispatch(opctx, req)
-			if err != nil {
-				s.metrics.CommandFailed(req.Method, errorCodeOf(err))
-			}
-			c.send(protocol.Reply(req.RequestID, data, err))
-			s.recordReceipt(req, err)
+			s.runCommand(c, req)
 		}(req, sem, urgent)
 	}
 }
@@ -985,48 +955,30 @@ func errorCodeOf(err error) string {
 	return "internal"
 }
 
-// notExecutedCodes 是「命令从未送达 Pi」的错误码集合。
-// 这些失败允许客户端用同一 requestId 重试，因此回执记为 rejected，
-// 不会在后续连接里被当成重复执行而挡住合法重试。
-var notExecutedCodes = map[string]struct{}{
-	"invalid_request": {}, "invalid_params": {}, "unsupported_method": {},
-	"unsupported_version": {}, "busy": {}, "limit_exceeded": {},
-	"resync_required": {}, "unauthorized": {}, "host_denied": {},
-	"origin_denied": {},
-}
-
 // recordReceipt 落一条命令回执，供跨重启去重与对账。
-// 写失败不影响命令结果。
+// 写失败不影响命令结果，只反映在诊断信息里。
 func (s *Server) recordReceipt(req protocol.Request, err error) {
-	if s.receipts == nil {
+	if s.receipts == nil || !protocol.RecordsOutcome(req.Method) {
 		return
 	}
-	outcome := storage.OutcomeOK
-	if err != nil {
-		code := errorCodeOf(err)
-		if _, skip := notExecutedCodes[code]; skip {
-			outcome = storage.OutcomeRejected
-		} else if code == "outcome_unknown" {
-			outcome = storage.OutcomeUnknown
-		} else {
-			outcome = storage.OutcomeError
-		}
-	}
 	_ = s.receipts.Record(storage.Receipt{
-		RequestID: req.RequestID,
-		SessionID: req.SessionID,
-		Method:    req.Method,
-		Outcome:   outcome,
+		RequestID:   req.RequestID,
+		SessionID:   req.SessionID,
+		Method:      req.Method,
+		Outcome:     outcomeFor(err),
+		Fingerprint: requestFingerprint(req),
 	})
 }
 
-// connSink 是连接相关的少量能力：生命周期上下文、发送帧、登记终端订阅。
-// WebSocket 连接与隧道虚拟连接各自实现它，从而共用同一份命令分发。
+// connSink 是连接相关的少量能力：生命周期上下文、发送帧、登记终端订阅、
+// 以及该连接自己的命令分发。WebSocket 连接与隧道虚拟连接各自实现它，
+// 从而共用同一份执行与准入逻辑，同时保留各自的订阅实现。
 type connSink interface {
 	connContext() context.Context
 	send(m protocol.Message) bool
 	trackTerminal(id string, sub *terminal.Subscription)
 	dropTerminal(id string)
+	dispatch(ctx context.Context, r protocol.Request) (any, error)
 }
 
 // dispatchCommon 执行除订阅以外的命令。

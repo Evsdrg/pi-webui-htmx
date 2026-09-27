@@ -207,59 +207,39 @@ func (c *virtualConn) handle(ctx context.Context, raw []byte) {
 		c.reply(protocol.Reply("", nil, protocol.E("invalid_request", "需要一条 JSON 命令")))
 		return
 	}
-	if req.Version != protocol.Version {
-		c.reply(protocol.Reply(req.RequestID, nil, protocol.E("unsupported_version", "仅支持版本 1")))
+	// 与 WebSocket 入口共用同一套准入：去重、指纹、并发预算不能各写一份。
+	ok, urgent := c.bridge.server.admit(req, c.reply)
+	if !ok {
 		return
 	}
-	if req.Kind != "command" || req.RequestID == "" || len(req.RequestID) > 128 {
-		c.reply(protocol.Reply("", nil, protocol.E("invalid_request", "命令必须带长度受限的 requestId")))
-		return
-	}
-	// 跨重启去重：同一 requestId 已执行过就直接回放结论。
-	if rec, ok := c.bridge.server.receipts.Lookup(req.RequestID); ok && rec.Outcome != "rejected" {
-		c.reply(protocol.Reply(req.RequestID, map[string]any{
-			"duplicate": true, "outcome": string(rec.Outcome), "method": rec.Method,
-		}, nil))
-		return
-	}
-	if c.seen[req.RequestID] {
-		c.reply(protocol.Reply(req.RequestID, nil, protocol.E("conflict", "requestId 已被使用，有副作用的命令请勿重试")))
-		return
-	}
-	if len(c.seen) >= 1024 {
-		c.reply(protocol.Reply(req.RequestID, nil, protocol.E("limit_exceeded", "请用新的 requestId 重新连接")))
-		return
-	}
-	c.seen[req.RequestID] = true
-
-	urgent := req.Method == "session.abort" || req.Method == "session.stop"
 	release := make(chan struct{}, 1)
 	if !urgent {
 		select {
 		case release <- struct{}{}:
 		default:
+			c.bridge.server.claims.finish(req.RequestID)
 			c.reply(protocol.Reply(req.RequestID, nil, protocol.E("busy", "该连接的在途命令数已达上限")))
+			return
+		}
+		// 隧道命令同样受桥的全局并发上限约束，不能绕过资源限额（B15）。
+		select {
+		case c.bridge.server.operations <- struct{}{}:
+		default:
+			c.bridge.server.claims.finish(req.RequestID)
+			c.reply(protocol.Reply(req.RequestID, nil, protocol.E("busy", "桥的在途命令数已达上限")))
 			return
 		}
 	}
 	go func() {
 		if !urgent {
 			<-release
+			defer func() { <-c.bridge.server.operations }()
 		}
-		// 命令寿命长于浏览器连接：断开只停止等待，不取消已接受的任务。
-		opctx, stop := context.WithTimeout(c.bridge.server.manager.Context(), c.bridge.server.manager.Timeout())
-		defer stop()
-		c.bridge.server.metrics.CommandStarted(req.Method)
-		data, err := c.dispatch(opctx, req)
-		if err != nil {
-			c.bridge.server.metrics.CommandFailed(req.Method, errorCodeOf(err))
-		}
-		c.reply(protocol.Reply(req.RequestID, data, err))
-		c.bridge.server.recordReceipt(req, err)
+		c.bridge.server.runCommand(c, req)
 	}()
 }
 
-// dispatch 复用共享分发；订阅类命令走虚拟连接自己的实现。
+// dispatch 实现 connSink：订阅类命令走虚拟连接自己的实现，其余共用。
 func (c *virtualConn) dispatch(ctx context.Context, r protocol.Request) (any, error) {
 	switch r.Method {
 	case "session.subscribe":
