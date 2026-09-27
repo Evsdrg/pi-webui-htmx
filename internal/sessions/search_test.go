@@ -47,6 +47,32 @@ func TestSearch命中与摘要(t *testing.T) {
 	}
 }
 
+func TestSearch结果携带会话标题与工作目录(t *testing.T) {
+	cwd := t.TempDir()
+	store, dir := newStore(t, cwd)
+	writeSearchSession(t, dir, cwd, "s1",
+		`{"type":"message","id":"u1","parentId":null,"timestamp":"t","message":{"role":"user","content":"Review the sample project"}}`+"\n"+
+			`{"type":"message","id":"a1","parentId":"u1","timestamp":"t","message":{"role":"assistant","content":[{"type":"text","text":"Project overview"}]}}`+"\n"+
+			`{"type":"session_info","id":"title","parentId":"a1","timestamp":"t","name":"Sample workspace review"}`+"\n")
+
+	out, err := store.Search(context.Background(), "Project overview", DefaultSearchLimits())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(out.Matches) != 1 || out.Matches[0].Title != "Sample workspace review" || out.Matches[0].Cwd != cwd || out.Matches[0].EntryID != "a1" {
+		t.Fatalf("搜索结果缺少标题、目录或定位条目: %+v", out.Matches)
+	}
+	limits := DefaultSearchLimits()
+	limits.MaxMatches = 1
+	out, err = store.Search(context.Background(), "Review the sample", limits)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(out.Matches) != 1 || out.Matches[0].Title != "Review the sample project" || out.Matches[0].Cwd != cwd {
+		t.Fatalf("提前命中上限时应退回首条用户标题: %+v", out.Matches)
+	}
+}
+
 func TestSearch大小写不敏感(t *testing.T) {
 	cwd := t.TempDir()
 	store, sessionDir := newStore(t, cwd)

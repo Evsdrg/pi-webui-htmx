@@ -1,6 +1,7 @@
 package transport
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -8,6 +9,7 @@ import (
 	"testing"
 
 	"pi-bridge-go/internal/presentation"
+	"pi-bridge-go/internal/sessions"
 )
 
 // TestUI方法契约核对静态声明，不替代命令与交互行为测试。
@@ -17,7 +19,8 @@ func TestUI方法契约(t *testing.T) {
 	if dir == "" {
 		t.Skip("需要 PI_WEBUI_DIR；完整联测请运行 scripts/verify-pair.sh")
 	}
-	if _, err := presentation.LoadFromDir(dir, SupportedMethods...); err != nil {
+	renderer, err := presentation.LoadFromDir(dir, SupportedMethods...)
+	if err != nil {
 		t.Fatalf("UI 包无法由当前桥加载：%v", err)
 	}
 	source, err := os.ReadFile(filepath.Join(dir, "src", "types", "protocol.ts"))
@@ -44,6 +47,14 @@ func TestUI方法契约(t *testing.T) {
 	}
 	for method := range methods {
 		t.Errorf("桥方法未在 UI 类型声明：%s", method)
+	}
+	page := sessions.Page{Entries: []json.RawMessage{
+		json.RawMessage(`{"type":"message","id":"u1","parentId":null,"message":{"role":"user","content":"提问"}}`),
+		json.RawMessage(`{"type":"message","id":"a1","parentId":"u1","message":{"role":"assistant","content":[{"type":"text","text":"回答"}]}}`),
+	}}
+	html, err := renderer.RenderHistory("test-session", page)
+	if err != nil || !strings.Contains(html, `data-search-entry-id="a1"`) {
+		t.Fatalf("历史模板未保留搜索命中的助手条目 ID: err=%v html=%q", err, html)
 	}
 }
 

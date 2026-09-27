@@ -1,6 +1,7 @@
 package presentation
 
 import (
+	"slices"
 	"testing"
 
 	"pi-bridge-go/internal/sessions"
@@ -13,6 +14,20 @@ func assistantEntry(id string, blocks ...int) sessions.Entry {
 		lazy = append(lazy, sessions.LazyBlock{Kind: "thinking", BlockIndex: b})
 	}
 	return sessions.Entry{ID: id, Kind: sessions.KindAssistant, Text: "回答 " + id, Lazy: lazy}
+}
+
+func Test搜索条目均能定位所属回合(t *testing.T) {
+	turns := GroupTurns([]sessions.Entry{
+		{ID: "u1", Kind: sessions.KindUser, Text: "提问"},
+		assistantEntry("a1"),
+		{ID: "tool1", Kind: sessions.KindTool, Text: "工具输出"},
+		assistantEntry("a2"),
+		{ID: "comp1", Kind: sessions.KindCompaction, Text: "压缩摘要"},
+		assistantEntry("solo"),
+	})
+	if len(turns) != 2 || !slices.Equal(turns[0].EntryIDs, []string{"u1", "a1", "tool1", "a2"}) || !slices.Equal(turns[1].EntryIDs, []string{"comp1", "solo"}) {
+		t.Fatalf("搜索命中的原始条目找不到所属回合: %+v", turns)
+	}
 }
 
 // Test思考占位符归属各自条目 覆盖 B11：

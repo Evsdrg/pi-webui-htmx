@@ -39,6 +39,8 @@ func DefaultSearchLimits() SearchLimits {
 type Match struct {
 	SessionID string `json:"sessionId"`
 	EntryID   string `json:"entryId"`
+	Title     string `json:"title"`
+	Cwd       string `json:"cwd"`
 	Role      string `json:"role,omitempty"`
 	Snippet   string `json:"snippet"`
 	Timestamp string `json:"timestamp,omitempty"`
@@ -105,6 +107,17 @@ func (s *Store) searchFile(path, needle string, limits SearchLimits, out *Search
 	}
 	r := bufio.NewReader(io.LimitReader(f, st.Size()))
 	sessionID := sessionIDFromPath(path)
+	start := len(out.Matches)
+	var title, firstText, cwd string
+	defer func() {
+		if title == "" {
+			title = firstText
+		}
+		for i := start; i < len(out.Matches); i++ {
+			out.Matches[i].Title = title
+			out.Matches[i].Cwd = cwd
+		}
+	}()
 	for {
 		b, _, e := jsonl.Read(r, limits.LineBytes)
 		if e != nil {
@@ -121,10 +134,32 @@ func (s *Store) searchFile(path, needle string, limits SearchLimits, out *Search
 		var header struct {
 			Type string `json:"type"`
 			ID   string `json:"id"`
+			Cwd  string `json:"cwd"`
 		}
 		if jsonUnmarshal(b, &header) == nil && header.Type == "session" && ValidID(header.ID) {
 			sessionID = header.ID
+			cwd = header.Cwd
 			continue
+		}
+		if header.Type == "session_info" {
+			var info struct {
+				Name string `json:"name"`
+			}
+			if jsonUnmarshal(b, &info) == nil {
+				title = shortTitle(info.Name, 160)
+			}
+			continue
+		}
+		if firstText == "" && header.Type == "message" && bytes.Contains(b, []byte(`"user"`)) {
+			var item struct {
+				Message struct {
+					Role    string          `json:"role"`
+					Content json.RawMessage `json:"content"`
+				} `json:"message"`
+			}
+			if jsonUnmarshal(b, &item) == nil && item.Message.Role == "user" {
+				firstText = shortTitle(flattenContent(item.Message.Content), 80)
+			}
 		}
 		if !bytes.Contains(bytes.ToLower(b), []byte(needle)) {
 			continue

@@ -467,6 +467,7 @@ type Step struct {
 // 视口内容被顶走。一个片段只含完整回合，插入位置永远在轮边界。
 type Turn struct {
 	ID            string
+	EntryIDs      []string
 	UserText      string
 	AssistantText string
 	Steps         []Step
@@ -525,15 +526,16 @@ func GroupTurns(entries []sessions.Entry) []Turn {
 	for _, e := range entries {
 		switch e.Kind {
 		case sessions.KindUser:
-			turns = append(turns, Turn{ID: e.ID, UserText: e.Text})
+			turns = append(turns, Turn{ID: e.ID, EntryIDs: []string{e.ID}, UserText: e.Text})
 			current = len(turns) - 1
 		case sessions.KindAssistant:
 			// 每个块都带上自己的 entry ID，绝不合并到回合级的单一 ID 上。
 			thinking := thinkingBlocks(e.ID, e.Lazy)
 			if current < 0 {
-				turns = append(turns, Turn{ID: e.ID, AssistantText: e.Text, Thinking: thinking})
+				turns = append(turns, Turn{ID: e.ID, EntryIDs: []string{e.ID}, AssistantText: e.Text, Thinking: thinking})
 				continue
 			}
+			turns[current].EntryIDs = append(turns[current].EntryIDs, e.ID)
 			turns[current].Thinking = append(turns[current].Thinking, thinking...)
 			if turns[current].AssistantText != "" && e.Text != "" {
 				turns[current].AssistantText += "\n\n"
@@ -542,14 +544,15 @@ func GroupTurns(entries []sessions.Entry) []Turn {
 		case sessions.KindTool:
 			images := lazyIndexes(e.Lazy, "image")
 			if current < 0 {
-				turns = append(turns, Turn{ID: e.ID, HasProcess: true, Steps: []Step{{Kind: "工具", Detail: e.Text, EntryID: e.ID, Images: images}}})
+				turns = append(turns, Turn{ID: e.ID, EntryIDs: []string{e.ID}, HasProcess: true, Steps: []Step{{Kind: "工具", Detail: e.Text, EntryID: e.ID, Images: images}}})
 				continue
 			}
+			turns[current].EntryIDs = append(turns[current].EntryIDs, e.ID)
 			turns[current].Steps = append(turns[current].Steps, Step{Kind: "工具", Detail: e.Text, EntryID: e.ID, Images: images})
 			turns[current].HasProcess = true
 		case sessions.KindCompaction:
 			// 压缩边界单独成轮，避免把摘要并进相邻回合。
-			turns = append(turns, Turn{ID: e.ID, AssistantText: e.Text})
+			turns = append(turns, Turn{ID: e.ID, EntryIDs: []string{e.ID}, AssistantText: e.Text})
 			current = len(turns) - 1
 		}
 	}
