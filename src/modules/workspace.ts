@@ -68,13 +68,22 @@ export class Workspace {
       return;
     }
     let text: string;
+    // 完整内容走 HTTP：WS 是控制通道，单帧有上限，整份文本会把连接撑断（B07）。
+    // HTTP 端点带压缩，大文件也更划算；只有它整体失败时才退回 WS 的截断预览。
     try {
-      const data = await this.bridge.request<{text:string;truncated:boolean}>('files.read', '', { path });
-      text = data.text + (data.truncated ? '\n[预览已截断]' : '');
-    } catch (error) {
-      // 二进制文件：桥会给一句可读的原因，直接展示比静默失败好。
-      this.showPreview(this.note(error instanceof Error ? error.message : '无法读取文件'));
-      return;
+      const response = await fetch(`/ui/file-text?path=${encodeURIComponent(path)}`, { credentials: 'same-origin' });
+      if (!response.ok) throw new Error((await response.json().catch(() => null))?.error?.message ?? `读取失败（${response.status}）`);
+      text = await response.text();
+      if (response.headers.get('X-Truncated')) text += '\n[预览已截断]';
+    } catch {
+      try {
+        const data = await this.bridge.request<{text:string;truncated:boolean}>('files.read', '', { path });
+        text = data.text + (data.truncated ? '\n[预览已截断]' : '');
+      } catch (error) {
+        // 二进制文件：桥会给一句可读的原因，直接展示比静默失败好。
+        this.showPreview(this.note(error instanceof Error ? error.message : '无法读取文件'));
+        return;
+      }
     }
     const code = document.createElement('code');
     code.id = 'file-content';
