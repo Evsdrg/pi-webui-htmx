@@ -276,7 +276,11 @@ func Test隧道退订释放订阅配额(t *testing.T) {
 		t.Fatalf("启动响应缺少 sessionId: %+v", workers[0])
 	}
 
-	// 反复订阅/退订：每次退订都必须真正释放 worker 侧配额。
+	// 反复订阅/退订：每一对都必须按入站顺序落地并释放 worker 配额。
+	w, err := s.manager.Get(sessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
 	for i := 0; i < 12; i++ {
 		id := "u-sub-" + strconv.Itoa(i)
 		sub := mustFrame(t, map[string]any{
@@ -286,12 +290,18 @@ func Test隧道退订释放订阅配额(t *testing.T) {
 		if !bridge.HandleFrame(context.Background(), wrapFrom(t, "tab-1", sub)) {
 			t.Fatalf("第 %d 次订阅未被处理", i)
 		}
+		if n := w.SubscriberCount(); n != 1 {
+			t.Fatalf("第 %d 次订阅未按顺序生效: %d", i, n)
+		}
 		unsub := mustFrame(t, map[string]any{
 			"version": 1, "kind": "command", "requestId": id + "-x", "sessionId": sessionID,
 			"method": "session.unsubscribe",
 		})
 		if !bridge.HandleFrame(context.Background(), wrapFrom(t, "tab-1", unsub)) {
 			t.Fatalf("第 %d 次退订未被处理", i)
+		}
+		if n := w.SubscriberCount(); n != 0 {
+			t.Fatalf("第 %d 次退订后 worker 订阅数应为 0，实际 %d", i, n)
 		}
 	}
 	waitFor(t, func() bool {
@@ -300,13 +310,6 @@ func Test隧道退订释放订阅配额(t *testing.T) {
 		c, ok := bridge.virtual["tab-1"]
 		return ok && len(c.subs) == 0
 	})
-	w, err := s.manager.Get(sessionID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if n := w.SubscriberCount(); n != 0 {
-		t.Fatalf("退订后 worker 订阅数应为 0，实际 %d", n)
-	}
 }
 
 // waitFor 轮询等待条件成立，避免测试依赖固定睡眠。

@@ -27,11 +27,11 @@
 | B11 | ✅ 已修 | Bridge/UI | **修复：** `Turn.Thinking` 改为 `[]ThinkingBlock`（自带 entry ID + 块下标），不再用回合级单一 `AssistantEntryID` 配合并下标。回归覆盖同回合多 assistant、孤儿 assistant 与无思考块三种形态。 | `internal/presentation/presentation.go`；`pi-webui-htmx/src/templates/history.html` |
 | B12 | ✅ 已修 | Sessions | **修复：** 缓存键加入文件身份（dev+ino，平台适配）；取不到身份时一律不命中、也不写入。回归用 rename + 保留 mtime + 等长替换复现原缺陷。 | `internal/sessions/cache.go`；`identity_lin.go`；`cache_test.go` |
 | B13 | ✅ 已修 | Sessions | **修复：** 快路径补 `balancedJSON` 结构配平校验（O(n)、零分配），覆盖未被本页选中的损坏记录；反向用例确认含转义引号与嵌套括号的合法记录不误伤。 | `internal/sessions/head.go`；`scan.go`；`scan_test.go` |
-| B14 | ✅ 已修 | Tunnel | **修复：** subs 改为保存真实订阅句柄，退订与重复订阅都先 Close 旧订阅。回归做 12 轮订阅/退订后核对 worker 订阅数归零（反例下为 8，即上限）。 | `internal/transport/tunnel.go`；`tunnel_test.go` |
+| B14 | ✅ 已修 | Tunnel | **修复：** subs 保存真实订阅句柄，退订与重复订阅 Close 旧订阅；同一虚拟连接的订阅/退订按接收顺序执行，防止退订抢在登记前。回归每轮即时核对 12 对操作的 worker 订阅数为 1→0。 | `internal/transport/tunnel.go`；`tunnel_test.go` |
 | B15 | ✅ 已修 | Tunnel | **修复：** 隧道命令与本地 WS 共用 `admit` 与全局 `operations` 预算。原问题：隧道路径完全绕过桥级并发上限。 | `internal/transport/tunnel.go`；`claims.go` |
 | B16 | ✅ 已修 | Bridge | **修复：** 先校验参数再摘除对话；回执送达失败时把对话还回等待表。回归覆盖「非法回执后可合法重试」。 | `internal/runtime/dialogs.go`；`dialogs_test.go` |
 | U01 | ✅ 已修 | UI | **修复：** `selectSession` 切换时清空附件，附件不再跨会话残留；发送进行中仍保留输入以便重发。 | `src/modules/workbench.ts`；`tests/unit/workbench.test.ts` |
-| U02 | 中 | UI | 新会话首条消息前 `ensureWorker()` 刷新默认模型，覆盖用户已选择的模型。 | `pi-webui-htmx/src/modules/workbench.ts` |
+| U02 | ✅ 已修 | UI | 发送前固定用户所选模型，不受 `ensureWorker()` 内的状态刷新覆盖；Pi 恢复模型为 `unknown/unknown` 时显示历史标识为不可用、保留草稿并阻止误发。真实会话隔离副本与前端回归均覆盖。 | `pi-webui-htmx/src/modules/workbench.ts`；`internal/sessions/store.go` |
 | U03 | ✅ 已修 | UI | **修复：** 新增 `SessionScope`；`command()` 固定发起时归属的会话，切换后不再改投。 | `src/modules/scope.ts`；`src/modules/workbench.ts` |
 | U04 | 中 | UI/Bridge | 无 worker 的历史会话打开分支面板时，`session.tree` 被桥拒绝；历史树浏览依赖显式启动会话。 | `pi-webui-htmx/src/modules/branch.ts`；`pi-bridge-go/internal/transport/server.go` |
 | U05 | ✅ 已修 | UI/Bridge | **修复：** WS 读上限从 1 MiB 提升到与附件预算对齐（`pi.MaxImages × pi.MaxImageDataLen + 1 MiB`），前端发送前按 base64 总量预检并给出可读错误，不再以断线形式失败。 | `internal/transport/server.go`；`pi-webui-htmx/src/modules/attachments.ts`；`src/modules/workbench.ts` |

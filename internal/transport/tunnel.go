@@ -284,6 +284,16 @@ func (c *virtualConn) handle(ctx context.Context, raw []byte) {
 			return
 		}
 	}
+	// 连接资源命令按入站顺序完成：若退订抢在尚未登记的订阅前执行，
+	// 新订阅会永久留在 worker 上。普通命令仍并行，取消/停止仍可插队。
+	if req.Method == "session.subscribe" || req.Method == "session.unsubscribe" {
+		if !urgent {
+			<-release
+			defer func() { <-c.bridge.server.operations }()
+		}
+		c.bridge.server.runCommand(c, req)
+		return
+	}
 	go func() {
 		if !urgent {
 			<-release

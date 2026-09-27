@@ -392,7 +392,9 @@ func Test补发与实时流无序号缺口(t *testing.T) {
 		done := make(chan struct{})
 		go func() {
 			defer close(done)
-			for {
+			// 发布量必须低于补发环与订阅队列上限；此测试只验证注册
+			// 窗口期，不应把正常的超限/背压淘汰误判为事件遗漏。
+			for sent := 0; sent < 16; sent++ {
 				select {
 				case <-stop:
 					return
@@ -401,11 +403,11 @@ func Test补发与实时流无序号缺口(t *testing.T) {
 				w.mu.Lock()
 				w.publishLocked("pi.event", map[string]any{"type": "probe"})
 				w.mu.Unlock()
-				// 只在真正发布过之后放行订阅，否则窗口内可能一条事件都没有。
 				select {
 				case started <- struct{}{}:
 				default:
 				}
+				time.Sleep(100 * time.Microsecond)
 			}
 		}()
 		<-started
