@@ -48,7 +48,11 @@ async function load(button: HTMLButtonElement, sessionId: string): Promise<void>
       const image = document.createElement('img');
       image.className = 'lazy-image';
       image.alt = '工具结果图片';
-      image.src = URL.createObjectURL(blob);
+      const url = URL.createObjectURL(blob);
+      image.src = url;
+      // blob URL 必须显式释放：否则长会话里每次展开图片都留一份，
+      // 直到整个页面卸载才归还（U07）。
+      image.addEventListener('load', () => URL.revokeObjectURL(url), { once: true });
       button.replaceWith(image);
       return;
     }

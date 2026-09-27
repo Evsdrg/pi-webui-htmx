@@ -44,7 +44,17 @@ export class Workspace {
   }
   private async list(path: string): Promise<void> {
     const generation = ++this.generation; this.path = path;
-    await window.htmx.ajax('get', `/ui/files?path=${encodeURIComponent(path)}`, { target: '#file-list', swap: 'innerHTML' });
+    const url = `/ui/files?path=${encodeURIComponent(path)}`;
+    // 守卫必须在 htmx 交换之前：beforeSwap 之后才检查，
+    // 旧目录的内容已经换进 DOM 了（U06）。htmx 的 beforeSwap 可以被
+    // 外部监听器置 shouldSwap=false，这里用它拒绝迟到响应。
+    const reject = (event: Event): void => {
+      const detail = (event as CustomEvent).detail as { xhr?: XMLHttpRequest; shouldSwap: boolean } | undefined;
+      if (generation !== this.generation && detail) detail.shouldSwap = false;
+    };
+    document.addEventListener('htmx:beforeSwap', reject, { once: true });
+    await window.htmx.ajax('get', url, { target: '#file-list', swap: 'innerHTML' });
+    document.removeEventListener('htmx:beforeSwap', reject);
     if (generation !== this.generation) return;
     el('file-path').textContent = path;
   }

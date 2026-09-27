@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { detect, apply } from '@/modules/mention';
+import { detect, apply, FileCompleter } from '@/modules/mention';
 
 describe('@ 触发识别', () => {
   it('行首 @ 后跟查询词应触发', () => {
@@ -80,5 +80,49 @@ describe('Enter 不得把半个查询提交出去', () => {
     expect(completer.choose()).toBe(false);
     expect(completer.move(1)).toBe(false);
     cleanup();
+  });
+});
+
+describe('补全请求的归属', () => {
+  // U09：refresh 只在新 load 开始时递增 seq，debounce 窗口内
+  // 回来的旧候选仍会写进新菜单。
+  it('防抖窗口内的旧结果被丢弃', async () => {
+    vi.useFakeTimers();
+    try {
+      const input = document.createElement('textarea');
+      const menu = document.createElement('div');
+      document.body.append(input, menu);
+      let resolveFirst!: (v: { path: string }[]) => void;
+      const search = vi.fn()
+        .mockImplementationOnce(() => new Promise<{ path: string }[]>((r) => { resolveFirst = r; }))
+        .mockImplementation(() => Promise.resolve([{ path: 'new.ts' }]));
+      const completer = new FileCompleter(input, menu, () => '/w', search as never);
+
+      // 第一次请求：进入防抖并真正发出。
+      input.value = '@a';
+      input.setSelectionRange(2, 2);
+      completer.refresh();
+      await vi.advanceTimersByTimeAsync(300);
+      expect(search).toHaveBeenCalledTimes(1);
+
+      // 防抖窗口内用户又输入：query 已变，但第二次 load 还没被触发。
+      input.value = '@ab';
+      input.setSelectionRange(3, 3);
+      completer.refresh();
+
+      // 旧请求此刻才回来——必须被丢弃，不能写进新菜单。
+      resolveFirst([{ path: 'stale.ts' }]);
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(menu.textContent).not.toContain('stale.ts');
+
+      // 之后再让第二次请求跑完，新候选应正常出现。
+      await vi.advanceTimersByTimeAsync(300);
+      expect(menu.textContent).toContain('new.ts');
+      completer.hide();
+      input.remove(); menu.remove();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

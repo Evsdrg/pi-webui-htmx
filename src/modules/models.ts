@@ -74,7 +74,12 @@ export class ModelsEditor {
       el('models-status').textContent = '';
       // 保存后重新读取：桥会把 "***" 还原成真值，界面必须刷新成还原后的
       // 文档，否则用户接着编辑时看到的仍是旧快照。
-      await this.reload();
+      //
+      // 但只在编辑器内容没被用户改过时才覆盖：保存等待期间用户继续输入，
+      // 无条件 reload 会把他未提交的草稿冲掉（U19）。
+      const unchanged = el<HTMLTextAreaElement>('models-editor').value === editor.value;
+      if (unchanged) await this.reload();
+      else el('models-status').textContent = '已保存；编辑器有未提交的修改，未自动刷新。';
     } catch (error) {
       this.onError(error);
       el('models-status').textContent = error instanceof Error ? error.message : '保存失败';

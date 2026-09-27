@@ -86,6 +86,9 @@ export class FileCompleter {
     if (!found) { this.hide(); return; }
     this.state = { active: true, start: found.start, query: found.query, items: [], selected: 0 };
     this.render();
+    // 立即使在途请求失效：query 已变，但下一次 load 还要等 debounce。
+    // 不在这里递增 seq，窗口内回来的旧候选会写进新菜单（U09）。
+    this.seq++;
     this.timer = window.setTimeout(() => void this.load(found.query), DEBOUNCE_MS);
   }
 
