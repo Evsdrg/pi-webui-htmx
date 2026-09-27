@@ -22,6 +22,9 @@ func TestFork后进程表重绑定(t *testing.T) {
 		t.Fatalf("fork 失败: %v", err)
 	}
 	newID, _ := out["sessionId"].(string)
+	if out["persisted"] != false || out["text"] != "分叉出的消息" {
+		t.Fatalf("未落盘的 fork 应返回原消息与持久化状态: %+v", out)
+	}
 	if newID == "" || newID == old {
 		t.Fatalf("fork 后会话身份应变化: %q -> %q", old, newID)
 	}
@@ -42,6 +45,33 @@ func TestFork后进程表重绑定(t *testing.T) {
 	// 身份变化后补发环序号必须重置，旧游标立即失效。
 	if _, ok := w.Replay(w.Info().Epoch, 0); !ok {
 		t.Fatal("重置后从头补发应可用")
+	}
+}
+
+func TestFork已有磁盘记录返回已落盘(t *testing.T) {
+	m, cwd := newTestManager(t)
+	w, err := m.Start(context.Background(), "", cwd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 假 Pi 返回固定的新 ID；模拟 Pi 分支里已有 assistant，因而同步写出新文件。
+	header, err := json.Marshal(map[string]any{
+		"type": "session", "version": 3, "id": "forked-fake-session",
+		"timestamp": "2026-01-01T00:00:00.000Z", "cwd": cwd,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(w.store.Dir(), "forked-fake-session.jsonl")
+	if err := os.WriteFile(path, append(header, '\n'), 0600); err != nil {
+		t.Fatal(err)
+	}
+	out, err := w.Fork(context.Background(), "entry-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out["persisted"] != true {
+		t.Fatalf("已写盘的 fork 不能当成临时分支: %+v", out)
 	}
 }
 

@@ -342,6 +342,21 @@ func (s *Server) serveUI(w http.ResponseWriter, r *http.Request) bool {
 		}
 		page, perr := s.store.History(r.Context(), id, leaf, before, 50)
 		if perr != nil {
+			var historyError *protocol.Error
+			if errors.As(perr, &historyError) && historyError.Code == "not_found" {
+				// Pi 会等第一条 assistant 回复才写出新分支。仅在文件确实
+				// 不存在且该身份仍有活跃 worker 时返回 204；非法叶子仍报错。
+				_, findErr := s.store.Find(r.Context(), id)
+				var findError *protocol.Error
+				if errors.As(findErr, &findError) && findError.Code == "not_found" {
+					if _, workerErr := s.manager.Get(id); workerErr == nil {
+						w.Header().Set("X-Session-Unsaved", "1")
+						w.Header().Set("Cache-Control", "no-store")
+						w.WriteHeader(http.StatusNoContent)
+						return true
+					}
+				}
+			}
 			writeError(w, encoding, 400, perr)
 			return true
 		}

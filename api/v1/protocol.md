@@ -1,6 +1,6 @@
 # Bridge Protocol v1
 
-更新：2026-09-27。本页保留 **当前 v1 的入口与方法**，另列已审查的契约缺口和目标语义。本轮没有改产品实现、`protocolVersion` 或 manifest；新字段/方法只有实现并协商后才可调用。方案及验收见 [architecture.md](../../docs/architecture.md)，问题见 [code-audit.md](../../docs/code-audit.md)。
+更新：2026-09-28。本页描述当前 v1 的入口与方法，并单列尚未落地的目标语义。以运行代码和 `capabilities` 为准；方案及验收见 [architecture.md](../../docs/architecture.md)，遗留问题见 [code-audit.md](../../docs/code-audit.md)。
 
 ## 1. 当前入口与鉴权
 
@@ -17,6 +17,8 @@
 | `/`、`/assets/*`、`/ui/*` | 配置 `--ui-dir` 后的模板、资产和片段 |
 
 历史页的 `historicalModel: {provider,id}` 为可选只读投影：从所选叶子的父链中的 `model_change` 或最近一次助手回复提取，不启动 Pi，不表示该模型现在可用。UI 历史片段携带同一标识供输入栏显示；翻页不会用旧页模型覆盖当前分支。`session.state.model` 始终为模型对象或 `null`；Pi 在缺少对应模型配置时可能返回 `unknown/unknown` 对象，客户端不得把它当成可设置、可发送的模型。恢复会话时应以 worker 的状态为准，发送前手选模型的意图不得被启动过程中的状态回读取代。
+
+`session.fork` 成功返回 `{sessionId,text,persisted}`：`text` 是原用户消息，供新分支草稿编辑；`persisted` 表示磁盘索引是否已经找到新 JSONL。Pi 0.85.1 在新分支没有 assistant 记录时延迟写盘，因此 `persisted:false` 的新 ID 只在当前 worker 中存在，关闭 worker 前若没有首条 assistant 回复就不能恢复。UI 不得按新 ID 直接请求磁盘历史；已有文件的分支仍按普通历史加载。`GET /ui/sessions/{id}/history` 对仍有活跃 worker、但磁盘尚无该会话文件的 ID 返回空正文 `204` 与 `X-Session-Unsaved: 1`；真正不存在的 ID、非法叶子仍报错。桥不替 Pi 写入伪造的会话文件。
 
 业务响应默认 no-store；内容哈希静态资产有独立缓存策略。反代信任与 Secure Cookie 的目标规则见架构 S09，当前不能据文档假设 HTTPS 回源路径已修复。
 

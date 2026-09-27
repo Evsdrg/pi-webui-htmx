@@ -164,7 +164,10 @@ func (w *Worker) Fork(ctx context.Context, entryID string) (map[string]any, erro
 	if err := w.owner.Rebind(w, state.SessionID); err != nil {
 		return nil, err
 	}
-	return map[string]any{"sessionId": state.SessionID, "text": out.Text}, nil
+	// Pi 对无 assistant 的分支延迟写盘。身份已切换，索引不可用时
+	// 保守报告未落盘，不能因只读查询失败让调用方误以为 fork 未执行。
+	_, findErr := w.store.Find(ctx, state.SessionID)
+	return map[string]any{"sessionId": state.SessionID, "text": out.Text, "persisted": findErr == nil}, nil
 }
 
 // Clone 复制当前分支到新会话，并重绑定进程表。

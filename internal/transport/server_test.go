@@ -734,6 +734,42 @@ func Test发现接口拒绝非法URL与头部(t *testing.T) {
 	}
 }
 
+func Test活跃未落盘会话历史明确返回空状态(t *testing.T) {
+	if os.Getenv("PI_WEBUI_DIR") == "" {
+		t.Skip("需要 PI_WEBUI_DIR 加载 UI 包")
+	}
+	s, manager, cwd := newTestServer(t)
+	worker, err := manager.Start(context.Background(), "", cwd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := worker.Info().SessionID
+	read := func(id, suffix string) *httptest.ResponseRecorder {
+		t.Helper()
+		req := httptest.NewRequest(http.MethodGet, "/ui/sessions/"+id+"/history"+suffix, nil)
+		req.Host = "127.0.0.1:30142"
+		req.Header.Set("Authorization", "Bearer "+testToken)
+		rec := httptest.NewRecorder()
+		s.ServeHTTP(rec, req)
+		return rec
+	}
+	unsaved := read(id, "")
+	if unsaved.Code != http.StatusNoContent || unsaved.Header().Get("X-Session-Unsaved") != "1" || unsaved.Body.Len() != 0 {
+		t.Fatalf("活跃但未写盘的会话应回 204 且无伪造历史: code=%d header=%q body=%s", unsaved.Code, unsaved.Header().Get("X-Session-Unsaved"), unsaved.Body.String())
+	}
+	missing := read("does-not-exist", "")
+	if missing.Code == http.StatusNoContent {
+		t.Fatal("没有活跃 worker 的缺失会话不得伪装为临时会话")
+	}
+	writeSessionFile(t, s.store.Dir(), id, cwd)
+	if got := read(id, ""); got.Code != http.StatusOK || got.Header().Get("X-Session-Unsaved") != "" {
+		t.Fatalf("写盘后应读取真实历史: %d %s", got.Code, got.Body.String())
+	}
+	if got := read(id, "?leafId=not-a-leaf"); got.Code == http.StatusNoContent {
+		t.Fatal("持久会话的非法叶子不得被当作未落盘")
+	}
+}
+
 func TestUI端点返回滚动模式(t *testing.T) {
 	if os.Getenv("PI_WEBUI_DIR") == "" {
 		t.Skip("需要 PI_WEBUI_DIR 加载 UI 包")
