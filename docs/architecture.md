@@ -136,7 +136,9 @@
 
 **验收：** CLI 发凭据后重启服务可认证；过期/重复领取失败；写失败重试、race、撤销活连接、点用户名、HTTPS 反代、连接洪峰均有探针。
 
-## S10 — 只读 Git 也必须约束执行（待实现）
+## S10 — 只读 Git 的受控执行（P1 已实现）
+
+实现与五类 helper、子模块内联 diff、输出限额、取消后代的回归在 `internal/workspace/git*`。子模块返回提交摘要，不展开可能启动下一层 helper 的内联 diff。工作树与 Git 元数据根必须在授权范围内；全局 Git 配置不参与查询。边界是受信可执行文件及已审命令集合，不是同 UID 恶意并发修改元数据时的 OS 沙箱。
 
 - 一个 Git runner 统一采用受信 Git 绝对路径、固定 argv、工作区校验和清理后的 Git 环境；禁止客户端注入参数。
 - 覆盖 `core.fsmonitor=false`，diff 明确 `--no-ext-diff --no-textconv`；取消 pager、交互与可选写锁，过滤 GIT_EXTERNAL_DIFF/GIT_CONFIG_* 等注入渠道。核对受支持 Git 版本，不能把旧版本对布尔 fsmonitor 的解释当成新版本。实现还须检测 clean/process 等转换 helper 配置，逐项禁用或明确拒绝；不能把这三个开关等同关闭所有外部执行。以上不是任意 Git 子命令的通用沙箱，只开放已审过的只读集合。

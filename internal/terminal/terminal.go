@@ -17,6 +17,8 @@ import (
 	"time"
 
 	"github.com/creack/pty"
+
+	"pi-bridge-go/internal/childenv"
 	"pi-bridge-go/internal/protocol"
 )
 
@@ -192,7 +194,7 @@ func (m *Manager) Open(cwd, shell string, cols, rows uint16) (*Terminal, error) 
 	}
 	cmd := exec.Command(resolved)
 	cmd.Dir = cwd
-	cmd.Env = append(os.Environ(), "TERM=xterm-256color")
+	cmd.Env = childenv.Filter(append(os.Environ(), "TERM=xterm-256color"))
 	// Setsid + Setctty 让 pty 成为受控终端；Pdeathsig 保证桥异常退出时
 	// 不会留下无人管理的 shell。三者必须一起通过 StartWithAttrs 传入，
 	// 因为 StartWithSize 会把 SysProcAttr 清空。

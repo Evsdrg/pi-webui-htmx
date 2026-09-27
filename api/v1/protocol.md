@@ -121,8 +121,10 @@ thinking 返回 JSON，tool-image 返回图片字节；索引/格式/字节均�
 
 ### 工作区文件
 
-- `files.index` 无 query 返回 `{files:[...],truncated}`，有 query 返回 `{matches:[{path,isDir}]}`；这是同方法的两种显式模式，不能在其他接口随意套用“数组/对象都接受”。
-- git 优先索引，非 Git 走有界目录遍历。当前 B26/B27 仍存在先完整读取再截断的问题。
+- `files.index` 无 query 返回 `{files:[...],truncated}`，有 query 返回 `{matches:[{path,isDir}],truncated}`；这是同方法的两种显式模式。
+- Git 索引已使用 NUL 增量分帧及硬字节/条目上限，截断状态进入缓存；仅非仓库/未安装 Git 才退回 walk，拒绝和取消不静默降级。walk 的 B27 仍待修复。
+- `git.status` 返回 `{branch,clean,files,truncated}`，文件项含 `{status,path}`，重命名可含 `from`。64 KiB 原始输出和文件条数限额保证完整记录并预留转义预算，截断时不宣称 clean，UI 必须提示。
+- Git 查询固定可执行文件并清理 Git 环境，禁 fsmonitor/external diff/textconv、pager、懒获取和可选锁；配置转换过滤器时明确拒绝。工作树与 Git 元数据目录必须在授权根内，需要支持 `--no-lazy-fetch` 的 Git。它不是任意 Git 命令或恶意本机进程的 OS 沙箱。
 - **当前 `files.image` WS 返回 base64，`GET /ui/file-image?path=...` 才返回二进制。** `files.read` 拒绝二进制；图片按魔数检测。
 - 目标 S06：大内容走 HTTP 范围/分页/下载，WS 只传引用；保留小 v1 请求时先检查序列化长度，超限显式报错而非取消整个连接。
 
@@ -140,6 +142,6 @@ metrics 需鉴权，使用有界方法/错误标签；日志只记录关联 ID�
 
 目标 S12 在同源设备前缀下转发受控 HTTP 资源与 WS 命令，补齐 HTMX 云链路；分块/取消/credit/鉴权都属于新传输能力，当前接口不能假装已经支持。
 
-本次完整修复按 [整体规划](../../docs/repair-plan.md) 的 P6 集中升级到 v2，配套更新桥/UI/manifest/TS/工具；P1–P5 中可保持形状的修复继续按当前 v1 验证。当前版本号和代码均未改动。独立可选能力仍可协商，但不能在 v1 下暗改订阅、重复结果、配置秘密和资源引用语义。
+本次完整修复按 [整体规划](../../docs/repair-plan.md) 的 P6 集中升级到 v2，配套更新桥/UI/manifest/TS/工具；P1–P5 中可保持形状的修复继续按当前 v1 验证。当前版本仍为 v1；各批修复状态以审查台账为准。独立可选能力仍可协商，但不能在 v1 下暗改订阅、重复结果、配置秘密和资源引用语义。
 
 新版写入口上线后，旧写协议明确拒绝并提示升级；不保留旧盲写/去重路径作为回退。必要旧读取适配必须有期限并复用相同业务服务。Journal 的离线迁移、保守导入与不可恢复旧快照的回滚边界见整体规划。本文目标说明不是启用新能力的依据。

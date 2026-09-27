@@ -31,6 +31,23 @@ func emit(v any) {
 }
 
 func main() {
+	// 可选环境断言用于验证真实 spawn 路径，不输出任何环境值。
+	for _, name := range strings.Split(os.Getenv("FAKE_PI_FORBID_ENV"), ",") {
+		if name == "" {
+			continue
+		}
+		if _, exists := os.LookupEnv(name); exists {
+			os.Exit(70)
+		}
+	}
+	for _, name := range strings.Split(os.Getenv("FAKE_PI_REQUIRE_ENV"), ",") {
+		if name == "" {
+			continue
+		}
+		if _, exists := os.LookupEnv(name); !exists {
+			os.Exit(71)
+		}
+	}
 	script := map[string]bool{}
 	if v := os.Getenv("FAKE_PI_SCRIPT"); v != "" {
 		for _, name := range strings.Split(v, ",") {

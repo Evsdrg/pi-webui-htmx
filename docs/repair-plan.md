@@ -1,6 +1,8 @@
 # 整体修复实施规划
 
-更新：2026-09-27。**P0 已完成测试基础建设与本地验收；P1–P7 待实施，当前协议仍为 v1。** 基线与入口分类见 [method-inventory.md](method-inventory.md)。 [architecture.md](architecture.md) 的 S01–S12 定义技术决策，[code-audit.md](code-audit.md) 保存 105 个台账编号与主要归属；本文补充依赖、跨模块影响、迁移和交付边界，不另立第二套问题编号。
+更新：2026-09-27。**P0 已完成本地验收；P1 实施中；P2–P7 待实施，当前协议仍为 v1。** 基线与入口分类见 [method-inventory.md](method-inventory.md)。
+
+P1 已完成配置秘密/安全写入/供应商请求、受限 Git runner 与子进程环境过滤；台账记录逐项状态。当前两仓联测通过，前端 73 项测试，首屏 36.63 KiB gzip。P1 的 HTTP/包查询/relay 独立边界仍在推进，尚未将整批标为完成。 [architecture.md](architecture.md) 的 S01–S12 定义技术决策，[code-audit.md](code-audit.md) 保存 105 个台账编号与主要归属；本文补充依赖、跨模块影响、迁移和交付边界，不另立第二套问题编号。
 
 ## 1. 修复原则与最终形态
 

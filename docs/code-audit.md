@@ -1,6 +1,6 @@
 # 代码审查记录与修复方案索引
 
-更新：2026-09-27。源码审查已完成，本轮解决方案已写入现有架构/协议/UI 契约；**产品代码尚未修复**。状态：✅ 方案与文档已整理；⚠️ 实现及专项验收待推进。方案统一见 [architecture.md](architecture.md) 的 S01–S12，本文保留发现编号和证据。
+更新：2026-09-27。**P0 已完成，P1 正在实施，协议仍为 v1。** 下表 ✅ 表示对应代码与回归已完成，未标记项仍待修复。技术方案见 [architecture.md](architecture.md)，批次与进度见 [repair-plan.md](repair-plan.md)。
 
 ## 范围与基线
 
@@ -43,15 +43,15 @@
 | ID | 严重性 | 项目 | 问题与影响 | 证据/主要位置 |
 |---|---|---|---|---|
 | B17 | ✅ 已修 | Bridge | 供应商请求使用拒绝重定向的独立 client；两个本地服务器的回归确认目标不接收凭据。并拒绝超限正文、禁止错误正文回显秘密。 | `management/discovery.go`；`discovery_safety_test.go` |
-| B18 | 高 | Bridge | Git 查询执行仓库配置中的外部命令：`git status` 触发 `core.fsmonitor`，`git diff` 触发 `diff.external`。两个本地标记脚本探针均复现；Pi Web 的 status 路径也调用普通 `git status`，但它的 diff 明确带 `--no-ext-diff`。 | `workspace/git.go`；`pi-web/lib/git-changes.ts`；`git-probe.log`；`git-diff-probe.log` |
+| B18 | ✅ 已修 | Bridge | **修复：** 统一 runner 清理环境、禁用已知 helper，转换过滤器明确拒绝；五类标记脚本回归通过。这不是任意 Git/恶意本机进程的 OS 沙箱。原问题：Git 查询执行仓库配置中的外部命令：`git status` 触发 `core.fsmonitor`，`git diff` 触发 `diff.external`。两个本地标记脚本探针均复现；Pi Web 的 status 路径也调用普通 `git status`，但它的 diff 明确带 `--no-ext-diff`。 | `workspace/git.go`；`pi-web/lib/git-changes.ts`；`git-probe.log`；`git-diff-probe.log` |
 | B19 | 高 | Relay | `--add-user`/`--add-device` 在一次性 CLI 进程的内存 `Users` 表中添加后即退出；服务进程重建 `Users` 时表为空，故刚发出的用户 token 与设备预共享密钥无法认证。重启反例已复现。 | `cmd/pi-relay/main.go`；`internal/relay/users.go`；`relay-probes.log` |
 | B20 | 高 | Relay | `ClaimTTL` 只作为 `expiresInSeconds` 返回，`Registry.Claim` 不检查配对码年龄；未被使用的配对码过期后仍可领取。 | `internal/relay/registry.go`；`internal/relay/server.go` |
 | B21 | 中 | Relay | 配对尝试表按用户提交的 code 分桶；清理只删已过期项，没有活跃项硬上限。10000 个不同 code 的本地探针使 map 增长到 10000。 | `internal/relay/registry.go`；`relay-probes.log` |
 | B22 | 高 | Relay | `persist()` 解锁后仍序列化 `[]*Device` 指向的共享对象；并发 `SetOnline` 会与 JSON marshal 读写同一字段。`go test -race` 定向压力探针报告数据竞争。 | `internal/relay/registry.go`；`relay-probes.log` |
 | B23 | 中 | Relay | `/client` 可为同一 owner 的任意不同 `clientId` 建立 WS，`s.clients` 没有总连接数/每用户上限；公网 relay 可被认证用户用大量连接耗尽 goroutine 与内存。 | `internal/relay/server.go`；`cmd/pi-relay/main.go` |
 | B24 | 高 | Tunnel | 设备长期 token 放在 `/tunnel?deviceId=...&token=...` 查询串，容易进入反向代理访问日志；桥也接受明文 `ws://` 到非环回 relay，token 会以明文出网。 | `internal/tunnel/client.go`；`internal/relay/server.go`；`cmd/pi-bridge/main.go` |
-| B25 | 中 | Bridge | 合法的 unborn/空 Git 仓库没有 `HEAD`；`GitStatus` 先执行 `rev-parse --abbrev-ref HEAD` 并把失败作为整次查询失败。空仓库本地探针复现。 | `internal/workspace/git.go`；`git-probe.log` |
-| B26 | 中 | Bridge | `files.index` 的 Git 路径用 `cmd.Output()` 完整捕获 `git ls-files`，之后才应用 50000 条上限；超大仓库会先无界分配输出和 `strings.Split` 切片。 | `internal/workspace/index.go` |
+| B25 | ✅ 已修 | Bridge | **修复：** porcelain -z 同时读取分支与状态；空仓库、特殊文件名、重命名回归通过。原问题：合法的 unborn/空 Git 仓库没有 `HEAD`；`GitStatus` 先执行 `rev-parse --abbrev-ref HEAD` 并把失败作为整次查询失败。空仓库本地探针复现。 | `internal/workspace/git.go`；`git-probe.log` |
+| B26 | ✅ 已修 | Bridge | **修复：** NUL 增量读取，2 MiB/50000 条上限，溢出取消整组，缓存传播 truncated；9000 长文件名回归通过。walk/大结果传输仍按 B27/S06 推进。原问题：`files.index` 的 Git 路径用 `cmd.Output()` 完整捕获 `git ls-files`，之后才应用 50000 条上限；超大仓库会先无界分配输出和 `strings.Split` 切片。 | `internal/workspace/index.go` |
 | B27 | 中 | Bridge | `files.list` 与会话 `walkDir` 先 `ReadDir` 全目录再按上限截断；超大单目录可在限额检查前占用大量内存并排序。 | `internal/workspace/files.go`；`internal/sessions/index.go` |
 | B28 | 中 | Bridge | 搜索遇到超长行会直接结束该文件扫描，但没有设置 `SearchResult.Truncated`；后续命中被跳过却报告结果完整。 | `internal/sessions/search.go` |
 | B29 | 中 | Bridge | 会话索引 `fresh()` 在 TTL 内仍遍历整棵目录计算指纹；列表/历史查找在大目录下仍有 O(会话文件数) 开销。 | `internal/sessions/index.go` |
@@ -67,7 +67,7 @@
 | B39 | 低 | Bridge | `Renderer.Asset` 在查询压缩缓存前先 `os.ReadFile` 原始资产；压缩命中仍每次分配并读完整 JS/CSS，抵消缓存的部分收益。 | `internal/presentation/presentation.go` |
 | B40 | 高 | Runtime | Linux `Pdeathsig=SIGTERM` 只作用于 Pi/terminal 的直接子进程，不会发给整个进程组；桥被 SIGKILL 后，忽略 SIGTERM 的 shell/扩展后代仍存活。带孙进程的 helper 反例已复现。 | `internal/runtime/process_linux.go`；`internal/terminal/terminal.go`；`pdeath-probe.log` |
 | B41 | 中 | Relay | `Server.Close()` 注释称关闭全部连接，但只关闭 tunnels、不遍历 `s.clients`；活动浏览器 WS 在调用 `Close()` 后仍保持打开。定向 WS 测试已复现。 | `internal/relay/server.go`；`relay-close-probe.log` |
-| B42 | 中 | Bridge | `GitStatus` 的 2 MiB stdout 截断被 `gitOutput` 丢弃；10000 个未跟踪文件的探针只返回 9119 条且无 `truncated` 字段，接口静默显示不完整状态。超过 512 KiB 的列表还会超出 WS 响应帧上限。 | `internal/workspace/git.go`；`git-status-limit-probe.log` |
+| B42 | ✅ 已修 | Bridge | **修复：** 状态设 64 KiB 原始字节及条目双限，预留 JSON/WS 空间，返回完整记录及 truncated，UI 显示截断。精确边界及转义预算回归通过。原问题：`GitStatus` 的 2 MiB stdout 截断被 `gitOutput` 丢弃；10000 个未跟踪文件的探针只返回 9119 条且无 `truncated` 字段，接口静默显示不完整状态。超过 512 KiB 的列表还会超出 WS 响应帧上限。 | `internal/workspace/git.go`；`git-status-limit-probe.log` |
 | B43 | 中 | Bridge | 全文搜索最多遍历 200 个文件、单文件 16 MiB；超大文件会标截断但不计入 `scanned`，因此实际 I/O 可越过文件数预算；`ctx` 只在文件之间检查，单文件扫描期间取消不生效。并发搜索可放大磁盘与 CPU 消耗。 | `internal/sessions/search.go` |
 | B44 | 中 | Build | `GOOS=darwin GOARCH=arm64 go test -exec=true ./...` 编译失败：`internal/terminal/terminal.go` 在通用文件直接使用 Linux-only `SysProcAttr.Pdeathsig`。这与 runtime `process_other.go` 声称非 Linux 显式报错的可构建路径不一致。 | `internal/terminal/terminal.go`；`cross-darwin.log` |
 | B45 | 中 | Bridge | Pi Web 为 Pi 导出的 HTML 把 `sortChildren/mapNodes/markActive` 改为迭代实现，专门修复 5000+ 深树栈溢出；桥直接透传 Pi `export_html` 文件，没有同等处理，长线性会话导出后浏览器仍可能栈溢出。 | `internal/runtime/session_ops.go`；`pi-web/app/api/sessions/[id]/export/route.ts` |
@@ -103,7 +103,7 @@
 | B53 | 中 | Tunnel | 浏览器帧上限为 1 MiB，relay 再加 `to`/`from` JSON 路由封装后仍受 1 MiB 读限；接近上限的合法本地帧会断开整条隧道。 | `internal/relay/server.go`；`internal/transport/tunnel.go` |
 | B54 | 高 | Product | HTMX `BridgeClient` 固定连当前站点 `/api/v1/ws`，不实现 relay `/client` 登录、设备选择或路由封装；云端 UI 与本地桥的承诺部署链尚未连通。 | `pi-webui-htmx/src/modules/workbench.ts`；`pi-bridge-go/internal/relay/server.go` |
 | B55 | 中 | Relay | relay 默认状态目录为系统临时目录 `/tmp/pi-relay`；设备注册表在重启/清理临时目录后丢失，长期部署必须显式指定持久 `--state-dir`。 | `cmd/pi-relay/main.go` |
-| B56 | 中 | Workspace | `gitOutputLimited` 仅限制 stdout，stderr 使用无界 `bytes.Buffer`；同时 `CommandContext` 只回收 Git 直接子进程，仓库配置触发的外部命令后代可能存活。 | `internal/workspace/git.go` |
+| B56 | ✅ 已修 | Workspace | **修复：** stderr 限 32 KiB、不回显；取消进程组的真实后代测试通过。桥 SIGKILL 的整树保证仍属 B40/P7。原问题：`gitOutputLimited` 仅限制 stdout，stderr 使用无界 `bytes.Buffer`；同时 `CommandContext` 只回收 Git 直接子进程，仓库配置触发的外部命令后代可能存活。 | `internal/workspace/git.go` |
 | B57 | 高 | Tunnel | tunnel sender 写失败后 `virtualConn.pump` 退出，但连接仍留在 `virtual` 映射；同一 `clientId` 重连复用死连接，后续响应入队却无人发送。定向测试复现。 | `internal/transport/tunnel.go`；`tunnel-pump-probe.log` |
 | B58 | 高 | Storage | 启动忽略末尾半行后仍以 append 打开回执日志，新回执会接在损坏 JSON 后；关闭重开后该新回执不可读取。定向测试复现。 | `internal/storage/receipts.go`；`receipt-tail-probe.log` |
 | B59 | 中 | Management | `npm:@scope/pkg@version` 的版本后缀未从 npm 包名剥离；已安装版本读取路径错误，registry URL 也把版本约束当包名。锁定版本夹具复现读取为空。 | `internal/management/packages.go`；`pinned-package-probe.log` |
@@ -115,7 +115,7 @@
 | B65 | 高 | Events | `Rebind` 身份变更将 `seq` 归零但不更换 `epoch`；旧 epoch/seq 仍被 Replay 接受。直接 Rebind 的反例复现，现有测试未覆盖活跃 worker 该路径。 | `internal/runtime/identity.go`；`internal/runtime/manager.go`；`rebind-epoch-probe.log` |
 | B66 | 高 | Runtime/UI | Go 端所有命令统一由 `Manager.Timeout()`（默认 30 秒）取消；前端虽给 `session.compact` 设 120 秒等待，服务器仍在 30 秒结束调用，长压缩被报告为未知结果。 | `internal/transport/server.go`；`internal/runtime/manager.go`；`pi-webui-htmx/src/modules/bridge.ts` |
 | B67 | 高 | Runtime | 超过 `EventBytes` 的 `extension_ui_request` 在登记 pending dialog 之前直接省略；Pi 仍在等回执，桥也未发 cancelled，扩展可永久等待。 | `internal/runtime/manager.go`；`internal/runtime/dialogs.go` |
-| B68 | 高 | Runtime/Security | Pi 与 PTY 子进程直接继承桥的完整 `os.Environ()`，包括 `PI_BRIDGE_TOKEN`、`PI_BRIDGE_DEVICE_TOKEN`；agent bash、项目扩展或终端命令可读出桥/设备凭据。 | `internal/runtime/manager.go`；`internal/terminal/terminal.go` |
+| B68 | ✅ 已修 | Runtime/Security | **修复：** Pi/PTY/Git 共用服务环境过滤；真实 spawn/PTY 测试和反向验证通过。保留正常 API、代理及 Pi 环境，不等同同 UID 的 OS 隔离。原问题：Pi 与 PTY 子进程直接继承桥的完整 `os.Environ()`，包括 `PI_BRIDGE_TOKEN`、`PI_BRIDGE_DEVICE_TOKEN`；agent bash、项目扩展或终端命令可读出桥/设备凭据。 | `internal/runtime/manager.go`；`internal/terminal/terminal.go` |
 | B69 | ✅ 已修 | Management/Security | 写入使用随机独占 0600 临时文件、文件 Sync、rename 和目录 Sync；固定路径 symlink 不再被触碰。同步不明返回 outcome_unknown，临时文件统一清理。 | `internal/management/config.go`；`config_safety_test.go` |
 | B70 | 中 | Product | HTMX 有模型配置原始 JSON 编辑和 discover/test，但没有调用已支持的 `config.catalog`；不是 Pi Web 式可视化模型字段编辑器，供应商目录/参数预设未接线。 | `pi-webui-htmx/src/modules/models.ts`；`pi-webui-htmx/src/templates/shell.html`；`pi-webui-htmx/src/types/protocol.ts` |
 | B71 | 中 | Sessions | 已声明的部署限制：桥内单 writer 不能约束另一桥或不合作的外部 Pi CLI。保持独立会话目录；合作锁只约束参与者，不能写成已经防住全部外部写入。这是约束项，不是本轮新回归。 | `internal/runtime/manager.go`；`internal/sessions/store.go`；架构 S03 |
@@ -173,7 +173,7 @@
 | S07 UI SessionScope / 意图 | B03、U01、U02、U03、U06、U09、U10、U11、U12、U13、U14、U17、U18、U20、U21 | 目标发起时捕获、响应处理前守卫、并发预留；逐 await 切换、草稿/队列与 rAF 行为验证 | ⚠️ 待实现 |
 | S08 扩展资源状态机 | B16、B36、B48、B67 | 分类/期限/写入回执；非法回复可重试，超大/过期/关闭不留幽灵 pending | ⚠️ 待实现 |
 | S09 relay 持久身份 / 部署 | B19、B20、B21、B22、B23、B24、B35、B41、B46、B55、B63、B78 | 持久与易失状态分离；TTL/连接预算/安全 Cookie/WSS；重启、写失败、撤销与 HTTPS 反代测试 | ⚠️ 待实现 |
-| S10 受限 Git runner | B18、B25、B26、B42、B56 | 禁隐式 helper、流式预算、unborn 支持；标记脚本不执行、截断可见、后代收敛 | ⚠️ 待实现 |
+| S10 受限 Git runner | B18、B25、B26、B42、B56 | 禁隐式 helper、流式预算、unborn 支持；标记脚本不执行、截断可见、后代收敛 | ✅ P1 实现与两仓联测 |
 | S11 HTTP 缓存 / 内容资源 | B39、B60、B61、U07 | qvalue/identity/Vary 矩阵，先查缓存；反复挂载释放 URL/组件资源 | ⚠️ 待实现 |
 | S12 云适配 / 能力与回归 | B34、B54、B80、D01、D02、T01 | 同源 HTTP+WS 云链路，方法/限额同源，版本协商，CI与隔离夹具 | ✅ P0 夹具/CI配置/联测；⚠️ 其余待实施 |
 

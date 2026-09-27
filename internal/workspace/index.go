@@ -2,9 +2,8 @@ package workspace
 
 import (
 	"context"
+	"errors"
 	"io/fs"
-	"os"
-	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -42,8 +41,7 @@ type IndexMatch struct {
 }
 
 // IndexResult 是 files.index 的返回值。
-// truncated 只在无 query 的分支有意义：列表被上限截断时，
-// 客户端应提示用户改用更精确的查询，而不是让人以为项目就这么大。
+// truncated 表示结果因输出预算、条目数或客户端索引上限不完整。
 type IndexResult struct {
 	Files     []string     `json:"files"`
 	Matches   []IndexMatch `json:"matches,omitempty"`
@@ -51,9 +49,10 @@ type IndexResult struct {
 }
 
 type indexEntry struct {
-	listing  []string
-	byParent map[string][]string
-	expireAt time.Time
+	listing   []string
+	byParent  map[string][]string
+	expireAt  time.Time
+	truncated bool
 }
 
 // Index 列出目录下的文件，供前端的 @ 补全使用。
@@ -88,14 +87,14 @@ func (f *Files) Index(ctx context.Context, path, query string) (IndexResult, err
 
 	if query == "" {
 		files := entry.listing
-		truncated := false
+		truncated := entry.truncated
 		if len(files) > MaxIndexFiles {
 			files = files[:MaxIndexFiles]
 			truncated = true
 		}
 		return IndexResult{Files: files, Truncated: truncated}, nil
 	}
-	return IndexResult{Matches: rankMatches(entry.byParent, query)}, nil
+	return IndexResult{Matches: rankMatches(entry.byParent, query), Truncated: entry.truncated}, nil
 }
 
 // indexFor 取缓存，过期则重建。缓存按根+相对路径分桶，TTL 与条数都有界。
@@ -113,11 +112,11 @@ func (f *Files) indexFor(ctx context.Context, root, rel string) (*indexEntry, er
 	f.indexMu.Unlock()
 
 	abs := filepath.Join(root, filepath.FromSlash(rel))
-	listing, err := f.listIndex(ctx, root, rel, abs)
+	listing, truncated, err := f.listIndex(ctx, root, rel, abs)
 	if err != nil {
 		return nil, err
 	}
-	entry := &indexEntry{listing: listing, byParent: groupByParent(listing), expireAt: now.Add(IndexCacheTTL)}
+	entry := &indexEntry{listing: listing, byParent: groupByParent(listing), expireAt: now.Add(IndexCacheTTL), truncated: truncated}
 
 	f.indexMu.Lock()
 	defer f.indexMu.Unlock()
@@ -135,48 +134,46 @@ func (f *Files) indexFor(ctx context.Context, root, rel string) (*indexEntry, er
 	return entry, nil
 }
 
-// listIndex 优先用 git（尊重 .gitignore），失败或非仓库则退回复制目录 walk。
-// 两条路都受硬上限约束，且都不跟随符号链接。
-func (f *Files) listIndex(ctx context.Context, root, rel, abs string) ([]string, error) {
-	if listing, ok := f.listWithGit(ctx, abs); ok {
-		return listing, nil
+// listIndex 仅在不是仓库或未安装 Git 时退回 walk；拒绝与取消不能静默降级。
+func (f *Files) listIndex(ctx context.Context, root, rel, abs string) ([]string, bool, error) {
+	listing, truncated, err := f.listWithGit(ctx, abs)
+	if !errors.Is(err, errNotGit) {
+		return listing, truncated, err
 	}
-	return f.listWithWalk(root, rel)
+	if ctx.Err() != nil {
+		return nil, false, ctx.Err()
+	}
+	listing, err = f.listWithWalk(root, rel)
+	return listing, len(listing) >= MaxWalkFiles, err
 }
 
-// listWithGit 用 git ls-files 取已跟踪与未忽略文件。
-// 返回 ok=false 表示不是 git 仓库或 git 不可用，调用方应走 walk 兜底。
-func (f *Files) listWithGit(ctx context.Context, abs string) ([]string, bool) {
-	// git 不在授权根内也能用：它只读 cwd，不做任意命令执行。
-	cmdCtx, cancel := context.WithTimeout(ctx, GitListTimeout)
+// listWithGit 复用受控 runner，按 NUL 增量读取，字节与条目均有硬上限。
+func (f *Files) listWithGit(ctx context.Context, abs string) ([]string, bool, error) {
+	ctx, cancel := context.WithTimeout(ctx, GitListTimeout)
 	defer cancel()
-	cmd := exec.CommandContext(cmdCtx, "git", "-C", abs, "ls-files", "--cached", "--others", "--exclude-standard", "-z")
-	cmd.Env = append(os.Environ(), "LC_ALL=C")
-	cmd.Dir = abs
-	out, err := cmd.Output()
+	dir, err := f.gitRepository(ctx, abs)
 	if err != nil {
-		return nil, false
+		return nil, false, err
 	}
 	listing := make([]string, 0, 1024)
-	truncated := false
-	for _, name := range strings.Split(string(out), "\x00") {
+	parser := &nulRecords{consume: func(name string) bool {
 		if name == "" {
-			continue
+			return true
 		}
 		if len(listing) >= MaxWalkFiles {
-			truncated = true
-			break
+			return false
 		}
 		listing = append(listing, filepath.ToSlash(name))
+		return true
+	}}
+	truncated, code, err := f.runGit(ctx, dir, gitMaxOutput, parser, "ls-files", "--cached", "--others", "--exclude-standard", "-z", "--", ".")
+	if err != nil {
+		return nil, false, err
 	}
-	// 截断时保留最短的一批：浅路径通常是更可能被 @ 引用的目标。
-	if truncated {
-		sort.Slice(listing, func(i, j int) bool {
-			return len(listing[i]) < len(listing[j])
-		})
-		listing = listing[:MaxWalkFiles]
+	if code != 0 {
+		return nil, false, protocol.E("pi_error", "Git 文件索引查询失败")
 	}
-	return listing, true
+	return listing, truncated, nil
 }
 
 // listWithWalk 是 BFS 复制目录兜底。BFS 保证浅文件先入列，

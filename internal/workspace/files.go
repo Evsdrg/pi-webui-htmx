@@ -3,6 +3,7 @@ package workspace
 import (
 	"io/fs"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -33,8 +34,9 @@ func DefaultLimits() Limits { return Limits{MaxEntries: 500, MaxReadByte: 4 << 2
 // 每个根各开一个 os.Root，路径解析与符号链接逃逸都由内核侧拦截，
 // 不像纯字符串前缀比较那样可被 ../ 或链接绕过。
 type Files struct {
-	policy *Policy
-	limits Limits
+	policy  *Policy
+	limits  Limits
+	gitPath string
 
 	mu    sync.Mutex
 	roots map[string]*os.Root
@@ -49,6 +51,10 @@ func NewFiles(policy *Policy, limits Limits) (*Files, error) {
 		return nil, protocol.E("invalid_params", "至少需要一个工作区根目录")
 	}
 	f := &Files{policy: policy, limits: limits, roots: map[string]*os.Root{}}
+	// 可执行文件取自启动环境并固定为绝对路径，请求不能选择另一个 Git。
+	if path, err := exec.LookPath("git"); err == nil && filepath.IsAbs(path) {
+		f.gitPath, _ = filepath.EvalSymlinks(path)
+	}
 	for _, root := range policy.roots {
 		r, err := os.OpenRoot(root)
 		if err != nil {

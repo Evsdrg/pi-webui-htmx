@@ -14,6 +14,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"pi-bridge-go/internal/childenv"
 	"pi-bridge-go/internal/events"
 	"pi-bridge-go/internal/pi"
 	"pi-bridge-go/internal/protocol"
@@ -690,7 +691,7 @@ func launch(cfg Config, cwd, file string) (*Worker, error) {
 	}
 	cmd := exec.Command(cfg.Binary, args...)
 	cmd.Dir = cwd
-	cmd.Env = append(append(os.Environ(), cfg.Env...), "PI_CODING_AGENT_DIR="+cfg.AgentDir, "PI_OFFLINE=1", "PI_TELEMETRY=0")
+	cmd.Env = childenv.Filter(append(append(os.Environ(), cfg.Env...), "PI_CODING_AGENT_DIR="+cfg.AgentDir, "PI_OFFLINE=1", "PI_TELEMETRY=0"))
 	if err := prepareProcess(cmd); err != nil {
 		return nil, err
 	}
