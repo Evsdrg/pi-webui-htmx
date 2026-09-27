@@ -93,3 +93,30 @@ describe('分支导航', () => {
     cleanup();
   });
 });
+
+describe('深树不爆栈', () => {
+  // U08：flatten 以前用递归，长线性会话的分支树会在摊平阶段就抛
+  // Maximum call stack size exceeded，整个分支面板打不开。
+  // 直接测 flatten：绕开 DOM，才能把深度推到可靠溢出的量级。
+  it('20 万层线性树可摊平且结果完整', async () => {
+    const { flatten } = await import('@/modules/branch');
+    let node: Record<string, unknown> = { entry: { type: 'message', id: 'leaf', message: { role: 'assistant', content: '末端' } }, children: [] };
+    for (let i = 0; i < 200_000; i++) {
+      node = { entry: { type: 'message', id: `n${i}`, message: { role: 'user', content: 'x' } }, children: [node] };
+    }
+    const rows = flatten([node as never]);
+    // 200001 = 200000 层 + 末端叶子。
+    expect(rows).toHaveLength(200_001);
+    // 深度必须逐层递增，且根为 0。
+    expect(rows[0]?.depth).toBe(0);
+    expect(rows[200_000]?.depth).toBe(200_000);
+  });
+
+  it('多根树保持前序', async () => {
+    const { flatten } = await import('@/modules/branch');
+    const leaf = (id: string): Record<string, unknown> => ({ entry: { type: 'message', id, message: { role: 'user', content: id } }, children: [] });
+    const rows = flatten([leaf('a') as never, leaf('b') as never]);
+    expect(rows.map((r) => (r.node as { entry: { id: string } }).entry.id)).toEqual(['a', 'b']);
+    expect(rows.every((r) => r.depth === 0)).toBe(true);
+  });
+});

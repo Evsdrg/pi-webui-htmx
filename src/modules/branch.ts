@@ -31,11 +31,33 @@ function describe(node: TreeNode): { kind: string; text: string } {
   return { kind, text: summary ? `${id ? id.slice(0, 8) + ' · ' : ''}${summary}` : id.slice(0, 8) };
 }
 
-// flatten 把树按深度优先摊平，带上层级，便于顺序渲染。
-function flatten(nodes: TreeNode[], depth = 0, out: { node: TreeNode; depth: number }[] = []): { node: TreeNode; depth: number }[] {
-  for (const node of nodes) {
-    out.push({ node, depth });
-    if (node.children?.length) flatten(node.children, depth + 1, out);
+/**
+ * flatten 把树按深度优先摊平，带上层级，便于顺序渲染。
+ *
+ * 必须用显式栈而不是递归：长会话的分支树可能是上万层的线性链，
+ * 递归会在 flatten 里就抛 Maximum call stack size exceeded，
+ * 整个分支面板打不开（U08）。显式栈的深度只受堆限制。
+ */
+export function flatten(roots: TreeNode[]): { node: TreeNode; depth: number }[] {
+  const out: { node: TreeNode; depth: number }[] = [];
+  // 栈里带 depth，避免为深度单独维护计数器。
+  const stack: { node: TreeNode; depth: number }[] = [];
+  // 逆序入栈，出栈即正序——保持与旧递归一致的前序结果。
+  for (let i = roots.length - 1; i >= 0; i--) {
+    const node = roots[i];
+    if (node) stack.push({ node, depth: 0 });
+ }
+  while (stack.length > 0) {
+    const item = stack.pop();
+    if (!item) break;
+    out.push(item);
+    const children = item.node.children;
+    if (children?.length) {
+      for (let i = children.length - 1; i >= 0; i--) {
+        const child = children[i];
+        if (child) stack.push({ node: child, depth: item.depth + 1 });
+      }
+    }
   }
   return out;
 }
