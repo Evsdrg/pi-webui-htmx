@@ -17,7 +17,7 @@
 | B01 | ✅ 已修 | Bridge | 统一配置遍历器保护所有自定义头部值，并区分 provider/model 身份键与字段名；Raw/Models 共用脱敏。回归覆盖未知头名与特殊 provider 名。 | `internal/management/config_values.go`；`config_safety_test.go` |
 | B02 | ✅ 已修 | Bridge | 秘密按 provider、模型 ID、override 键及大小写无关头部名恢复；重排不串值，不修改调用方对象。无来源/歧义占位符拒绝，明确新值可修复旧坏配置。 | `internal/management/config_values.go`；`config_identity_test.go` |
 | B03 | 高 | Bridge/UI | 前端默认发送 `kind: steer`，桥只接受 `steering`/`followUp`；运行中“插入指令”设置被拒绝。 | `pi-webui-htmx/src/modules/workbench.ts`；`pi-bridge-go/internal/runtime/session_ops.go` |
-| B04 | 高 | Bridge | 两个 WebSocket 连接可并发通过同一 `requestId` 的去重检查，副作用命令可能执行两次。 | `pi-bridge-go/internal/transport/server.go` |
+| B04 | ✅ 已修 | Bridge | **修复：** 桥级 claim 注册表 + 命令指纹，本地 WS 与隧道虚拟连接共用同一 `admit`。64 并发压测验证只有一个放行；在途登记绝不被淘汰。原问题：`seen` 只在单连接内，两连接可同时执行同一 requestId。 | `internal/transport/claims.go`；`methods_test.go` |
 | B05 | 高 | Bridge | replay 取快照与 subscriber 注册之间发布的事件既不在 replay 中也不在实时订阅中，重连时可能漏事件。 | `pi-bridge-go/internal/transport/server.go`；`internal/transport/tunnel.go` |
 | B06 | 高 | Bridge | 大 `get_tree` 的端到端请求后，后续状态返回 `worker_exited`。源码确认桥默认 `MaxFrame=8 MiB`，`Client.read()` 在超限时 fail 并关闭 stdin/stdout；原约 9 MiB 探针只能证明此链路失效，不能归因成 Pi 自身约 9 MiB 限制。 | `internal/runtime/manager.go:Defaults`；`internal/pi/client.go:read`；`internal/runtime/session_ops.go` |
 | B07 | 高 | Bridge/UI | 桥接受 600 KiB 文件读取，但 JSON 响应超过 WS 帧上限并取消连接；常规文件预览会断线。 | `pi-bridge-go/internal/transport/server.go` |
@@ -28,7 +28,7 @@
 | B12 | 中 | Bridge | scan cache 仅以 path/size/mtime 验证；同路径、同长度、保留 mtime 的原子替换可命中旧索引，叶子 ID 与实际记录不一致。 | `pi-bridge-go/internal/sessions/cache.go` |
 | B13 | 中 | Bridge | 快速历史扫描可放过完整且已换行、但正文损坏的旧记录，与“完整损坏行显式报错”的契约不符。 | `pi-bridge-go/internal/sessions/scan.go` |
 | B14 | 高 | Tunnel | 退订仅从连接 map 删除订阅 ID，底层 worker subscription goroutine 未关闭；重复订阅会耗尽配额。 | `pi-bridge-go/internal/transport/tunnel.go` |
-| B15 | 高 | Tunnel | 隧道虚拟连接执行命令没有经过桥的全局 `operations` 并发上限，可绕过资源限额。 | `pi-bridge-go/internal/transport/tunnel.go` |
+| B15 | ✅ 已修 | Tunnel | **修复：** 隧道命令与本地 WS 共用 `admit` 与全局 `operations` 预算。原问题：隧道路径完全绕过桥级并发上限。 | `internal/transport/tunnel.go`；`claims.go` |
 | B16 | 中 | Bridge | `UIResponse` 在参数校验之前就删除 pending dialog；非法回执或 Notify 队列已满时，合法重试会变成 not_found，对话可能一直等待。 | `pi-bridge-go/internal/runtime/dialogs.go` |
 | U01 | 高 | UI | 切换会话时 `selectSession()` 不清理全局附件数组；异步 `FileReader` 结果也没有会话 generation 归属，上一会话图片会留在或追加到新会话附件并可被发送。 | `pi-webui-htmx/src/modules/workbench.ts`；`src/modules/attachments.ts` |
 | U02 | 中 | UI | 新会话首条消息前 `ensureWorker()` 刷新默认模型，覆盖用户已选择的模型。 | `pi-webui-htmx/src/modules/workbench.ts` |
@@ -55,7 +55,7 @@
 | B27 | 中 | Bridge | `files.list` 与会话 `walkDir` 先 `ReadDir` 全目录再按上限截断；超大单目录可在限额检查前占用大量内存并排序。 | `internal/workspace/files.go`；`internal/sessions/index.go` |
 | B28 | 中 | Bridge | 搜索遇到超长行会直接结束该文件扫描，但没有设置 `SearchResult.Truncated`；后续命中被跳过却报告结果完整。 | `internal/sessions/search.go` |
 | B29 | 中 | Bridge | 会话索引 `fresh()` 在 TTL 内仍遍历整棵目录计算指纹；列表/历史查找在大目录下仍有 O(会话文件数) 开销。 | `internal/sessions/index.go` |
-| B30 | 高 | Bridge | 回执在副作用命令完成后才写入；Pi 接受命令到回执落盘之间桥崩溃，重启后相同 `requestId` 没有记录，无法兑现跨重启不重复执行的保证。 | `internal/transport/server.go`；`internal/storage/receipts.go` |
+| B30 | ✅ 已修 | Bridge | **修复：** 有副作用命令派发前可靠写 pending intent（带指纹），完成后落终态；重启见到 pending 只回答 `outcome_unknown`，不假装成功。时序测试用会阻塞的假 sink 捕获「派发中已在盘上」。 | `internal/transport/claims.go`；`methods_test.go` |
 | B31 | 中 | Bridge | 持久回执只按 `requestId` 查找，不校验重放请求的 method/sessionId；不同命令误用相同 ID 会收到旧命令的 `duplicate` 回执。 | `internal/transport/server.go`；`internal/storage/receipts.go` |
 | B32 | 高 | Bridge | `config.packages` 对 settings 中每个 npm 包启动一个 goroutine/HTTP 请求；settings 文件有字节上限但没有 package 数或并发上限。 | `internal/management/packages.go` |
 | B33 | 中 | Bridge | workspace 图片读取允许最多 4 MiB，`files.image` 却把图片 base64 放进 512 KiB WS 响应；大部分被桥识别为受支持的图片无法预览。 | `internal/workspace/files.go`；`internal/transport/server.go` |
@@ -94,7 +94,7 @@
 
 | ID | 严重性 | 项目 | 问题与影响 | 主要位置 |
 |---|---|---|---|---|
-| B47 | 高 | Storage | 重启读取轮转回执时按最旧日志优先装载；达到 `MaxEntries` 后跳过较新的 `receipts.1`，去重表缺少近期请求。小型确定性日志夹具已复现。 | `internal/storage/receipts.go`；`receipt-order-probe.log` |
+| B47 | ✅ 已修 | Storage | **修复：** 轮转文件按序号升序载入（当前 → .1 → .2 → .3），同一 requestId 只保留更晚结论。回归直接构造「新记录在 .1、旧记录在 .2」的布局。 | `internal/storage/receipts.go`；`receipts_test.go` |
 | B48 | 高 | Runtime | Pi RPC 扩展对话的 `timeout` 到期会在 Pi 内部默认解决并删除其 pending 请求；桥未清理对应 `pendingDialogs`/`waitingInput`，worker 会永久失去空闲回收资格。 | `internal/runtime/manager.go`；`internal/runtime/dialogs.go`；Pi 0.85.1 `dist/modes/rpc/rpc-mode.js` |
 | B49 | ✅ 已修 | Management | 模型摘要按 Pi 数组计数并对总输出应用限额，稳定排序 provider，保留原始 modelCount 并标记截断；旧对象夹具已改为真实数组。 | `internal/management/config.go`；`config_safety_test.go` |
 | B50 | 中 | Runtime | 同一 worker 的第二次 `Stop` 在 `closing` 后无条件等待 `done`；第一次强停超时但进程仍未退出时，关闭调用者可永久阻塞。 | `internal/runtime/manager.go` |
@@ -105,7 +105,7 @@
 | B55 | 中 | Relay | relay 默认状态目录为系统临时目录 `/tmp/pi-relay`；设备注册表在重启/清理临时目录后丢失，长期部署必须显式指定持久 `--state-dir`。 | `cmd/pi-relay/main.go` |
 | B56 | ✅ 已修 | Workspace | **修复：** stderr 限 32 KiB、不回显；取消进程组的真实后代测试通过。桥 SIGKILL 的整树保证仍属 B40/P7。原问题：`gitOutputLimited` 仅限制 stdout，stderr 使用无界 `bytes.Buffer`；同时 `CommandContext` 只回收 Git 直接子进程，仓库配置触发的外部命令后代可能存活。 | `internal/workspace/git.go` |
 | B57 | 高 | Tunnel | tunnel sender 写失败后 `virtualConn.pump` 退出，但连接仍留在 `virtual` 映射；同一 `clientId` 重连复用死连接，后续响应入队却无人发送。定向测试复现。 | `internal/transport/tunnel.go`；`tunnel-pump-probe.log` |
-| B58 | 高 | Storage | 启动忽略末尾半行后仍以 append 打开回执日志，新回执会接在损坏 JSON 后；关闭重开后该新回执不可读取。定向测试复现。 | `internal/storage/receipts.go`；`receipt-tail-probe.log` |
+| B58 | ✅ 已修 | Storage | **修复：** 打开追加句柄前把日志截回最后一个完整换行。回归模拟崩溃半行后追加并重开，校验每一行均可解析。 | `internal/storage/receipts.go`；`receipts_test.go` |
 | B59 | 中 | Management | `npm:@scope/pkg@version` 的版本后缀未从 npm 包名剥离；已安装版本读取路径错误，registry URL 也把版本约束当包名。锁定版本夹具复现读取为空。 | `internal/management/packages.go`；`pinned-package-probe.log` |
 | B60 | ✅ 已修 | HTTP | **修复：** 解析 qvalue，省略视为 1，未列出且无 `*` 视为不可接受，同名重复取最严格，非法 q 视为禁用。回归覆盖 `*`、`*;q=0`、`br;q=0`、同名重复与畸形 q。原问题：忽略 qvalue，`br;q=0` 仍选 br。 | `internal/presentation/presentation.go`；`compress_test.go` |
 | B61 | ✅ 已修 | HTTP | **修复：** `Vary` 无条件声明；端到端测试按 8 种 Accept-Encoding 校验 Vary、Content-Encoding 与解压结果。原问题：仅压缩分支设置，identity 缺 Vary。 | `internal/transport/server.go`；`server_test.go` |
