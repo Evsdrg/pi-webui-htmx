@@ -272,6 +272,32 @@ it('默认排队模式用协议一致的 steering，不是 steer', async () => {
   });
 });
 
+describe('新会话首次发送', () => {
+  it('Pi 分配的新 ID 属于同一发送事务，先设置模型再提交消息', async () => {
+    fake.request.mockImplementation(async (method: string) => {
+      if (method === 'session.start') return { sessionId: 's-new', cwd: '/fixture' };
+      if (method === 'session.state') return { sessionId: 's-new', model: { provider: 'CPA-Responses', id: 'deepseek-flash', name: 'DeepSeek Flash' } };
+      if (method === 'session.thinking_levels') return ['off', 'high'];
+      if (method === 'session.pending_dialogs') return { ids: [] };
+      return {};
+    });
+    workbench.selectSession('', '/fixture', '新会话');
+    const select = document.getElementById('model-select') as HTMLSelectElement;
+    const option = new Option('DeepSeek Flash', 'CPA-Responses/deepseek-flash');
+    option.dataset.provider = 'CPA-Responses'; option.dataset.modelId = 'deepseek-flash';
+    select.add(option); select.value = option.value;
+    select.dispatchEvent(new Event('change', { bubbles: true }));
+    (document.getElementById('prompt') as HTMLTextAreaElement).value = '首条消息';
+    document.querySelector<HTMLFormElement>('#composer')!.requestSubmit();
+    await vi.waitFor(() => expect(fake.request.mock.calls.some((c) => c[0] === 'session.start')).toBe(true));
+    await vi.waitFor(() => expect(fake.request.mock.calls.some((c) => c[0] === 'session.prompt')).toBe(true));
+    expect(fake.request).toHaveBeenCalledWith('session.set_model', 's-new', { provider: 'CPA-Responses', modelId: 'deepseek-flash' }, 30_000);
+    expect(fake.request).toHaveBeenCalledWith('session.prompt', 's-new', { text: '首条消息' }, 30_000);
+    expect(document.body.dataset.sessionId).toBe('s-new');
+    expect(document.getElementById('connection-notice')?.textContent).not.toContain('未发送');
+  });
+});
+
 describe('历史模型与当前可用模型', () => {
   const missingModel = { provider: 'unknown', id: 'unknown', name: 'unknown' };
 

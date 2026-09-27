@@ -207,24 +207,25 @@ export class Workbench {
     if (!this.capabilities.has(method)) return Promise.reject(new BridgeError('unsupported_method', `当前桥不支持 ${method}`));
     return this.bridge.request<T>(method, session, params, method === 'session.compact' ? 120_000 : 30_000);
   }
-  private async ensureWorker(scope: Scope = this.scope.current$()): Promise<WorkerInfo> {
+  private async ensureWorker(scope: Scope = this.scope.current$()): Promise<Scope> {
     const oldId = this.sessionId;
     if (!oldId && !this.cwd) { await this.newSession(); throw new Error('请先选择工作目录，再发送消息。'); }
     const info = await this.request<WorkerInfo>('session.start', { cwd: this.cwd }, oldId);
     if (!scope.alive()) throw new Error('会话已切换，本条消息未发送；内容已保留，请手动重发。');
+    let activeScope = scope;
     if (!oldId) {
-      // 新会话 ID 由 worker 分配，必须经 scope 提交，让后续操作都归属新会话。
+      // Pi 分配新 ID 是本次发送自身的身份迁移；旧 scope 失效后必须
+      // 交给新代次继续执行，不能误判为用户主动切换会话。
       this.scope.switchTo(info.sessionId);
+      activeScope = this.scope.current$();
       this.sessionId = info.sessionId; this.cwd = info.cwd;
       document.body.dataset.sessionId = this.sessionId;
       history.replaceState(null, '', `/?session=${encodeURIComponent(info.sessionId)}`);
     }
     this.cwd = info.cwd; el('session-cwd').textContent = this.cwd;
     await this.subscribe();
-    // 刚启动的 worker 才知道当前模型；不刷新会让下拉停留在「默认模型」，
-    // 与 Pi 实际使用的模型不一致。
-    await this.refreshState(scope);
-    return info;
+    await this.refreshState(activeScope);
+    return activeScope;
   }
   /**
    * command 把目标会话固定为发起时那一个。
@@ -234,8 +235,8 @@ export class Workbench {
    * 现在 target 在发起时取定，整条链路都显式传它。
    */
   private async command<T = unknown>(method: Method, params?: unknown, scope: Scope = this.scope.current$()): Promise<T> {
-    await this.ensureWorker(scope);
-    return this.request<T>(method, params, scope.sessionId);
+    const activeScope = await this.ensureWorker(scope);
+    return this.request<T>(method, params, activeScope.sessionId);
   }
   // refreshState 读取一次会话状态并同步界面。
   // 只按会话作用域守卫：状态读取发生在已处理的事件之后，内容是更新的；
@@ -329,16 +330,16 @@ export class Workbench {
     const queuedKind = busy ? this.queueKind() : undefined;
     const selectedModel = this.selectedModel();
     try {
-      await this.ensureWorker(scope);
-      if (!scope.alive()) {
+      const activeScope = await this.ensureWorker(scope);
+      if (!activeScope.alive()) {
         // 会话已切换：不能把消息投到新会话（U13），也不静默丢弃。
         // 抛出而不是 return，让 catch 统一给出可见提示；输入与附件未清空。
         throw new Error('会话已切换，本条消息未发送；内容已保留，请手动重发。');
       }
       if (!busy) {
         if (selectedModel) {
-          await this.request('session.set_model', { provider: selectedModel.provider, modelId: selectedModel.id }, scope.sessionId);
-          if (!scope.alive()) throw new Error('会话已切换，本条消息未发送；内容已保留，请手动重发。');
+          await this.request('session.set_model', { provider: selectedModel.provider, modelId: selectedModel.id }, activeScope.sessionId);
+          if (!activeScope.alive()) throw new Error('会话已切换，本条消息未发送；内容已保留，请手动重发。');
           this.modelIntent = undefined; this.modelUnavailable = false;
           this.selectModel(selectedModel.provider, selectedModel.id);
         } else if (this.modelUnavailable) {
@@ -354,9 +355,9 @@ export class Workbench {
         throw new Error(`附件总体积超过 ${Math.floor(WIRE_BUDGET / 1024 / 1024)} MB，请减少图片或压缩后重试。`);
       }
       // 目标会话固定为发起时那一个：等待期间切换也不改投（U13）。
-      if (busy && queuedKind) await this.sendQueued(message, queuedKind, images, scope);
-      else await this.request('session.prompt', { text: message, ...(images.length ? { images: toWire(images) } : {}) }, scope.sessionId);
-      if (!scope.alive()) return;
+      if (busy && queuedKind) await this.sendQueued(message, queuedKind, images, activeScope);
+      else await this.request('session.prompt', { text: message, ...(images.length ? { images: toWire(images) } : {}) }, activeScope.sessionId);
+      if (!activeScope.alive()) return;
       if (input.value.trim() === message) input.value = '';
       saveDraft(draftKey, ''); this.saveCurrentDraft();
       this.clearAttachments();
@@ -482,14 +483,16 @@ export class Workbench {
       this.selectModel(this.currentModel.provider, this.currentModel.id, this.currentModel.name);
     } else if (this.historicalModel || this.modelUnavailable) {
       const model = this.historicalModel;
-      const label = model ? `${model.id} · ${model.provider}（${this.modelUnavailable ? '历史模型，当前不可用' : '历史模型，待启动确认'}）` : '当前模型不可用';
+      const label = model ? `${model.id}（${this.modelUnavailable ? '不可用' : '历史'}）` : '当前模型不可用';
       const option = new Option(label, '__model-status__');
       option.disabled = true; option.dataset.modelStatus = 'true'; select.insertBefore(option, select.firstChild);
       select.value = option.value;
     } else {
       select.value = '';
     }
-    select.title = select.selectedOptions[0]?.textContent?.trim() ?? '';
+    select.title = this.historicalModel && !this.currentModel
+      ? `${this.historicalModel.provider}/${this.historicalModel.id} · ${this.modelUnavailable ? '历史模型，当前不可用' : '历史模型，待启动确认'}`
+      : select.selectedOptions[0]?.textContent?.trim() ?? '';
     this.updateControls();
   }
   private selectModel(provider: string, id: string, name = id): void {
