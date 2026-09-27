@@ -105,10 +105,15 @@ func (c *Client) Run(ctx context.Context) {
 func (c *Client) dialAndServe(ctx context.Context) error {
 	dialctx, cancel := context.WithTimeout(ctx, c.cfg.DialTimeout)
 	defer cancel()
+	// 令牌走 Authorization 头，不进查询串：查询串会进入反向代理与
+	// 服务端访问日志，长期设备令牌不该留在那里（B24）。
 	url := strings.TrimSuffix(c.cfg.RelayURL, "/") + "/tunnel?deviceId=" +
-		urlQueryEscape(c.cfg.DeviceID) + "&token=" + urlQueryEscape(c.cfg.DeviceToken)
+		urlQueryEscape(c.cfg.DeviceID)
 	conn, _, err := websocket.Dial(dialctx, url, &websocket.DialOptions{
-		HTTPHeader: http.Header{"User-Agent": []string{"pi-bridge-tunnel/1"}},
+		HTTPHeader: http.Header{
+			"User-Agent":    []string{"pi-bridge-tunnel/1"},
+			"Authorization": []string{"Bearer " + c.cfg.DeviceToken},
+		},
 	})
 	if err != nil {
 		return err

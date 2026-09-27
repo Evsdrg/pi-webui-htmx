@@ -49,7 +49,7 @@
 | B21 | ✅ 已修 | Relay | **修复：** 尝试表先清理过期项再查活跃硬上限（1024），超出即拒绝，不再依赖滚动驱逐兜底。 | `internal/relay/registry.go` |
 | B22 | ✅ 已修 | Relay | **修复：** `persist` 在持锁状态下完成序列化，解锁后只做文件写入；`-race` 竞争探针已验证。 | `internal/relay/registry.go` |
 | B23 | ✅ 已修 | Relay | **修复：** 每 owner 浏览器连接上限 16，与关闭状态、设备在线在同一段持锁区间内判定；另一设备的连接不受影响。 | `internal/relay/server.go`；`relay_limits_test.go` |
-| B24 | 高 | Tunnel | 设备长期 token 放在 `/tunnel?deviceId=...&token=...` 查询串，容易进入反向代理访问日志；桥也接受明文 `ws://` 到非环回 relay，token 会以明文出网。 | `internal/tunnel/client.go`；`internal/relay/server.go`；`cmd/pi-bridge/main.go` |
+| B24 | ✅ 已修 | Tunnel/Relay | **修复：** 桥侧隧道令牌改走 `Authorization: Bearer` 头；relay 优先取头、查询串保留为兼容回退。 | `internal/tunnel/client.go`；`internal/relay/server.go` |
 | B25 | ✅ 已修 | Bridge | **修复：** porcelain -z 同时读取分支与状态；空仓库、特殊文件名、重命名回归通过。原问题：合法的 unborn/空 Git 仓库没有 `HEAD`；`GitStatus` 先执行 `rev-parse --abbrev-ref HEAD` 并把失败作为整次查询失败。空仓库本地探针复现。 | `internal/workspace/git.go`；`git-probe.log` |
 | B26 | ✅ 已修 | Bridge | **修复：** NUL 增量读取，2 MiB/50000 条上限，溢出取消整组，缓存传播 truncated；9000 长文件名回归通过。walk/大结果传输仍按 B27/S06 推进。原问题：`files.index` 的 Git 路径用 `cmd.Output()` 完整捕获 `git ls-files`，之后才应用 50000 条上限；超大仓库会先无界分配输出和 `strings.Split` 切片。 | `internal/workspace/index.go` |
 | B27 | ✅ 已修 | Bridge | **修复：** 目录列表改为流式分批 `ReadDir(128)`，边读边按上限截断；排序仍在截断后的切片上做，规则不变。 | `internal/workspace/files.go`；`files_test.go` |
@@ -60,7 +60,7 @@
 | B32 | 高 | Bridge | `config.packages` 对 settings 中每个 npm 包启动一个 goroutine/HTTP 请求；settings 文件有字节上限但没有 package 数或并发上限。 | `internal/management/packages.go` |
 | B33 | 中 | Bridge | workspace 图片读取允许最多 4 MiB，`files.image` 却把图片 base64 放进 512 KiB WS 响应；大部分被桥识别为受支持的图片无法预览。 | `internal/workspace/files.go`；`internal/transport/server.go` |
 | B34 | 中 | Bridge | `README.md` 仍标 A 阶段，并称 replay、持久去重、终端、Git、配置管理等未实现；能力端点也固定返回 `phase: A`，与实际实现及协议文档矛盾。 | `pi-bridge-go/README.md`；`internal/transport/server.go`；`api/v1/protocol.md` |
-| B35 | 高 | Relay | TLS 反向代理以 HTTP 回源时，relay 从 `r.TLS` 推断 scheme 为 http，拒绝浏览器发送的 `https://relay-host` Origin；HTTPS 反代部署下客户端 WS 无法连接，且登录 cookie 不会设置 Secure。handler 探针已复现 403。 | `internal/relay/server.go`；`relay-origin-probe.log` |
+| B35 | ✅ 已修 | Relay | **修复：** scheme 推断信任 `X-Forwarded-Proto`（仅接受明确 https，其余按 http），Cookie `Secure` 同步跟随；无代理头时仍按 r.TLS。 | `internal/relay/server.go`；`relay_transport_test.go` |
 | B36 | 中 | Bridge | `setStatus` 快照只按 key 全局存储，不含 sessionId；不同 Pi worker 的同名状态互相覆盖，切换会话可能看到另一会话的扩展状态。Pi Web 将状态保存在 per-session state。 | `internal/transport/extension_state.go`；`internal/transport/server.go`；`pi-web/hooks/useAgentSession.ts` |
 | B37 | 中 | Bridge | 会话列表首次补标题时，`titleForPage` 为每条当前页会话从文件头扫描到尾，以找最新 `session_info`。多个长会话时列表请求重复读取大量完整 JSONL；这条路径不使用 History 的 scan cache。 | `internal/sessions/metadata.go`；`internal/sessions/index.go` |
 | B38 | 中 | Bridge | 每次惰性加载 thinking/tool image 都由 `rawEntry` 从 JSONL 文件头逐行扫描到目标条目；History 建好的偏移索引/scan cache 未复用，展开多个旧块会重复扫描长会话。 | `internal/sessions/lazy.go`；`internal/sessions/cache.go` |

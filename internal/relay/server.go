@@ -17,6 +17,43 @@ import (
 	"pi-bridge-go/internal/protocol"
 )
 
+// requestScheme 推断请求的实际 scheme。
+//
+// 不能只看 r.TLS：文档要求 TLS 在反向代理终止，代理以 HTTP 回源时
+// r.TLS 为 nil，浏览器发来的 https:// Origin 会被误判成跨源而拒绝，
+// HTTPS 部署下 WS 根本连不上（B35）。因此信任 X-Forwarded-Proto，
+// 但只接受明确的 https，其余值一律按 http 处理——不解析任意字符串，
+// 避免客户端靠伪造头绕过 Origin 校验。
+func requestScheme(r *http.Request) string {
+	if fwd := strings.TrimSpace(r.Header.Get("X-Forwarded-Proto")); fwd != "" {
+		if strings.EqualFold(fwd, "https") {
+			return "https"
+		}
+		return "http"
+	}
+	if r.TLS != nil {
+		return "https"
+	}
+	return "http"
+}
+
+// deviceTokenFromHeader 从 Authorization 头取设备令牌。
+// 同时接受 "Bearer <token>" 与裸令牌两种形式。
+func deviceTokenFromHeader(r *http.Request) string {
+	value := r.Header.Get("Authorization")
+	if value == "" {
+		return ""
+	}
+	if strings.HasPrefix(value, "Bearer ") {
+		return strings.TrimSpace(strings.TrimPrefix(value, "Bearer "))
+	}
+	// 不是 Bearer 形式时不猜：那可能是别的鉴权方案。
+	if strings.Contains(value, " ") {
+		return ""
+	}
+	return strings.TrimSpace(value)
+}
+
 // maxClientsPerOwner 限制单个用户同时持有的浏览器连接数。
 // 多标签页是正常用法，但必须有个上限：公网 relay 上，
 // 一个认证用户就能用大量 clientId 把 goroutine 与内存耗尽（B23）。
@@ -202,10 +239,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		writeRelayError(w, 403, protocol.E("host_denied", "Host 不在预期范围内"))
 		return
 	}
-	scheme := "http"
-	if r.TLS != nil {
-		scheme = "https"
-	}
+	scheme := requestScheme(r)
 	if origin := r.Header.Get("Origin"); origin != "" && s.host != "" && origin != scheme+"://"+s.host {
 		writeRelayError(w, 403, protocol.E("origin_denied", "未启用跨源访问"))
 		return
@@ -298,7 +332,7 @@ func (s *Server) handleAuth(w http.ResponseWriter, r *http.Request) {
 	exp := strconv.FormatInt(expires.Unix(), 10)
 	http.SetCookie(w, &http.Cookie{
 		Name: userCookieName, Value: s.users.SignCookie(exp, owner), HttpOnly: true,
-		Secure: r.TLS != nil, SameSite: http.SameSiteStrictMode,
+		Secure: requestScheme(r) == "https", SameSite: http.SameSiteStrictMode,
 		Path: "/", Expires: expires, MaxAge: 8 * 60 * 60,
 	})
 	writeRelayJSON(w, 200, map[string]any{"ok": true, "owner": owner})
@@ -394,7 +428,12 @@ func (s *Server) handleRevoke(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleTunnel(w http.ResponseWriter, r *http.Request) {
 	deviceID := r.URL.Query().Get("deviceId")
-	token := r.URL.Query().Get("token")
+	// 设备令牌优先取 Authorization 头。查询串会被反向代理、
+	// 浏览器历史与服务端访问日志原样记录，长期令牌不该出现在那里（B24）。
+	token := deviceTokenFromHeader(r)
+	if token == "" {
+		token = r.URL.Query().Get("token")
+	}
 	if deviceID == "" || token == "" {
 		writeRelayError(w, 401, protocol.E("unauthorized", "缺少设备凭据"))
 		return
