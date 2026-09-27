@@ -75,17 +75,17 @@
 | T01 | ✅ 已修 | Tests | 假 Pi 改为每个测试进程独占临时目录；sync.Once 仅复用进程内产物，runtime/transport/testutil 在 TestMain 统一清理。并发构建及编译失败清理测试通过，恢复旧固定路径后反例按预期失败。 | `internal/testutil/fakepi.go`；三个包的 `main_test.go`/`TestMain`；P0 |
 | U06 | ✅ 已修 | UI | **修复：** 文件列表的守卫移到 htmx `beforeSwap`，迟到响应在交换前就被拒。 | `src/modules/workspace.ts` |
 | U07 | ✅ 已修 | UI | **修复：** 惰性图片在 `load` 后 `revokeObjectURL`，不再把 blob 留到页面卸载。 | `src/modules/lazy.ts` |
-| U08 | 中 | UI | 分支树 `flatten()` 递归遍历深树；15000 层线性树的定向 Vitest 复现 `Maximum call stack size exceeded`，长会话分支面板失败。 | `pi-webui-htmx/src/modules/branch.ts`；`ui-more-probes.log` |
+| U08 | ✅ 已修 | UI | **修复：** `flatten` 改为显式栈迭代（栈内带 depth），前序结果不变；20 万层线性树回归稳定复现原栈溢出。 | `src/modules/branch.ts`；`tests/unit/branch.test.ts` |
 | U09 | ✅ 已修 | UI | **修复：** `refresh()` 即使在途补全请求失效，debounce 窗口内的旧候选不再写入新菜单。 | `src/modules/mention.ts`；`tests/unit/mention.test.ts` |
-| U10 | 中 | UI | 分支树、fork 消息及 `gotoLeaf` 的历史片段没有完整的 session generation 守卫；切换会话后，旧树可写入新面板，旧分支历史也可能替换新会话的对话区。 | `pi-webui-htmx/src/modules/branch.ts`；`src/modules/workbench.ts` |
+| U10 | ⚠️ 部分 | UI | **已做：** `gotoLeaf` 发起时登记归属，历史请求同样登记；`beforeSwap` 同时校验会话 ID 与代次，切换/新建导致的旧响应会被拒。**仍缺：** A→B→A 同 URL 的迟到响应在前端无法仅凭 URL+当前代次区分，需要请求自带代次标记（见下）。 | `src/modules/workbench.ts`；`tests/unit/workbench.test.ts` |
 | U11 | ✅ 已修 | UI | **修复：** 排队模式回读改看 `followUpMode`（选 followUp 时桥改的是这个字段），缺失时不猜、保持当前选择。 | `src/modules/workbench.ts`；`tests/unit/workbench.test.ts` |
 | U12 | ✅ 已修 | UI | **修复：** 关闭文件预览改用 `elOrNull`，图片预览顶掉 `#file-content` 后不再抛异常。 | `src/modules/workspace.ts` |
 | U13 | ✅ 已修 | UI | **修复：** `send`/`sendQueued` 的目标会话在发起时取定；切换后明确报错并保留输入与附件，不静默丢弃。 | `src/modules/workbench.ts`；`tests/unit/workbench.test.ts` |
-| U14 | 中 | UI | 自动重试没有 Pi 读回字段，但复选框是跨会话的单一 DOM 状态；切换会话仍显示上一会话最后一次手动设置，默认未勾也不代表当前 worker 实际状态。 | `pi-webui-htmx/src/modules/workbench.ts`；`src/templates/shell.html` |
+| U14 | ✅ 已修 | UI | **修复：** 自动重试改为按会话记忆的本地偏好（`autoRetryBySession`），切换会话时套用该会话上次选择、默认关闭；模板明确标注「不是 Pi 的实时状态」。 | `src/modules/workbench.ts`；`src/templates/shell.html` |
 | U15 | 中 | UI | `bridge.event_omitted` 控制事件被忽略；UI 不读取 `resyncRequired`，连接仍在线时不会立即重读历史，直到后续 settled/手动刷新。 | `pi-webui-htmx/src/modules/workbench.ts`；`pi-bridge-go/internal/runtime/manager.go` |
 | U16 | 中 | UI | `EventCursor.accept` 接受任意新 epoch 并把 seq 重置；旧 worker 延迟帧可把 cursor 从新 epoch 切回旧 epoch，随后旧帧被当成新事件处理。 | `pi-webui-htmx/src/modules/stream.ts`；`pi-bridge-go/internal/transport/server.go` |
-| U17 | 高 | UI | 精度校正（本轮源码复核）：当前 beforeSwap 已能按 URL 拒绝普通跨会话旧历史，不能描述为完全无守卫。缺口是 A→B→A 的旧代次、同会话不同 leaf/刷新乱序，以及 beforeSwap 之前的 HX 响应副作用；需要 generation/面板序号和 beforeOnLoad 统一守卫。原泛化的“两会话晚响应必覆盖”断言不作有效证据。 | `pi-webui-htmx/src/modules/workbench.ts:start/refreshHistory/gotoLeaf`；`src/modules/scroll.ts` |
-| U18 | 中 | UI | 精度校正（本轮源码复核）：当前 beforeSwap 已按 sessionId 检查对话目标。尚缺同一 session 的旧代次/pending 集合乱序与响应处理前守卫；旧错误/finally 也可能影响新视图。按这些真实边界补回归，不再声称所有旧对话都会先 swap 再校验。 | `pi-webui-htmx/src/modules/workbench.ts:start/refreshDialogs` |
+| U17 | ⚠️ 部分 | UI | **精度校正后状态：** 已补代次校验（`pendingHistory` + `scope.epoch`），可挡住「切换前发起、切换后到达」的响应，反例稳定失败。**仍缺：** A→B→A 同 URL 乱序、以及 `beforeSwap` 之前的 HX 响应副作用——需要让请求携带代次标记（自定义头）才能在交换前判定。 | `src/modules/workbench.ts` |
+| U18 | ⚠️ 部分 | UI | **精度校正后状态：** 对话目标已按 sessionId 校验，并补了代次。**仍缺：** 同一 session 的旧代次/ pending 集合乱序、响应处理前守卫，以及旧错误/`finally` 对新视图的影响。 | `src/modules/workbench.ts` |
 | U19 | ✅ 已修 | UI | **修复：** 模型配置保存后仅在编辑器内容未变时才 reload，未提交草稿不被覆盖。 | `src/modules/models.ts` |
 | U20 | ✅ 已修 | UI | **修复：** 附件批次改串行队列，每一批都在上一批落地后判断额度，并发批次不再突破 8 张上限。 | `src/modules/workbench.ts`；`tests/unit/attachments_scope.test.ts` |
 | U21 | ✅ 已修 | UI | **修复：** 思考增量改为追加文本节点（O(增量)），不再每 token 重写整段 40K 文本；上限用独立计数器，不读 DOM。 | `src/modules/stream.ts`；`tests/unit/liveview.test.ts` |
