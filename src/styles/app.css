@@ -22,7 +22,9 @@ a { color:var(--accent); }
 .skip-link { position:fixed; z-index:100; left:12px; top:-80px; padding:10px; background:var(--bg); }
 .skip-link:focus { top:12px; }
 /* ==== 外壳布局与侧栏 ================================================================ */
-.app-shell { display:grid; grid-template-columns:var(--sidebar-width) minmax(0,1fr); height:100dvh; overflow:hidden; }
+.app-shell { display:grid; grid-template-columns:var(--sidebar-width) minmax(0,1fr); height:100dvh; overflow:hidden; transition:grid-template-columns .2s ease; }
+/* 拖动分隔条时不要过渡，否则手感发黏。 */
+.app-shell[data-resizing] { transition:none; }
 .app-shell[data-right-panel=open] { grid-template-columns:var(--sidebar-width) minmax(0,1fr) var(--panel-width); }
 .app-shell[data-sidebar=closed] { grid-template-columns:0 minmax(0,1fr); }
 .app-shell[data-sidebar=closed][data-right-panel=open] { grid-template-columns:0 minmax(0,1fr) var(--panel-width); }
@@ -72,7 +74,8 @@ kbd { font-size:10px; color:var(--text-dim); margin-left:auto; }
    只需要知道顶栏高度——--topbar-h 由上面的 .conversation 给默认值，
    JS 用 ResizeObserver 按真实高度校正。 */
 /* ==== 顶栏功能面板（下拉浮层） =========================================================== */
-.top-panel { position:absolute; top:var(--topbar-h); left:0; right:0; z-index:6; max-height:calc(100dvh - var(--topbar-h)); overflow:auto; padding:12px 16px; border-bottom:1px solid var(--border); background:var(--bg-panel); box-shadow:0 12px 28px #0002; font-size:12px; line-height:1.6; }
+.top-panel { position:absolute; top:var(--topbar-h); left:0; right:0; z-index:6; max-height:calc(100dvh - var(--topbar-h)); overflow:auto; padding:12px 16px; border-bottom:1px solid var(--border); background:var(--bg-panel); box-shadow:0 12px 28px #0002; font-size:12px; line-height:1.6; opacity:0; transform:translateY(-4px); transition:opacity .16s ease,transform .16s ease,visibility 0s linear .16s; visibility:hidden; }
+.top-panel:not([hidden]) { opacity:1; transform:none; visibility:visible; transition:opacity .16s ease,transform .16s ease,visibility 0s; }
 .top-panel p { margin:4px 0; }
 .top-panel code { font-size:11px; padding:1px 4px; border-radius:4px; background:var(--bg); }
 .panel-form { display:flex; align-items:center; gap:8px; margin-top:8px; flex-wrap:wrap; }
@@ -151,7 +154,10 @@ kbd { font-size:10px; color:var(--text-dim); margin-left:auto; }
 .empty-note { font-size:12px; padding:14px; }
 input,select,textarea { background:var(--bg); border:1px solid var(--border); border-radius:6px; padding:7px 9px; }
 .app-dialog,.ext-dialog { background:var(--bg-panel); color:var(--text); border:1px solid var(--border); border-radius:14px; padding:24px; width:min(460px,calc(100vw - 32px)); max-height:85dvh; overflow:auto; box-shadow:0 20px 70px #0004; margin:auto; }
-.app-dialog::backdrop,.ext-dialog::backdrop { background:#0007; backdrop-filter:blur(2px); }
+.app-dialog::backdrop,.ext-dialog::backdrop { background:#0007; backdrop-filter:blur(2px); animation:dialog-backdrop-in .16s ease; }
+@keyframes dialog-backdrop-in { from { opacity:0; } to { opacity:1; } }
+.app-dialog[open],.ext-dialog[open] { animation:dialog-in .16s ease; }
+@keyframes dialog-in { from { opacity:0; transform:translateY(6px) scale(.98); } to { opacity:1; transform:none; } }
 .app-dialog h2,.ext-dialog h3 { font-size:18px; font-weight:600; margin:0 0 15px; }
 .app-dialog h3 { font-size:13px; margin:24px 0 8px; }
 .app-dialog p { font-size:12px; margin:12px 0; }
@@ -165,8 +171,13 @@ input,select,textarea { background:var(--bg); border:1px solid var(--border); bo
 .panel-header { display:flex; justify-content:space-between; align-items:center; gap:10px; padding:12px; font-size:12px; }
 .panel-header h2 { margin:0; }
 .panel-tabs { display:flex; border-bottom:1px solid var(--border); padding:0 12px; gap:18px; }
-.panel-tabs button { border:0; background:transparent; color:var(--text-muted); padding:8px 3px; font-size:12px; }
+.panel-tabs button { border:0; background:transparent; color:var(--text-muted); padding:8px 3px; font-size:12px; transition:color .12s ease; }
 .panel-tabs [aria-selected=true] { color:var(--text); border-bottom:2px solid var(--accent); }
+.panel-tabs button { transition:color .12s ease; }
+/* 切 tab 时内容淡入：面板本身由 htmx 异步填充，动画挂在 section 上，
+   与内容到达时机无关，不会出现「空白先放大」的观感。 */
+.workspace-panel section[role=tabpanel]:not([hidden]) { animation:panel-fade-in .16s ease; }
+@keyframes panel-fade-in { from { opacity:0; } to { opacity:1; } }
 [role=tabpanel] { flex:1; min-height:0; overflow:auto; padding:12px; }
 .path-bar { display:flex; align-items:center; gap:6px; font-size:11px; margin-bottom:8px; }
 #file-path { flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }

@@ -28,9 +28,10 @@ export function mountLayout(): () => void {
   const setWidth = (width: number) => { const w = clampSidebar(width); shell.style.setProperty('--sidebar-width', `${w}px`); resize.setAttribute('aria-valuenow', String(w)); return w; };
   setWidth(Number(readPreference('sidebar-width')) || 260);
   resize.setAttribute('aria-valuemin', '200'); resize.setAttribute('aria-valuemax', '380');
-  resize.addEventListener('pointerdown', (event) => { drag = { x: event.clientX, width: document.getElementById('sidebar')!.getBoundingClientRect().width, pointer: event.pointerId }; resize.setPointerCapture(event.pointerId); }, { signal: abort.signal });
+  resize.addEventListener('pointerdown', (event) => { drag = { x: event.clientX, width: document.getElementById('sidebar')!.getBoundingClientRect().width, pointer: event.pointerId }; resize.setPointerCapture(event.pointerId); shell.setAttribute('data-resizing', ''); }, { signal: abort.signal });
   resize.addEventListener('pointermove', (event) => { if (drag) setWidth(drag.width + event.clientX - drag.x); }, { signal: abort.signal });
-  const end = () => { if (!drag) return; drag = null; savePreference('sidebar-width', resize.getAttribute('aria-valuenow') ?? '260'); };
+  // 拖动期间关掉容器宽度过渡：否则每次 pointermove 都在追一个正在动画的目标值，手感发黏。
+  const end = () => { if (!drag) return; drag = null; shell.removeAttribute('data-resizing'); savePreference('sidebar-width', resize.getAttribute('aria-valuenow') ?? '260'); };
   resize.addEventListener('pointerup', end, { signal: abort.signal });
   resize.addEventListener('pointercancel', end, { signal: abort.signal });
   resize.addEventListener('keydown', (event) => {
