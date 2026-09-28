@@ -736,6 +736,12 @@ export class Workbench {
   }
   private onClick(event: MouseEvent): void {
     const target = event.target as Element;
+    // 顶栏面板内部的瞬时交互（工具选中项、复制按钮）。
+    // 只用到时才加载：这块逻辑不在首次交互路径上，没必要占首屏预算。
+    if (target.closest('[data-tool-select],[data-copy-value]')) {
+      void import('./panels').then((module) => module.panelClick(event)).catch((error) => this.fail(error));
+      return;
+    }
     // 分支面板的两个动作由片段里的 data-branch-* 声明，交给模块翻译；
     // 模块可能还没加载（面板未开过），所以先问一句。
     if (this.branch?.handleClick(event)) return;

@@ -53,6 +53,16 @@ export function mountLayout(): () => void {
     syncExpanded();
   }, { signal: abort.signal });
   document.addEventListener('keydown', (event) => { if (event.key === 'Escape') closeMobileSidebar(); }, { signal: abort.signal });
+  // 顶栏高度同步给 --topbar-h：顶栏面板是贴顶栏下沿的下拉浮层，
+  // 需要知道它有多高。CSS 里有断点默认值，这里量真实值兜底——
+  // 状态文字变长、按钮换行都会让实际高度偏离默认值。
+  const topBar = document.querySelector<HTMLElement>('.topbar');
+  if (topBar) {
+    const sync = () => document.querySelector<HTMLElement>('.conversation')?.style.setProperty('--topbar-h', `${topBar.getBoundingClientRect().height}px`);
+    sync();
+    if (typeof ResizeObserver === 'function') new ResizeObserver(sync).observe(topBar);
+    window.addEventListener('resize', sync, { signal: abort.signal });
+  }
   return () => abort.abort();
 }
 export function closeMobileSidebar(): void {

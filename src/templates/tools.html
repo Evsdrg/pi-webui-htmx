@@ -1,12 +1,23 @@
-{{/* 工具定义面板：显示**当前实际暴露给模型**的工具集合。
-     它来自 Pi 的 AgentState.tools，因此会随启动时的工具预设与扩展追加变化。 */}}
-{{if .Tools}}<p class="muted">以下是本次工作进程实际暴露给模型的工具，受启动时的工具预设与已装扩展影响。</p>
-{{range .Tools}}<section class="tool-def" data-tool="{{.Name}}">
-<h4>{{.Name}}</h4>
-{{if .Description}}<p class="tool-desc">{{.Description}}</p>{{end}}
-{{if .Params}}<table class="tool-params"><thead><tr><th>参数</th><th>类型</th><th>必填</th></tr></thead><tbody>
-{{range .Params}}<tr><td><code>{{.Name}}</code></td><td>{{.Type}}</td><td>{{if .Required}}是{{else}}否{{end}}</td></tr>
-{{if .Description}}<tr class="tool-param-desc"><td colspan="3">{{.Description}}</td></tr>{{end}}
-{{end}}</tbody></table>{{else}}<p class="muted">无参数。</p>{{end}}
-</section>{{end}}
+{{/* 工具定义面板：左栏工具名、右栏详情，结构对齐 Pi Web 的 ToolDefinitionsPanel。
+     显示的是**当前实际暴露给模型**的工具集合（AgentState.tools），
+     因此会随启动时的工具预设与扩展追加变化。
+     全部详情都渲染进 HTML；点击只切换可见性，不再发请求。 */}}
+{{if .Tools}}<div class="tool-panel">
+  <nav class="tool-list" aria-label="工具列表">
+    {{range $index, $tool := .Tools}}<button type="button" class="tool-item{{if eq $index 0}} selected{{end}}" data-tool-select="{{$tool.Name}}" aria-pressed="{{if eq $index 0}}true{{else}}false{{end}}"><code>{{$tool.Name}}</code></button>
+    {{end}}
+  </nav>
+  <section class="tool-detail" aria-label="工具定义详情">
+    {{range $index, $tool := .Tools}}<div class="tool-scroll" data-tool-detail="{{$tool.Name}}"{{if ne $index 0}} hidden{{end}}>
+      {{if $tool.Description}}<section class="tool-section"><div class="tool-section-label">描述</div><div class="tool-description">{{$tool.Description}}</div></section>{{end}}
+      <section class="tool-section">
+        <div class="tool-section-label"><span>参数</span><span>{{len $tool.Params}} 个参数</span></div>
+        {{if $tool.Params}}<div class="tool-fields">{{range $tool.Params}}<div class="tool-field">
+          <div class="tool-field-name"><code>{{.Name}}</code><span{{if .Required}} class="required"{{end}}>{{if .Required}}必填{{else}}可选{{end}}</span></div>
+          <div class="tool-field-value"><code class="tool-type">{{.Type}}</code>{{if .Desc}}<div>{{.Desc}}</div>{{end}}{{if .Enum}}<div class="tool-meta">可选值：<code>{{.Enum}}</code></div>{{end}}{{if .Default}}<div class="tool-meta">默认值：<code>{{.Default}}</code></div>{{end}}</div>
+        </div>{{end}}</div>{{else}}<div class="tool-none">无参数。</div>{{end}}
+      </section>
+    </div>{{end}}
+  </section>
+</div>
 {{else}}<p class="empty-note">没有启用的工具。若刚切换过工具预设，请重新启动工作进程后再查看。</p>{{end}}

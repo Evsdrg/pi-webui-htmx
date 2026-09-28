@@ -65,6 +65,17 @@ htmx 侧重 HTML 与后端，因此边界按「数据 → HTML 归桥，瞬时�
 刷新一律走「隐藏输入带参数 + `hx-trigger` 自定义事件 + `hx-include`」，
 前端不再拼 URL、不再用 `createElement` 搭列表。
 
+**顶栏面板的布局**（2026-09-28 对齐 Pi Web 源码）：
+
+| 面板 | Pi Web 的结构 | 本仓 |
+|---|---|---|
+| 系统 | `.system-prompt-panel`：flex 列、高度 `min(600px,75dvh)`、内容 `flex:1` 滚动；正文 mono 12px、`pre-wrap`、不套边框盒子 | 同 |
+| 工具 | `.tool-definitions-panel`：`grid-template-columns: clamp(112px,26%,220px) minmax(0,1fr)`；左栏工具名按钮（38px 行高、选中项 `inset 2px 0 var(--accent)`），右栏「描述 / 参数 / 提示词规则」三段，参数字段两列 `minmax(88px,.75fr) minmax(0,1.5fr)` | 同（少「提示词规则」段：`export_html` 的 tools 只带 `name/description/parameters`，不含 `promptGuidelines`） |
+| 会话 | 三栏 `minmax(360px,1.7fr) minmax(140px,.55fr) minmax(190px,.75fr)`：左栏「会话信息 + 项目信息」（行带复制按钮），中栏消息，右栏 Token 与用量（右对齐、紧凑）；整块 mono 12px | 同（左栏多一组「运行」：模型/思考强度/工具预设） |
+| 外层 | `position:fixed` 下拉，锚在顶栏下沿（`topBarRect.bottom`），`maxHeight: calc(100dvh - top)`，覆盖对话区 | 同语义的绝对定位 + `--topbar-h`；高度由 `ResizeObserver` 校正 |
+
+交互细节：工具列表的选中项与复制按钮是浏览器侧状态（切换不发请求，剪贴板只在浏览器），放在按需加载的 `panels.ts` 里；面板 HTML 全部由桥渲染。
+
 **顶栏面板的数据来源**（2026-09-28 对着 Pi Web 源码核对）：
 
 | 项 | Pi Web 的做法 | 本仓现状 |
