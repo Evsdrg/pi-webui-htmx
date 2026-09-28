@@ -308,3 +308,15 @@ input,select,textarea { background:var(--bg); border:1px solid var(--border); bo
 
 /* 文件查看器：图片居中显示，不超出面板宽度。 */
 .file-image { max-width:100%; height:auto; display:block; margin:0 auto; }
+
+/* 系统提示词与工具定义面板：内容由桥渲染，这里只负责排版。 */
+.system-prompt { margin:0; max-height:min(420px,50dvh); overflow:auto; padding:12px 14px; border:1px solid var(--border); border-radius:8px; background:var(--tool-bg); color:var(--text-muted); font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:12px; line-height:1.6; white-space:pre-wrap; overflow-wrap:anywhere; }
+#tools-body { max-height:min(460px,52dvh); overflow:auto; }
+.tool-def { border:1px solid var(--border); border-radius:8px; padding:9px 11px; margin:8px 0; background:var(--tool-bg); }
+.tool-def h4 { margin:0 0 4px; font-size:13px; font-family:ui-monospace,SFMono-Regular,Menlo,monospace; color:var(--text); }
+.tool-desc { margin:0 0 6px; font-size:12px; color:var(--text-muted); }
+.tool-params { width:100%; border-collapse:collapse; font-size:11px; }
+.tool-params th { text-align:left; color:var(--text-dim); font-weight:400; padding:2px 6px 4px 0; border-bottom:1px solid var(--border); }
+.tool-params td { padding:2px 6px 2px 0; color:var(--text-muted); vertical-align:top; }
+.tool-param-desc td { color:var(--text-dim); padding-bottom:6px; }
+.top-panel h3 { margin:14px 0 6px; font-size:12px; color:var(--text-muted); }

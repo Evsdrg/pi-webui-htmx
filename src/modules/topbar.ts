@@ -43,8 +43,18 @@ export function toggle(host: TopbarHost, target: string, force?: boolean): void 
   if (!open) return;
   if (target === 'panel-info') renderSessionFacts(host);
   if (target === 'panel-title') prefillLocalTitle();
-  if (target === 'panel-system') renderSystemFacts(host);
-  if (target === 'panel-tools') renderToolPresetNote(host);
+  if (target === 'panel-system') {
+    // 提示词由桥渲染（它得先让 Pi 导出一份快照）；这里只负责带上会话 ID 触发刷新。
+    el<HTMLInputElement>('system-session').value = host.sessionId();
+    window.htmx.trigger(document.body, 'system-refresh');
+    renderSystemFacts(host);
+  }
+  if (target === 'panel-tools') {
+    // 工具面板同理：显示的是本次进程实际暴露给模型的工具，不是预设的自述。
+    el<HTMLInputElement>('tools-session').value = host.sessionId();
+    window.htmx.trigger(document.body, 'tools-refresh');
+    renderToolPresetNote(host);
+  }
 }
 
 // renderSessionFacts 是「会话信息」面板：顶栏不再显示会话标题，

@@ -1,0 +1,4 @@
+{{/* 系统提示词面板：显示 Pi 实际组装出来的完整系统提示词，
+     包含基础提示、按工具集重建的规则段，以及扩展/插件追加的部分。 */}}
+{{if .Prompt}}<pre class="system-prompt">{{.Prompt}}</pre>
+{{else}}<p class="empty-note">系统提示词为空（工具已禁用），或工作进程尚未启动。</p>{{end}}

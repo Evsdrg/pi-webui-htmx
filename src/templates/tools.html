@@ -1,0 +1,12 @@
+{{/* 工具定义面板：显示**当前实际暴露给模型**的工具集合。
+     它来自 Pi 的 AgentState.tools，因此会随启动时的工具预设与扩展追加变化。 */}}
+{{if .Tools}}<p class="muted">以下是本次工作进程实际暴露给模型的工具，受启动时的工具预设与已装扩展影响。</p>
+{{range .Tools}}<section class="tool-def" data-tool="{{.Name}}">
+<h4>{{.Name}}</h4>
+{{if .Description}}<p class="tool-desc">{{.Description}}</p>{{end}}
+{{if .Params}}<table class="tool-params"><thead><tr><th>参数</th><th>类型</th><th>必填</th></tr></thead><tbody>
+{{range .Params}}<tr><td><code>{{.Name}}</code></td><td>{{.Type}}</td><td>{{if .Required}}是{{else}}否{{end}}</td></tr>
+{{if .Description}}<tr class="tool-param-desc"><td colspan="3">{{.Description}}</td></tr>{{end}}
+{{end}}</tbody></table>{{else}}<p class="muted">无参数。</p>{{end}}
+</section>{{end}}
+{{else}}<p class="empty-note">没有启用的工具。若刚切换过工具预设，请重新启动工作进程后再查看。</p>{{end}}

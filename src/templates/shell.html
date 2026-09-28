@@ -52,12 +52,15 @@
     </section>
     <section id="panel-system" class="top-panel" hidden>
       <header><strong>系统</strong><button class="icon-btn" type="button" data-action="panel-system-close" aria-label="关闭系统面板">×</button></header>
-      <p class="muted">系统提示词与工具定义只在 Pi 进程内可见，RPC 的 <code>get_state</code> 不返回它们，因此这里不展示猜测值。下面是确实会进入提示词的真实输入。</p>
+      <p class="muted">Pi 的 RPC 没有直接暴露系统提示词的命令；这两个面板的数据来自一次按需导出的会话快照（<code>export_html</code> 会把 Pi 内部的 systemPrompt 与 tools 一并写入）。下面是 Pi 实际组装的完整提示词。</p>
+      <input type="hidden" id="system-session" name="sessionId" value="">
+      <div id="system-body" hx-get="/ui/system" hx-trigger="system-refresh from:body" hx-include="#system-session" hx-swap="innerHTML"><p class="muted">打开时读取。</p></div>
+      <h3>进入提示词的其它输入</h3>
       <dl id="system-facts" class="facts"></dl>
     </section>
     <section id="panel-tools" class="top-panel" hidden>
       <header><strong>工具</strong><button class="icon-btn" type="button" data-action="panel-tools-close" aria-label="关闭工具面板">×</button></header>
-      <p class="muted">RPC 不返回工具定义清单；下面是可控的工具预设，只在启动工作进程时生效。</p>
+      <p class="muted">工具预设只在启动工作进程时生效；下方清单是**本次进程实际暴露给模型**的工具，会随预设与已装扩展变化。</p>
       <form id="tool-preset-form" class="panel-form">
         <label for="tool-preset-select">工具预设</label>
         <select id="tool-preset-select">
@@ -68,6 +71,8 @@
         </select>
         <p class="muted" id="tool-preset-note"></p>
       </form>
+      <input type="hidden" id="tools-session" name="sessionId" value="">
+      <div id="tools-body" hx-get="/ui/tools" hx-trigger="tools-refresh from:body" hx-include="#tools-session" hx-swap="innerHTML"><p class="muted">打开时读取。</p></div>
     </section>
     <div id="connection-notice" class="notice" role="status" hidden></div>
     <div id="history-scope" class="history-scope" hidden><span>仅显示所选位置以前的历史；发送仍沿会话当前分支继续。</span><button class="btn-quiet" type="button" data-action="branch-current">返回最新</button></div>

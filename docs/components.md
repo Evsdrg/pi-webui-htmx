@@ -65,6 +65,17 @@ htmx 侧重 HTML 与后端，因此边界按「数据 → HTML 归桥，瞬时�
 刷新一律走「隐藏输入带参数 + `hx-trigger` 自定义事件 + `hx-include`」，
 前端不再拼 URL、不再用 `createElement` 搭列表。
 
+**顶栏面板的数据来源**（2026-09-28 对着 Pi Web 源码核对）：
+
+| 项 | Pi Web 的做法 | 本仓现状 |
+|---|---|---|
+| 完整历史 | 新标签页打开 `/api/sessions/{id}/export?inline=1`，即 Pi 自己的导出 HTML（内嵌完整 entries，有树导航） | 同语义：`session.export_html` + `/ui/exports/{name}?inline=1`。差别是**需要活动 worker** |
+| 生成标题 | `generateSessionTitle()`：独立一次 one-shot 调用（短系统提示、无工具、同会话模型、最低思考等级、256 token 上限、90 秒超时），再 `setSessionName` | **未实现**：桥会为标题多起一个一次性 Pi 进程，不能借会话本身发请求污染上下文 |
+| 从此处编辑 | 悬停用户消息 → `navigate_tree(targetId)` 改活动叶子 + 把该消息文本放回输入框 | **只做了只读一半**：`leafId` 视图 + 草稿预填。`navigate_tree` 不在 RPC 命令表里（只作为扩展的 `commandContextActions` 暴露），改叶子做不到 |
+| 系统 | `state.systemPrompt`（进程内 SDK） | ✅ `/ui/system`：按需导出一份快照解析 |
+| 工具 | `get_tools`（进程内 SDK）：`getAllTools()` + `getActiveToolNames()` 打 `active` 标记 | ✅ `/ui/tools`：同一份快照的 `tools` 即实际生效集合（RPC 无 `get_tools`） |
+| 右上角会话面板 | `activeTopPanel === "session"`：会话/项目/消息/Token/费用/缓存命中/上下文分段表格 | 部分：已显示上下文用量与基本事实，分段统计待补 |
+
 **已迁完**：`/ui/git-status`、`/ui/search`、`/ui/branch`（2026-09-28）。`branch.ts` 从 7.1 KB / 11 处 DOM 降到 3.4 KB / 1 处。
 
 **同一条判据下还剩这些候选**（尚未迁）：`topbar.ts` 的「会话信息 / 系统」事实表（来自 `session.state` 与 `session.stats`）、

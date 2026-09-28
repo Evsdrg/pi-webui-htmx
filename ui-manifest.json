@@ -17,6 +17,8 @@
     "gitStatus": "templates/git-status.html",
     "search": "templates/search.html",
     "branch": "templates/branch.html",
+    "system": "templates/system.html",
+    "tools": "templates/tools.html",
     "_comment": "相对路径以 src/ 为基准；下划线开头的键是说明，不是模板"
   },
   "routes": {
@@ -34,6 +36,8 @@
     "gitStatus": "/ui/git-status",
     "search": "/ui/search",
     "branch": "/ui/branch",
+    "system": "/ui/system",
+    "tools": "/ui/tools",
     "exports": "/ui/exports/{name}"
   },
   "requiredMethods": [
