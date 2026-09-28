@@ -5,8 +5,11 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"time"
 
 	"pi-bridge-go/internal/protocol"
@@ -62,10 +65,14 @@ const (
 // Entry 是一条历史条目的投影，只含渲染所需字段。
 // 原始 JSONL 记录保留在 Page.Entries 中，需要完整结构时用它。
 type Entry struct {
-	ID     string          `json:"id"`
-	Kind   EntryKind       `json:"kind"`
-	Text   string          `json:"text"`
-	Error  string          `json:"error,omitempty"`
+	ID    string    `json:"id"`
+	Kind  EntryKind `json:"kind"`
+	Text  string    `json:"text"`
+	Error string    `json:"error,omitempty"`
+	// Usage 只对 assistant 条目有意义：Pi 把 token 与费用写在
+	// message.usage 上，与 stopReason 同级。它不参与任何派生计算，
+	// 原样带到投影层，由展示层决定怎么汇总与格式化。
+	Usage  *Usage          `json:"usage,omitempty"`
 	Detail json.RawMessage `json:"detail,omitempty"`
 	// Lazy 列出可延后加载的内容块（思考、工具图片）。
 	// 只带索引不带内容：历史页因此能渲染占位符，而不把大块数据传出去。
@@ -96,6 +103,7 @@ func ProjectEntries(raw []json.RawMessage) []Entry {
 			case "assistant":
 				e.Kind, e.Text = KindAssistant, text
 				e.Error = assistantError(item.Message)
+				e.Usage = parseUsage(item.Message)
 			case "toolResult":
 				e.Kind, e.Text = KindTool, text
 			default:
@@ -461,4 +469,61 @@ func entryKind(b []byte) EntryKind {
 		return KindOther
 	}
 	return entries[0].Kind
+}
+
+// Usage 是一条 assistant 消息的 token 与费用。零值表示「没有记录」，
+// 与「记录为零」是两件事：前者不渲染，后者按 Pi 的规则整段省略。
+type Usage struct {
+	Input      int     `json:"input"`
+	Output     int     `json:"output"`
+	CacheRead  int     `json:"cacheRead"`
+	CacheWrite int     `json:"cacheWrite"`
+	Cost       float64 `json:"cost"`
+}
+
+// parseUsage 从 assistant 消息里取出 usage。字段缺失或形状不符时返回 nil，
+// 不返回全零值——调用方据此区分「没有记录」与「记录为零」。
+func parseUsage(raw json.RawMessage) *Usage {
+	if len(raw) == 0 {
+		return nil
+	}
+	var msg struct {
+		Usage *struct {
+			Input      int `json:"input"`
+			Output     int `json:"output"`
+			CacheRead  int `json:"cacheRead"`
+			CacheWrite int `json:"cacheWrite"`
+			Cost       struct {
+				Total float64 `json:"total"`
+			} `json:"cost"`
+		} `json:"usage"`
+	}
+	if json.Unmarshal(raw, &msg) != nil || msg.Usage == nil {
+		return nil
+	}
+	u := msg.Usage
+	return &Usage{Input: u.Input, Output: u.Output, CacheRead: u.CacheRead, CacheWrite: u.CacheWrite, Cost: u.Cost.Total}
+}
+
+// Summary 按 Pi Web 的格式输出用量摘要：零值整段省略，千分位分隔。
+// 这里的取舍与 Pi Web 的 formatUsage 一致——四个 token 字段与费用各自
+// 独立决定是否出现，因此「只有缓存读取」的记录不会显示成空串。
+func (u Usage) Summary() string {
+	parts := make([]string, 0, 5)
+	if u.Input != 0 {
+		parts = append(parts, fmt.Sprintf("%d in", u.Input))
+	}
+	if u.Output != 0 {
+		parts = append(parts, fmt.Sprintf("%d out", u.Output))
+	}
+	if u.CacheRead != 0 {
+		parts = append(parts, fmt.Sprintf("%d cache R", u.CacheRead))
+	}
+	if u.CacheWrite != 0 {
+		parts = append(parts, fmt.Sprintf("%d cache W", u.CacheWrite))
+	}
+	if u.Cost != 0 {
+		parts = append(parts, "$"+strconv.FormatFloat(u.Cost, 'f', 4, 64))
+	}
+	return strings.Join(parts, " · ")
 }

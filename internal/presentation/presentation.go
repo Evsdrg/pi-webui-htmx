@@ -484,6 +484,9 @@ type Turn struct {
 	// 多个 assistant 条目时，较早条目承载的块会按最后一个条目的 ID 去取，
 	// 既取不回原文，又可能重复出现同一段（B11）。占位符必须自己知道归属。
 	Thinking []ThinkingBlock
+	// Usage 汇总本回合全部 assistant 条目的 token 与费用。
+	// nil 表示这一回合没有任何用量记录（例如压缩边界轮）。
+	Usage *sessions.Usage
 }
 
 // ImageBlock 指向用户条目中的图片块，历史片段不包含 base64 正文。
@@ -549,7 +552,7 @@ func GroupTurns(entries []sessions.Entry) []Turn {
 			// 每个块都带上自己的 entry ID，绝不合并到回合级的单一 ID 上。
 			thinking := thinkingBlocks(e.ID, e.Lazy)
 			if current < 0 {
-				turns = append(turns, Turn{ID: e.ID, EntryIDs: []string{e.ID}, AssistantText: e.Text, Error: e.Error, Thinking: thinking})
+				turns = append(turns, Turn{ID: e.ID, EntryIDs: []string{e.ID}, AssistantText: e.Text, Error: e.Error, Thinking: thinking, Usage: cloneUsage(e.Usage)})
 				continue
 			}
 			turns[current].EntryIDs = append(turns[current].EntryIDs, e.ID)
@@ -563,6 +566,18 @@ func GroupTurns(entries []sessions.Entry) []Turn {
 				turns[current].AssistantText += "\n\n"
 			}
 			turns[current].AssistantText += e.Text
+			if e.Usage != nil {
+				if turns[current].Usage == nil {
+					copy := *e.Usage
+					turns[current].Usage = &copy
+				} else {
+					turns[current].Usage.Input += e.Usage.Input
+					turns[current].Usage.Output += e.Usage.Output
+					turns[current].Usage.CacheRead += e.Usage.CacheRead
+					turns[current].Usage.CacheWrite += e.Usage.CacheWrite
+					turns[current].Usage.Cost += e.Usage.Cost
+				}
+			}
 		case sessions.KindTool:
 			images := lazyIndexes(e.Lazy, "image")
 			if current < 0 {
@@ -1012,4 +1027,13 @@ type NoteData struct {
 // 由服务端决定用户看到什么。
 func (r *Renderer) RenderNote(message string) (string, error) {
 	return r.execute("note.html", NoteData{Message: message})
+}
+
+// cloneUsage 复制用量指针，避免多个回合共享同一个 Entry 上的值。
+func cloneUsage(u *sessions.Usage) *sessions.Usage {
+	if u == nil {
+		return nil
+	}
+	copy := *u
+	return &copy
 }

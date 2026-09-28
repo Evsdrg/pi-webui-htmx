@@ -1,9 +1,12 @@
 package presentation
 
 import (
+	"encoding/json"
 	"os"
 	"strings"
 	"testing"
+
+	"pi-bridge-go/internal/sessions"
 )
 
 // uiDir 是相邻检出的 UI 包。从本包目录往上三层才是工作区根，
@@ -224,4 +227,63 @@ func Test详情数字格式对齐(t *testing.T) {
 	if strings.Contains(html, "66K") {
 		t.Fatalf("千位后缀应为小写 k（与 Pi Web 的 formatCompact 一致）：%s", html)
 	}
+}
+
+// 「编辑并重发」只对用户消息有意义：它把原消息文本放回输入框。
+// 对 assistant 条目提供它没有语义（Pi 的 fork 只接受用户 entry），
+// 而且会把「改写我的提问」误导成「改写 AI 的回答」。
+//
+// 注意回合结构：assistant 条目会并进前一个用户轮，所以「没有 fork 按钮」
+// 只能出现在两种位置——并进用户轮的 assistant 文本（按钮属于该用户轮），
+// 以及没有任何 user 锚点的孤儿 assistant 轮。
+func Test编辑并重发只出现在用户轮(t *testing.T) {
+	renderer := testRenderer(t)
+	html, err := renderer.RenderHistory("s1", sessions.Page{
+		Entries: []json.RawMessage{
+			// 孤儿 assistant 必须排在最前：GroupTurns 的 current 初值是 -1，
+			// 只有此时它才单独成轮；排在用户轮之后会被并进去。
+			json.RawMessage(`{"type":"message","id":"a0","message":{"role":"assistant","content":[{"type":"text","text":"无主回答"}]}}`),
+			json.RawMessage(`{"type":"message","id":"u1","message":{"role":"user","content":[{"type":"text","text":"我的问题"}]}}`),
+			json.RawMessage(`{"type":"message","id":"a1","message":{"role":"assistant","content":[{"type":"text","text":"AI 的回答"}]}}`),
+		},
+	})
+	if err != nil {
+		t.Fatalf("渲染失败：%v", err)
+	}
+	if got := strings.Count(html, `data-action="fork"`); got != 1 {
+		t.Fatalf("只应有一个用户轮带「编辑并重发」，实际 %d：%s", got, html)
+	}
+	// 孤儿 assistant 轮必须只有复制按钮。
+	block := turnBlock(t, html, "a0")
+	if strings.Contains(block, `data-action="fork"`) {
+		t.Fatalf("助手轮不应有「编辑并重发」：%s", block)
+	}
+	if !strings.Contains(block, `data-action="copy-turn"`) {
+		t.Fatalf("助手轮应保留复制按钮：%s", block)
+	}
+	// 用户轮两者都有。
+	block = turnBlock(t, html, "u1")
+	for _, want := range []string{`data-action="fork"`, `data-action="copy-turn"`} {
+		if !strings.Contains(block, want) {
+			t.Fatalf("用户轮应含 %s：%s", want, block)
+		}
+	}
+}
+
+// turnBlock 取出单个回合的 HTML。按 data-turn-id 切分，
+// 直接搜整篇会把别的回合的按钮算进来。
+func turnBlock(t *testing.T, html, id string) string {
+	t.Helper()
+	marker := `data-turn-id="` + id + `"`
+	start := strings.Index(html, marker)
+	if start < 0 {
+		t.Fatalf("找不到回合 %s", id)
+	}
+	rest := html[start+len(marker):]
+	// 切到下一個 <article>：同一个 id 不会出现两次，按原 id 找会把
+	// 后面所有回合都算进来（第一版就是这样，误判助手轮带了 fork 按钮）。
+	if end := strings.Index(rest, "<article"); end >= 0 {
+		return rest[:end]
+	}
+	return rest
 }
