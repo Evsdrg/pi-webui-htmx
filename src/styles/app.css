@@ -51,6 +51,7 @@ kbd { font-size:10px; color:var(--text-dim); margin-left:auto; }
 .topbar > .icon-btn { align-self:center; margin:0 2px; }
 .topbar-tools { display:contents; }
 .topbar-btn { display:flex; align-items:center; justify-content:center; gap:6px; height:100%; padding:0 12px; border:0; border-top:2px solid transparent; border-right:1px solid var(--border); background:none; color:var(--text-muted); font-size:11px; white-space:nowrap; cursor:pointer; transition:color .1s,background .1s; }
+.topbar-btn svg { flex-shrink:0; }
 .topbar-btn:hover:not(:disabled) { color:var(--text); background:var(--bg-hover); }
 .topbar-btn[aria-expanded=true] { color:var(--text); background:var(--bg-selected); border-top-color:var(--accent); }
 .topbar-info { margin-left:auto; font-variant-numeric:tabular-nums; padding:0 10px; }
@@ -212,6 +213,10 @@ input,select,textarea { background:var(--bg); border:1px solid var(--border); bo
   .app-shell[data-mobile-sidebar=open] .sidebar { transform:translateX(0); }
   .sidebar-backdrop:not([hidden]) { display:block; position:fixed; inset:0; background:#0006; z-index:30; border:0; }
   .mobile-only { display:inline-flex; margin-left:auto; }
+  /* 窄屏与 Pi Web 一致：顶栏按钮只留图标，文字进 aria-label/title，
+     否则四个文字按钮会把 390px 的顶栏挤满。 */
+  .topbar-btn { padding:0 9px; gap:0; }
+  .topbar-btn-label { display:none; }
   .topbar { padding:0 6px 0 0; min-height:48px; }
   .topbar-btn { padding:0 8px; font-size:11px; }
   .topbar-info { padding:0 6px; }
