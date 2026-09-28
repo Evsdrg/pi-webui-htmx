@@ -4,7 +4,7 @@ import { mount } from '../helpers/dom';
 // 构造一段带占位按钮的历史片段，形状与桥渲染的一致。
 function fixture(): string {
   return `<article class="turn" data-turn-id="u1">
-  <div class="turn-user"><div class="bubble">问题</div></div>
+  <div class="turn-user"><div class="bubble">问题</div><button class="lazy-block" data-lazy="user-image" data-entry-id="u1" data-block-index="1">查看附带图片</button></div>
   <button class="lazy-block" data-lazy="thinking" data-entry-id="a1" data-block-index="0">查看思考过程</button>
   <div class="turn-assistant"><div class="bubble markdown">回答</div></div>
   <ol><li><span class="step-kind">工具</span><pre class="step-detail">工具输出</pre>
@@ -42,6 +42,20 @@ describe('惰性内容占位符', () => {
     await vi.waitFor(() => expect(document.querySelector('img.lazy-image')).not.toBeNull());
     expect(fetchMock.mock.calls[0][0]).toContain('kind=tool-image');
     expect(document.querySelector('img.lazy-image')!.getAttribute('src')).toMatch(/^blob:/);
+    cleanup();
+  });
+
+  it('点用户附件图片占位符按用户条目取二进制', async () => {
+    const { document, cleanup } = mount(fixture());
+    URL.createObjectURL = vi.fn(() => 'blob:user-image');
+    const fetchMock = vi.fn(async () => new Response(new Uint8Array([137, 80, 78, 71]), { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+    const { wireLazy } = await import('@/modules/lazy');
+    wireLazy(() => 'sess-1');
+    document.querySelector<HTMLButtonElement>('[data-lazy="user-image"]')!.click();
+    await vi.waitFor(() => expect(document.querySelector('img.lazy-image')).not.toBeNull());
+    expect(fetchMock.mock.calls[0][0]).toContain('kind=user-image&entryId=u1&blockIndex=1');
+    expect(document.querySelector('img.lazy-image')!.alt).toBe('用户附带图片');
     cleanup();
   });
 

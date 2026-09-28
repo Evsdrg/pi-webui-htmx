@@ -57,7 +57,7 @@ tests/fixtures/             可控假 Pi
 
 body 的 data-session-id 是当前显示目标，不得在长异步链中反复读它来决定已发起命令的目标。模型 Current 使用 provider/id。URL 中的参数仍要正确编码，不能因为路径已授权就跳过 URL 编码。
 
-**已实现：** 思考占位符各自持有 entryId+blockIndex，不再用整轮的单一 AssistantEntryID 代表不同助手条目。搜索命中也能凭 Turn.EntryIDs 找到 user、assistant、tool 所属的回合；从搜索结果进入时只读展示截至命中条目的历史，并提供返回最新入口，发送仍沿会话当前分支继续。
+**已实现：** 思考占位符各自持有 entryId+blockIndex，不再用整轮的单一 AssistantEntryID 代表不同助手条目。搜索命中也能凭 Turn.EntryIDs 找到 user、assistant、tool 所属的回合；从搜索结果进入时只读展示截至命中条目的历史，并提供返回最新入口，发送仍沿会话当前分支继续。用户消息的图片保留为按 user entryId+blockIndex 惰性加载的占位，不在历史 HTML 中复制 base64；只有 user-image 入口可读该角色。Pi 以 `stopReason:error` 写下空 assistant 时，历史显示固定中文安全摘要，实时区不渲染上游原始错误或请求 ID。
 
 `session.fork` 返回的 `text` 是待编辑的原用户消息，必须预填进新分支草稿；`persisted:false` 表示 Pi 已建立新 ID 但尚未创建 JSONL，此时保留活跃 worker、不请求磁盘历史，并明确提示关闭 worker 的丢失风险。页面刷新时只要 worker 仍在，UI 历史接口的 `204 + X-Session-Unsaved: 1` 让草稿继续可编辑，不能把它当作“会话不存在”。持久化后加载真实历史并移除临时提示；原会话未发送的草稿仍按原会话保存。桥不得伪造 JSONL 来提前持久化。
 
@@ -108,7 +108,7 @@ history、branch、fork_messages、gotoLeaf、扩展对话、文件列表/预览
 | 自动重试 | 无可靠 Pi 读回；unknown 或当前 worker 本地确认值 |
 | 模型选择 | 历史页的 `historicalModel` 仅标记磁盘分支上的历史选择；当前模型以 worker 的 `session.state.model` 为准，`null` 或 `unknown/unknown` 不可作为发送目标。发送前显式选定的模型在启动 worker 后仍必须被应用；失败保留草稿。 |
 
-destination 与 mode 不能互相推导；不因发送一条消息就隐式覆盖队列设置。自动重试不跨会话复用一个 checkbox，不把未勾选当“Pi 确认关闭”。状态区区分连接在线、命令已受理、agent 运行、对话等待与未知结果。
+destination 与 mode 不能互相推导：界面队列选项 `steering` 对应 `session.set_queue_mode.kind="steering"`，而 `session.prompt.streamingBehavior` 必须传 Pi 的 `"steer"`；`followUp` 在两处同名。选择目录与启动 worker 不得覆盖用户尚未发送的草稿、模型与队列意图。自动重试不跨会话复用一个 checkbox，不把未勾选当“Pi 确认关闭”。状态区区分连接在线、命令已受理、agent 运行、对话等待与未知结果。订阅关闭后的“正在核对任务状态”只在仍在核对时显示；核对完成就撤掉，`resync_required` 的缺口警告仍保留。
 
 ## 7. 事件与流式
 

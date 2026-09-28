@@ -10,12 +10,13 @@
 {{range $turn := .Turns}}
 <article class="turn" data-turn-id="{{$turn.ID}}">
   {{range $turn.EntryIDs}}<span hidden data-search-entry-id="{{.}}"></span>{{end}}
-  {{if $turn.UserText}}<div class="turn-user"><div class="bubble">{{$turn.UserText}}</div></div>{{end}}
+  {{if or $turn.UserText $turn.UserImages}}<div class="turn-user"><div class="bubble">{{$turn.UserText}}{{range $turn.UserImages}}<div class="user-image-entry"><button class="lazy-block" data-lazy="user-image" data-entry-id="{{.EntryID}}" data-block-index="{{.BlockIndex}}">查看附带图片</button></div>{{end}}</div></div>{{end}}
   {{if $turn.HasProcess}}<details class="turn-process"><summary>查看过程 · {{len $turn.Steps}} 步</summary><ol>
     {{range $step := $turn.Steps}}<li><span class="step-kind">{{$step.Kind}}</span><pre class="step-detail">{{$step.Detail}}</pre>{{if and $step.EntryID $step.Images}}{{range $step.Images}}<button class="lazy-block" data-lazy="tool-image" data-entry-id="{{$step.EntryID}}" data-block-index="{{.}}">查看工具图片</button>{{end}}{{end}}</li>{{end}}
   </ol></details>{{end}}
   {{if $turn.Thinking}}{{range $turn.Thinking}}<button class="lazy-block" data-lazy="thinking" data-entry-id="{{.EntryID}}" data-block-index="{{.BlockIndex}}">查看思考过程</button>{{end}}{{end}}
   {{if $turn.AssistantText}}<div class="turn-assistant"><span class="role" role="img" aria-label="Pi 助手">π</span><div class="bubble markdown">{{$turn.AssistantText}}</div></div>{{end}}
+  {{if $turn.Error}}<div class="turn-error">{{$turn.Error}}</div>{{end}}
   <div class="turn-actions"><button class="icon-btn" data-action="copy-turn" aria-label="复制此回合内容">复制</button>{{if $turn.UserText}}<button class="icon-btn" data-action="fork" data-entry-id="{{$turn.ID}}">从此处分支</button>{{end}}</div>
 </article>
 {{end}}

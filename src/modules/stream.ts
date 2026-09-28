@@ -61,7 +61,7 @@ export class LiveView {
     }
     if (event.type === 'message_end') {
       const message = record(event.message);
-      if (message.stopReason === 'error' && message.errorMessage) this.append(`\n${text(message.errorMessage)}`);
+      if (message.stopReason === 'error') this.append('\n[模型请求失败；完成后查看历史中的错误提示]');
     }
   }
   finish(): void { this.flush(); delete this.root.dataset.running; }

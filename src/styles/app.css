@@ -70,6 +70,8 @@ kbd { font-size:10px; color:var(--text-dim); margin-left:auto; }
 .turn.search-target { outline:2px solid var(--accent); outline-offset:4px; scroll-margin-block:28px; }
 .turn-user { display:flex; justify-content:flex-end; margin-bottom:20px; }
 .turn-user .bubble { max-width:90%; background:var(--user-bg); padding:12px 16px; border-radius:12px 12px 3px 12px; }
+.user-image-entry { margin-top:8px; }
+.turn-error { margin:8px 0 12px 24px; padding:7px 11px; border-left:3px solid #d13c45; background:var(--bg-subtle); color:var(--text); font-size:12px; }
 .turn-assistant { display:flex; gap:12px; }
 .role { color:var(--accent); font-weight:650; padding-top:2px; font-size:12px; }
 .bubble { min-width:0; white-space:pre-wrap; overflow-wrap:anywhere; }

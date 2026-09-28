@@ -1,5 +1,6 @@
 import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest';
 import { Workbench } from '@/modules/workbench';
+import { readDraft, saveDraft } from '@/modules/layout';
 
 const fake = vi.hoisted(() => ({ request: vi.fn(), instance: undefined as EventTarget | undefined }));
 vi.mock('@/modules/bridge', () => ({
@@ -90,6 +91,22 @@ describe('扩展对话交互回归',()=>{
 });
 
 describe('排队与压缩设置', () => {
+  it('用户选择队列种类后不被旧 Pi 模式覆盖', async () => {
+    const steering = document.querySelector<HTMLInputElement>('input[name="queue-kind"][value="steering"]')!;
+    const followUp = document.querySelector<HTMLInputElement>('input[name="queue-kind"][value="followUp"]')!;
+    fake.request.mockImplementation(async (method: string) => {
+      if (method === 'session.state') return { sessionId: 's1', isStreaming: false, followUpMode: 'one-at-a-time' };
+      if (method === 'session.thinking_levels') return ['off', 'high'];
+      return {};
+    });
+    await workbench.refreshState();
+    expect(followUp.checked).toBe(true);
+    steering.click();
+    expect(steering.checked).toBe(true);
+    await workbench.refreshState();
+    expect(steering.checked).toBe(true);
+  });
+
   it('运行中发送前先把模式同步给桥，再带 streamingBehavior 提交', async () => {
     // send() 读的是 this.run，所以要先让界面认定在运行。
     busy = true; emit('agent_start');
@@ -229,6 +246,37 @@ describe('中止提示跟随真正的运行状态', () => {
   });
 });
 
+describe('订阅关闭提示只保留到状态核对结束', () => {
+  function closeSubscription(): void {
+    fake.instance!.dispatchEvent(new CustomEvent('message', { detail: {
+      version: 1, kind: 'control', event: 'bridge.subscription_closed', sessionId: 's1', data: { resyncRequired: true },
+    } }));
+  }
+
+  it('先收到关闭控制帧，随后 settled 撤掉临时提示', async () => {
+    busy = true; emit('agent_start'); closeSubscription();
+    expect(document.getElementById('connection-notice')?.textContent).toContain('正在核对任务状态');
+    busy = false; emit('agent_settled');
+    expect(document.getElementById('session-state')?.textContent).toBe('就绪');
+    expect(document.getElementById('connection-notice')?.textContent).toBe('');
+  });
+
+  it('关闭控制帧后仅靠状态回读变空闲也撤掉提示', async () => {
+    busy = true; emit('agent_start');
+    // 状态在桥侧已结束，但前端尚未收到 agent_settled。
+    busy = false; closeSubscription();
+    await vi.waitFor(() => expect(document.getElementById('session-state')?.textContent).toBe('就绪'));
+    expect(document.getElementById('connection-notice')?.textContent).toBe('');
+  });
+
+  it('不会抹掉需要用户核对的补发窗口失效提示', () => {
+    busy = true; emit('agent_start');
+    document.getElementById('connection-notice')!.textContent = '实时事件已超出补发窗口，已重新读取历史';
+    busy = false; emit('agent_settled');
+    expect(document.getElementById('connection-notice')?.textContent).toContain('补发窗口');
+  });
+});
+
 describe('附件事件中的 FileList 必须同步快照', () => {
   const image = () => new File([new Uint8Array([0x89, 0x50, 0x4e, 0x47, 1])], 'fixture.png', { type: 'image/png' });
   const expiringList = (file: File, alive: () => boolean): FileList => ({
@@ -318,6 +366,7 @@ it('默认排队模式用协议一致的 steering，不是 steer', async () => {
   (document.getElementById('prompt') as HTMLTextAreaElement).value = '插入一条';
   document.querySelector<HTMLFormElement>('#composer')!.requestSubmit();
   await vi.waitFor(() => expect(fake.request).toHaveBeenCalledWith('session.set_queue_mode', 's1', { kind: 'steering', mode: 'all' }, 30_000));
+  expect(fake.request).toHaveBeenCalledWith('session.prompt', 's1', { text: '插入一条', streamingBehavior: 'steer' }, 30_000);
   // 旧值必须不再出现。
   for (const call of vi.mocked(fake.request).mock.calls) {
     expect((call[2] as { kind?: string } | undefined)?.kind).not.toBe('steer');
@@ -376,6 +425,27 @@ describe('搜索结果归属与定位', () => {
 });
 
 describe('新会话首次发送', () => {
+  it('首次选择目录不丢掉已输入的草稿和模型', () => {
+    saveDraft('new:', ''); saveDraft('new:/fixture', '');
+    workbench.selectSession('', '', '新会话', false);
+    const model = document.getElementById('model-select') as HTMLSelectElement;
+    const option = new Option('DeepSeek Flash', 'CPA-Responses/deepseek-flash');
+    option.dataset.provider = 'CPA-Responses'; option.dataset.modelId = 'deepseek-flash';
+    model.add(option); model.value = option.value;
+    model.dispatchEvent(new Event('change', { bubbles: true }));
+    const input = document.getElementById('prompt') as HTMLTextAreaElement;
+    input.value = '选择目录前写下的草稿';
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    document.querySelector<HTMLInputElement>('input[name="queue-kind"][value="followUp"]')!.click();
+    (document.getElementById('cwd-input') as HTMLInputElement).value = '/fixture';
+    document.getElementById('new-form')!.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+    expect(input.value).toBe('选择目录前写下的草稿');
+    expect(model.value).toBe('CPA-Responses/deepseek-flash');
+    expect(document.querySelector<HTMLInputElement>('input[name="queue-kind"]:checked')?.value).toBe('followUp');
+    expect(readDraft('new:/fixture')).toBe(input.value);
+    saveDraft('new:', ''); saveDraft('new:/fixture', '');
+  });
+
   it('Pi 分配的新 ID 属于同一发送事务，先设置模型再提交消息', async () => {
     fake.request.mockImplementation(async (method: string) => {
       if (method === 'session.start') return { sessionId: 's-new', cwd: '/fixture' };

@@ -1,4 +1,4 @@
-// 惰性内容：思考文本与工具结果图片。
+// 惰性内容：思考文本、用户附件与工具结果图片。
 //
 // 历史页只渲染占位按钮，正文等点击才向桥取。这样每一页翻迁的带宽
 // 只花在用户当时正在看的内容上——一条带 8 KB 思考 + 20 KB base64
@@ -41,13 +41,13 @@ async function load(button: HTMLButtonElement, sessionId: string): Promise<void>
       button.replaceWith(box);
       return;
     }
-    if (kind === 'tool-image') {
-      const response = await fetch(`/ui/sessions/${encodeURIComponent(sessionId)}/lazy?kind=tool-image&entryId=${encodeURIComponent(entryId)}&blockIndex=${encodeURIComponent(blockIndex)}`);
+    if (kind === 'tool-image' || kind === 'user-image') {
+      const response = await fetch(`/ui/sessions/${encodeURIComponent(sessionId)}/lazy?kind=${kind}&entryId=${encodeURIComponent(entryId)}&blockIndex=${encodeURIComponent(blockIndex)}`);
       if (!response.ok) throw new Error(await errorText(response));
       const blob = await response.blob();
       const image = document.createElement('img');
       image.className = 'lazy-image';
-      image.alt = '工具结果图片';
+      image.alt = kind === 'user-image' ? '用户附带图片' : '工具结果图片';
       const url = URL.createObjectURL(blob);
       image.src = url;
       // blob URL 必须显式释放：否则长会话里每次展开图片都留一份，

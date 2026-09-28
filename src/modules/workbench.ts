@@ -10,6 +10,7 @@ import type { Scope } from './scope';
 
 const DIALOGS = new Set(['select','confirm','input','editor']);
 const ABORT_PENDING_NOTICE = '已请求中止，等待 Pi 完成清理。';
+const SUBSCRIPTION_CHECK_NOTICE = '实时订阅已结束，正在核对任务状态。';
 interface State { sessionId: string; sessionName?: string; isStreaming: boolean; isCompacting: boolean; thinkingLevel?: string; model?: { id: string; provider: string; name: string } | null; pendingMessageCount?: number; steeringMode?: string; followUpMode?: string; autoCompactionEnabled?: boolean }
 type ModelChoice = { provider: string; id: string; name: string };
 
@@ -49,6 +50,7 @@ export class Workbench {
    * 不是 Pi 的实时状态——界面必须这样说，不能让未勾选看起来像「已确认关闭」。
    */
   private autoRetryBySession = new Map<string, boolean>();
+  private queueChoiceBySession = new Map<string, 'steering' | 'followUp'>();
   private statuses = new Map<string, string>();
   private widgets = new Map<string, { lines: string[]; placement: string }>();
   private commands: { name: string; description: string }[] = [];
@@ -98,7 +100,24 @@ export class Workbench {
     }, { signal });
     el('new-form').addEventListener('submit', (event) => {
       event.preventDefault(); const cwd = el<HTMLInputElement>('cwd-input').value.trim();
-      if (!cwd) return; this.selectSession('', cwd, '新会话'); closeDialog('new-dialog'); el('prompt').focus();
+      if (!cwd) return;
+      const firstDirectory = !this.sessionId && !this.cwd;
+      const input = el<HTMLTextAreaElement>('prompt');
+      const draft = firstDirectory ? input.value : '';
+      const model = firstDirectory ? this.selectedModel() : undefined;
+      const queueChoice = firstDirectory ? this.queueChoiceBySession.get(this.queueChoiceKey()) : undefined;
+      this.selectSession('', cwd, '新会话');
+      if (firstDirectory) {
+        input.value = draft;
+        if (model) { this.modelIntent = model; this.renderModel(); }
+        if (queueChoice) {
+          this.queueChoiceBySession.set(this.queueChoiceKey(), queueChoice);
+          const radio = document.querySelector<HTMLInputElement>(`input[name="queue-kind"][value="${queueChoice}"]`);
+          if (radio) radio.checked = true;
+        }
+        this.saveCurrentDraft(); saveDraft('new:', ''); this.updateControls();
+      }
+      closeDialog('new-dialog'); input.focus();
     }, { signal });
     el('session-search').addEventListener('input', () => {
       clearTimeout(this.searchTimer); const query = el<HTMLInputElement>('session-search').value.trim();
@@ -125,6 +144,13 @@ export class Workbench {
       void this.command('session.set_auto_retry', { enabled }).then(() => this.notify(enabled ? '已开启自动重试。' : '已关闭自动重试。')).catch((err) => { this.fail(err); el<HTMLInputElement>('auto-retry').checked = !enabled; });
     }, { signal });
     el('thinking-select').addEventListener('change', () => { const level = el<HTMLSelectElement>('thinking-select').value; void this.command('session.set_thinking', { level }).catch((err) => this.fail(err)); }, { signal });
+    for (const option of document.querySelectorAll<HTMLInputElement>('input[name="queue-kind"]')) {
+      option.addEventListener('change', () => {
+        if (!option.checked) return;
+        this.queueChoiceBySession.set(this.queueChoiceKey(), option.value === 'followUp' ? 'followUp' : 'steering');
+        this.updateControls();
+      }, { signal });
+    }
     document.addEventListener('click', (event) => this.onClick(event), { signal });
     document.addEventListener('keydown', (event) => { if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'k') { event.preventDefault(); void this.newSession().catch((err) => this.fail(err)); } }, { signal });
     window.addEventListener('popstate', () => this.selectSession(new URL(location.href).searchParams.get('session') ?? '', '', '会话', false), { signal });
@@ -234,11 +260,13 @@ export class Workbench {
     if (!scope.alive()) throw new Error('会话已切换，本条消息未发送；内容已保留，请手动重发。');
     let activeScope = scope;
     if (!oldId) {
+      const queueChoice = this.queueChoiceBySession.get(this.queueChoiceKey());
       // Pi 分配新 ID 是本次发送自身的身份迁移；旧 scope 失效后必须
       // 交给新代次继续执行，不能误判为用户主动切换会话。
       this.scope.switchTo(info.sessionId);
       activeScope = this.scope.current$();
       this.sessionId = info.sessionId; this.cwd = info.cwd;
+      if (queueChoice) this.queueChoiceBySession.set(info.sessionId, queueChoice);
       document.body.dataset.sessionId = this.sessionId;
       history.replaceState(null, '', `/?session=${encodeURIComponent(info.sessionId)}`);
     }
@@ -302,6 +330,7 @@ export class Workbench {
     if (state.sessionName) el('session-title').textContent = state.sessionName;
     this.applyStateModel(state);
     if (wasBusy && !busy) await this.settled();
+    else if (!busy && el('connection-notice').textContent === SUBSCRIPTION_CHECK_NOTICE) this.notice('');
     await this.refreshThinking(state.thinkingLevel);
     this.refreshQueueState(state);
     await this.refreshDialogs();
@@ -314,6 +343,9 @@ export class Workbench {
     this.searchFocus = entryId ? { sessionId: id, entryId, epoch: this.scope.epoch } : undefined;
     if (previous && this.bridge.connected) void this.request('session.unsubscribe', undefined, previous).catch(() => {});
     this.sessionId = id; this.subscribed = ''; this.cwd = cwd; this.diskSession = !!id && persisted; this.cursor.reset(); this.live.clear();
+    const choice = this.queueChoiceBySession.get(this.queueChoiceKey()) ?? 'steering';
+    const queueRadio = document.querySelector<HTMLInputElement>(`input[name="queue-kind"][value="${choice}"]`);
+    if (queueRadio) queueRadio.checked = true;
     this.currentModel = undefined; this.historicalModel = undefined; this.modelIntent = undefined; this.modelUnavailable = false;
     const modelSelect = el<HTMLSelectElement>('model-select');
     modelSelect.querySelectorAll('option[data-runtime-model]').forEach((option) => option.remove());
@@ -395,7 +427,7 @@ export class Workbench {
     if (message.kind === 'control') {
       if (message.event === 'bridge.subscription_closed') {
         this.subscribed = '';
-        if (this.run !== 'idle') this.notice('实时订阅已结束，正在核对任务状态。');
+        if (this.run !== 'idle') this.notice(SUBSCRIPTION_CHECK_NOTICE);
         if (this.bridge.connected) void this.reconcile().catch((err) => this.fail(err));
       }
       return;
@@ -413,7 +445,7 @@ export class Workbench {
   }
   private async settled(): Promise<void> {
     this.setRun('idle'); this.live.finish(); this.diskSession = true;
-    if (el('connection-notice').textContent === ABORT_PENDING_NOTICE) this.notice('');
+    if ([ABORT_PENDING_NOTICE, SUBSCRIPTION_CHECK_NOTICE].includes(el('connection-notice').textContent ?? '')) this.notice('');
     const id = this.sessionId;
     await this.refreshHistory();
     if (id !== this.sessionId) return;
@@ -694,11 +726,9 @@ export class Workbench {
     const steering = document.querySelector<HTMLInputElement>('input[name="queue-kind"][value="steering"]');
     const followUp = document.querySelector<HTMLInputElement>('input[name="queue-kind"][value="followUp"]');
     if (steering && followUp) {
-      // 回读必须看 followUpMode：选「完成后追加」时桥调的是 set_follow_up_mode，
-      // 改的是 followUpMode，steeringMode 仍是 all。旧实现读 steeringMode，
-      // 于是用户明明选了 followUp，界面却弹回 steering（U11）。
-      // followUpMode 缺失时（Pi 未回该字段）不猜，保持当前选择。
-      if (state.followUpMode !== undefined) {
+      const chosen = this.queueChoiceBySession.get(this.queueChoiceKey());
+      if (chosen) (chosen === 'followUp' ? followUp : steering).checked = true;
+      else if (state.followUpMode !== undefined) {
         (state.followUpMode === 'one-at-a-time' ? followUp : steering).checked = true;
       }
     }
@@ -799,6 +829,7 @@ export class Workbench {
 
   private clearAttachments(): void { this.attachments = []; this.renderAttachments(); }
   private draftKey(): string { return this.sessionId || `new:${this.cwd}`; }
+  private queueChoiceKey(): string { return this.sessionId || `new:${this.cwd}`; }
   private saveCurrentDraft(): void { saveDraft(this.draftKey(), el<HTMLTextAreaElement>('prompt').value); }
   private setConnection(online: boolean): void { el('conn-state').textContent = online ? '已连接' : '未连接'; el('conn-state').className = `state state-${online ? 'online' : 'offline'}`; if (online) this.notice(''); this.updateControls(); }
   private setRun(state: RunState): void { this.run = state; el('session-state').textContent = {idle:'就绪',running:'运行中',retrying:'重试中',compacting:'压缩中',waiting_input:'等待确认'}[state]; this.updateControls(); }
@@ -811,7 +842,8 @@ export class Workbench {
   private async sendQueued(text: string, kind: 'steering' | 'followUp', images: Attachment[], scope: Scope): Promise<void> {
     // 排队模式与消息都必须发往发起时那个会话，不能跟着 this.sessionId 漂移。
     await this.request('session.set_queue_mode', { kind, mode: kind === 'steering' ? 'all' : 'one-at-a-time' }, scope.sessionId);
-    await this.request('session.prompt', { text, streamingBehavior: kind, ...(images.length ? { images: toWire(images) } : {}) }, scope.sessionId);
+    // 队列配置叫 steering，Pi prompt 的 streamingBehavior 则叫 steer。
+    await this.request('session.prompt', { text, streamingBehavior: kind === 'steering' ? 'steer' : 'followUp', ...(images.length ? { images: toWire(images) } : {}) }, scope.sessionId);
   }
   private notice(message: string): void { el('connection-notice').textContent = message; el('connection-notice').hidden = !message; }
   private notify(message: string, kind = 'info'): void { void import('./toast').then(({showToast}) => showToast(message, kind === 'error' ? 'error' : kind === 'warning' ? 'warning' : 'info')); }
