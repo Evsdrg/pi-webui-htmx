@@ -55,9 +55,37 @@ Vite 处理 JS/CSS；Tailwind 扫描 `src/templates`；Go 在运行时加载模�
 - 历史测量“页面+首次数据 brotli 34.9 KB”属于另一构建/资源集合，不能拿来当本次首屏新测量。也不把旧 Pi Web 资源数字当公平的持续性能对照。
 - 不能为通过预算而只改数字；先检查静态依赖误入首屏、重复模块和不必要初始化，再决定范围。本轮核查过一次全量 CSS（154 个 class/id 选择器）没有真正的死代码：未在源码里直接出现的 `.toast-*`、`.state-*`、`.diff-*` 分别是模板字符串、条件拼接和桥的 Go 模板生成的类名。
 
+## 3.1 职责边界：谁负责生成 HTML
+
+htmx 侧重 HTML 与后端，因此边界按「数据 → HTML 归桥，瞬时交互留浏览器」划：
+
+**归桥（服务端渲染片段 + `hx-*` 属性）**——凡是「把已有数据结构排版成 HTML」都属此类。
+片段端点：`/ui/sessions`、`/ui/search`、`/ui/sessions/{id}/history`、`/ui/models`、`/ui/packages`、
+`/ui/files`、`/ui/git-status`、`/ui/diff`、`/ui/branch`、`/ui/extensions/*`。
+刷新一律走「隐藏输入带参数 + `hx-trigger` 自定义事件 + `hx-include`」，
+前端不再拼 URL、不再用 `createElement` 搭列表。
+
+**留浏览器**——只有转瞬即逝的交互状态，没有服务端等价物：
+按键驱动的补全与斜杠菜单、滚动锚定、WS 流式增量、textarea 自适应高度、
+xterm 终端、未上传的本地附件缩略图、markdown/高亮/KaTeX/ANSI 渲染管线、toast 通知。
+判据是「这份数据在服务端有没有权威版本」：有就该渲染成 HTML 传下来。
+
+这条边界是 2026-09-28 复核时收紧的：`git-status`、`search`、`branch` 三处原先在前端
+用 `createElement` 重建，与桥的模板重复，且截断文案、层级缩进这类规则要维护两份。
+
+一处刻意的例外：`/ui/file-text` 用 `fetch` 而不是 `hx-get`——它返回的是文件**内容**
+（可能很大），直接交给渲染管线（高亮/ANSI）而不是交换进 DOM。
+
 ## 4. 安全与 CSP
 
 当前入口关闭 htmx eval/script 标签执行和 history cache；Go 模板转义、DOMPurify 净化另行负责。构建器看到 htmx 内部 eval 的警告不等于应用已走该路径，也不能因此取消内容净化。
+
+深色主题是**深蓝基调**（`src/styles/tokens.css` 的 `[data-theme=dark]`，并镜像到 `prefers-color-scheme: dark`）：
+底色 `#0f1720` / 面板 `#16202b` / 悬停 `#1e2b39` / 选中 `#24344a` / 边框 `#2c3d4f` / 正文 `#e4edf6` / 强调 `#7fb3e8`。
+改色时保持相对关系即可：面板比背景亮一档、悬停再亮一档、强调色在深底上仍有正文级对比度。
+
+模板里的缩进类布局不能用内联 `style`：片段受 CSP 约束，契约检查会拦住含 `{{ }}` 的 `style` 属性。
+分支树的层级缩进因此用 `aria-level` + 静态 CSS 规则表达（上限 11 级，与 `internal/presentation` 的 `branchMaxLevel` 一致）。
 
 目标 CSP 必须从真实资产/行为验证：同源脚本；blob/data 图片仅用于批准的图片路径；字体同源；连接限制到实际服务来源，不泛放所有 ws/wss。KaTeX、Mermaid、xterm 运行时样式的需要单独核验。**不再把旧文档的一段严格 CSP 当作当前已部署且可用的策略。**
 

@@ -1,0 +1,3 @@
+{{/* 搜索结果：标题、目录与命中片段都由桥渲染，前端只负责触发与定位。 */}}
+{{if .Results}}{{range .Results}}<a class="session-item" href="/?session={{.SessionID}}&amp;leafId={{.EntryID}}" data-session="{{.SessionID}}" data-entry-id="{{.EntryID}}"><span class="session-title">{{.Title}}</span>{{if .Cwd}}<span class="session-meta">{{.Cwd}}</span>{{end}}{{if .Snippet}}<span class="search-snippet">{{.Snippet}}</span>{{end}}</a>{{end}}
+{{else}}<p class="empty-note">{{if .Query}}没有匹配「{{.Query}}」的会话内容。{{else}}输入关键词搜索会话内容。{{end}}</p>{{end}}

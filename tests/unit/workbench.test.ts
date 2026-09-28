@@ -37,6 +37,7 @@ function mount() {
  <section id=panel-title hidden><button data-action=panel-title-close></button><form id=title-form><input id=local-title></form></section><section id=panel-system hidden><button data-action=panel-system-close></button><dl id=system-facts></dl></section><section id=panel-tools hidden><button data-action=panel-tools-close></button><form id=tool-preset-form><select id=tool-preset-select><option value=chat-only>仅聊天</option><option value=read-only>只读</option><option value=default selected>默认</option><option value=full>完整</option></select><p id=tool-preset-note></p></form></section>
  <dialog id=models-dialog><p id=models-status></p><textarea id=models-editor></textarea><input id=discover-url><input id=discover-api><input id=discover-key><textarea id=discover-headers></textarea><div id=discover-result></div><button data-action=models-edit>编辑</button><button data-action=models-reload>重读</button><button data-action=models-save>保存</button><button data-action=models-discover>发现</button><button data-action=models-test>测试</button></dialog>`;
  for(const id of ['live','conn-state','connection-notice','session-state','session-title','session-cwd','session-list','session-count','turns','older-slot','chat-scroll','welcome','command-menu','ext-status-slot','ext-widgets-before','ext-widgets-after','ext-dialog-slot','usage','toast-root']) {const node=document.createElement('div');node.id=id;document.body.append(node);}
+{const node=document.createElement('input');node.type='hidden';node.id='search-query';document.body.append(node);}
  document.body.dataset.sessionId='s1';
  Object.defineProperty(HTMLDialogElement.prototype,'showModal',{configurable:true,value:function(this:HTMLDialogElement){this.open=true;this.dataset.modal='true';}});
  Object.defineProperty(HTMLDialogElement.prototype,'close',{configurable:true,value:function(this:HTMLDialogElement){this.open=false;delete this.dataset.modal;}});
@@ -401,11 +402,17 @@ describe('搜索结果归属与定位', () => {
     const search = document.getElementById('session-search') as HTMLInputElement;
     search.value = 'Project overview';
     fake.request.mockImplementation(async (method: string) => {
-      if (method === 'sessions.search') return { matches: [{ sessionId: 's2', entryId: 'a1', title: 'Sample workspace review', cwd: '/fixture', snippet: 'Project overview' }] };
       if (method === 'worker.list') return [];
       return {};
     });
     await workbench.search('Project overview');
+    // 搜索结果由桥渲染（/ui/search）并换进 #session-list；
+    // 这里按片段落地的时序把服务端输出放进 DOM。
+    expect(document.getElementById('search-query')!.getAttribute('value')).toBe('Project overview');
+    document.getElementById('session-list')!.innerHTML =
+      '<a class="session-item" href="/?session=s2&amp;leafId=a1" data-session="s2" data-entry-id="a1" data-title="Sample workspace review" data-cwd="/fixture">' +
+      '<span class="session-title">Sample workspace review</span><span class="session-meta">/fixture</span><span class="search-snippet">Project overview</span></a>';
+    document.dispatchEvent(new CustomEvent('htmx:afterSwap', { detail: { target: document.getElementById('session-list') } }));
     const link = document.querySelector<HTMLAnchorElement>('#session-list [data-session="s2"]')!;
     expect(link.textContent).toContain('Sample workspace review');
     expect(link.dataset.title).toBe('Sample workspace review');

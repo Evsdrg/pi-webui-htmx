@@ -6,7 +6,8 @@
 :root { color-scheme: light; --sidebar-width: 260px; --panel-width: 390px; }
 [data-theme=dark] { color-scheme: dark; }
 @media (prefers-color-scheme: dark) {
-  :root:not([data-theme]) { color-scheme: dark; --bg:#1a1a1a; --bg-panel:#242424; --bg-hover:#2e2e2e; --bg-selected:#383838; --border:#454545; --text:#e8e8e8; --text-muted:#b7b7b7; --text-dim:#a4a4a4; --accent:#a4c2f4; --accent-hover:#c3d8fa; --accent-contrast:#182234; --user-bg:#292929; --assistant-bg:#1a1a1a; --tool-bg:#222222; --bg-subtle:#ffffff0a; }
+  /* 与 [data-theme=dark] 同一套深蓝基调；未显式选主题时生效。 */
+  :root:not([data-theme]) { color-scheme: dark; --bg:#0f1720; --bg-panel:#16202b; --bg-hover:#1e2b39; --bg-selected:#24344a; --border:#2c3d4f; --text:#e4edf6; --text-muted:#a8bccf; --text-dim:#8ea3b8; --accent:#7fb3e8; --accent-hover:#a3caf2; --accent-contrast:#0d1620; --user-bg:#1a2836; --assistant-bg:#0f1720; --tool-bg:#16202b; --bg-subtle:#94bee814; }
 }
 * { box-sizing:border-box; scrollbar-width:thin; scrollbar-color:var(--border) transparent; }
 html,body { margin:0; height:100%; overflow:hidden; }
@@ -269,6 +270,20 @@ input,select,textarea { background:var(--bg); border:1px solid var(--border); bo
 .branch-dialog { max-width:680px; width:calc(100vw - 48px); }
 .branch-tree { max-height:280px; overflow:auto; border:1px solid var(--border); border-radius:8px; padding:8px 10px; font-size:12px; }
 .branch-node { display:flex; align-items:center; gap:6px; padding:2px 0; }
+/* 缩进用 aria-level 驱动，不用内联样式：片段模板受 CSP 约束，
+   运行时写入的 style 属性会被契约检查拦住（并会强制放开 style-src）。
+   层级在 11 封顶，与 internal/presentation 的 branchMaxLevel 一致：
+   再深的线性链继续缩进只会把内容挤出屏幕。 */
+.branch-node[aria-level="2"] { padding-left:14px; }
+.branch-node[aria-level="3"] { padding-left:28px; }
+.branch-node[aria-level="4"] { padding-left:42px; }
+.branch-node[aria-level="5"] { padding-left:56px; }
+.branch-node[aria-level="6"] { padding-left:70px; }
+.branch-node[aria-level="7"] { padding-left:84px; }
+.branch-node[aria-level="8"] { padding-left:98px; }
+.branch-node[aria-level="9"] { padding-left:112px; }
+.branch-node[aria-level="10"] { padding-left:126px; }
+.branch-node[aria-level="11"] { padding-left:140px; }
 .branch-node .branch-kind { color:var(--text-muted); font-size:11px; min-width:52px; }
 .branch-node .branch-text { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .branch-leaf { margin-left:auto; font-size:11px; color:var(--accent); background:transparent; border:1px solid var(--border); border-radius:6px; padding:1px 6px; cursor:pointer; }

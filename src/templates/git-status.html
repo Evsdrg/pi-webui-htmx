@@ -1,0 +1,5 @@
+{{/* Git 变更列表：状态行与文件列表都由桥渲染，前端只触发刷新。
+     截断时必须说明「列表已截断」，不能宣称工作区干净——否则用户会
+     以为没有未提交改动。 */}}
+<p>{{.Branch}} · {{if .Truncated}}{{.Shown}} 个已列出变更（列表已截断）{{else if .Clean}}工作区干净{{else}}{{.Shown}} 个变更{{end}}</p>
+{{range .Files}}<div class="file-item">{{.Status}}  {{.Path}}</div>{{else}}<p class="empty-note">没有可显示的变更。</p>{{end}}

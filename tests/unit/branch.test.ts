@@ -1,122 +1,110 @@
 import { describe, expect, it, vi } from 'vitest';
 import { mount } from '../helpers/dom';
 
-// 构造一棵最小会话树：根 → u1 → a1；u1 另有一个分支 a1b。
-const tree = {
-  tree: [
-    { entry: { type: 'message', id: 'u1', message: { role: 'user', content: '第一个问题' } }, children: [
-      { entry: { type: 'message', id: 'a1', message: { role: 'assistant', content: '回答一' } }, children: [] },
-      { entry: { type: 'message', id: 'a1b', message: { role: 'assistant', content: '分支回答' } }, children: [] },
-    ] },
-  ],
-  leafId: 'a1',
-};
-const forks = { messages: [{ entryId: 'u1', text: '第一个问题' }] };
-
+// 分支树现在由桥渲染（Go 侧 internal/presentation 的 BranchRows 有对应
+// 单测，含 20 万层深树不爆栈的反例）。这个文件只测留在浏览器里的那一层：
+// 带会话 ID 触发片段、把点击翻译成 goto/fork、把失败写进状态行。
 describe('分支导航', () => {
-  it('渲染树并标注分叉点与当前叶子', async () => {
+  function setup() {
     const { document, cleanup } = mount(`
       <dialog id=branch-dialog></dialog><p id=branch-status></p>
-      <section id=branch-tree></section><section id=branch-forks></section>`);
-    const requests: string[] = [];
-    const bridge = {
-      request: vi.fn(async (method: string, sessionId: string) => { requests.push(method + '@' + sessionId); return method === 'session.tree' ? tree : forks; }),
-      sessionId: 's1',
-    } as never;
+      <input id=branch-session type=hidden>
+      <div id=branch-body></div>`);
+    const triggers: string[] = [];
+    (window as unknown as { htmx: unknown }).htmx = {
+      trigger: (_el: Element, name: string) => triggers.push(name),
+      ajax: vi.fn(async () => {}),
+    };
+    return { document, cleanup, triggers };
+  }
+
+  it('打开时带会话 ID 触发一次片段刷新', async () => {
+    const { document, cleanup, triggers } = setup();
+    const bridge = {} as never;
     const { BranchNavigator } = await import('@/modules/branch');
-    const nav = new BranchNavigator(bridge, () => {}, () => {}, () => {}, () => 's1');
-    await nav.open();
-    // 必须带会话 ID：桥对 session.* 命令要求它，空串会被当成未启动拒绝。
-    expect(requests).toEqual(['session.tree@s1', 'session.fork_messages@s1']);
-    const rows = document.querySelectorAll('.branch-node');
-    expect(rows).toHaveLength(3);
-    // 分叉点标注子节点数。
-    expect(rows[0].querySelector('.branch-kind')!.textContent).toContain('⑂2');
-    // 当前叶子标 aria-current 且文案为「当前」。
-    const current = document.querySelector('.branch-leaf[aria-current="true"]');
-    expect(current).not.toBeNull();
-    expect(current!.textContent).toBe('当前');
-    expect(document.getElementById('branch-status')!.textContent).toBe('');
+    await new BranchNavigator(bridge, () => {}, () => {}, () => {}, () => 's1').open();
+    // 会话 ID 必须写进 hx-include 的隐藏输入：桥对 session.* 要求它，
+    // 空串会被当成「未启动」拒绝。
+    expect(document.getElementById('branch-session')!.value).toBe('s1');
+    expect(triggers).toEqual(['branch-refresh']);
     cleanup();
   });
 
   it('点击叶子把 leafId 交给跳转回调', async () => {
-    const { document, cleanup } = mount(`
-      <dialog id=branch-dialog></dialog><p id=branch-status></p>
-      <section id=branch-tree></section><section id=branch-forks></section>`);
-    const bridge = { request: vi.fn(async (m: string) => (m === 'session.tree' ? tree : forks)), sessionId: 's1' } as never;
+    const { document, cleanup } = setup();
     const goto = vi.fn();
     const { BranchNavigator } = await import('@/modules/branch');
-    await new BranchNavigator(bridge, () => {}, goto, () => {}, () => 's1').open();
-    // 第二个叶子（分支回答）不是当前叶子，点它应跳转。
-    const leaves = document.querySelectorAll<HTMLButtonElement>('.branch-leaf');
-    leaves[2].click();
+    const nav = new BranchNavigator({} as never, () => {}, goto, () => {}, () => 's1');
+    document.getElementById('branch-body')!.innerHTML =
+      '<button class=branch-leaf data-branch-goto="a1b">查看</button>';
+    const button = document.querySelector<HTMLButtonElement>('[data-branch-goto]')!;
+    button.click();
+    // 点击走模块的委托；事件冒泡到 document，由 workbench 的 onClick 转进来。
+    expect(nav.handleClick({ target: button, preventDefault() {} } as unknown as Event)).toBe(true);
     expect(goto).toHaveBeenCalledWith('a1b');
     cleanup();
   });
 
-  it('同时接受 {messages:[]} 与裸数组两种 fork 形状', async () => {
-    const wrapped = { messages: [{ entryId: 'u1', text: '第一个问题' }] };
-    const bare = [{ entryId: 'u1', text: '第一个问题' }];
-    for (const payload of [wrapped, bare]) {
-      const { document, cleanup } = mount(`<dialog id=branch-dialog></dialog><p id=branch-status></p><section id=branch-tree></section><section id=branch-forks></section>`);
-      const bridge = { request: vi.fn(async (m: string) => (m === 'session.tree' ? { tree: [], leafId: null } : payload)) } as never;
-      const { BranchNavigator } = await import('@/modules/branch');
-      await new BranchNavigator(bridge, () => {}, () => {}, () => {}, () => 's1').open();
-      expect(document.querySelectorAll('.branch-fork-row')).toHaveLength(1);
-      cleanup();
-    }
-  });
-
-  it('空树与空 fork 列表都有可读提示', async () => {
-    const { document, cleanup } = mount(`
-      <dialog id=branch-dialog></dialog><p id=branch-status></p>
-      <section id=branch-tree></section><section id=branch-forks></section>`);
-    const bridge = { request: vi.fn(async () => ({ tree: [], leafId: null, messages: [] })) } as never;
+  it('点击「分支」把 entryId 交给 fork 回调', async () => {
+    const { document, cleanup } = setup();
+    const fork = vi.fn();
     const { BranchNavigator } = await import('@/modules/branch');
-    await new BranchNavigator(bridge, () => {}, () => {}, () => {}, () => 's1').open();
-    expect(document.querySelector('#branch-tree')!.textContent).toContain('还没有分支结构');
-    expect(document.querySelector('#branch-forks')!.textContent).toContain('没有可分支的用户消息');
+    const nav = new BranchNavigator({} as never, () => {}, () => {}, fork, () => 's1');
+    document.getElementById('branch-body')!.innerHTML =
+      '<div class=branch-fork-row><button data-branch-fork="u1">分支</button></div>';
+    const button = document.querySelector<HTMLButtonElement>('[data-branch-fork]')!;
+    nav.handleClick({ target: button, preventDefault() {} } as unknown as Event);
+    expect(fork).toHaveBeenCalledWith('u1');
     cleanup();
   });
 
-  it('读取失败时在状态行显示原因，不抛异常', async () => {
-    const { document, cleanup } = mount(`
-      <dialog id=branch-dialog></dialog><p id=branch-status></p>
-      <section id=branch-tree></section><section id=branch-forks></section>`);
+  it('面板外的点击不被吞掉', async () => {
+    const { document, cleanup } = setup();
+    const { BranchNavigator } = await import('@/modules/branch');
+    const nav = new BranchNavigator({} as never, () => {}, () => {}, () => {}, () => 's1');
+    const outside = document.createElement('button');
+    document.body.append(outside);
+    expect(nav.handleClick({ target: outside, preventDefault() {} } as unknown as Event)).toBe(false);
+    cleanup();
+  });
+
+  it('片段请求失败时把桥给的原因写进状态行', async () => {
+    const { document, cleanup } = setup();
     const onError = vi.fn();
-    const bridge = { request: vi.fn(async () => { throw new Error('Pi 拒绝了 get_tree'); }) } as never;
     const { BranchNavigator } = await import('@/modules/branch');
-    await new BranchNavigator(bridge, onError, () => {}, () => {}, () => 's1').open();
+    const nav = new BranchNavigator({} as never, onError, () => {}, () => {}, () => 's1');
+    await nav.refresh();
+    const xhr = {
+      status: 409,
+      responseURL: 'http://localhost/ui/branch?sessionId=s1',
+      responseText: JSON.stringify({ error: { message: 'Pi 拒绝：会话未启动' } }),
+    } as unknown as XMLHttpRequest;
+    document.dispatchEvent(new CustomEvent('htmx:responseError', { detail: { xhr } }));
     expect(onError).toHaveBeenCalled();
-    expect(document.getElementById('branch-status')!.textContent).toContain('Pi 拒绝了');
+    expect(document.getElementById('branch-status')!.textContent).toContain('会话未启动');
     cleanup();
   });
-});
 
-describe('深树不爆栈', () => {
-  // U08：flatten 以前用递归，长线性会话的分支树会在摊平阶段就抛
-  // Maximum call stack size exceeded，整个分支面板打不开。
-  // 直接测 flatten：绕开 DOM，才能把深度推到可靠溢出的量级。
-  it('20 万层线性树可摊平且结果完整', async () => {
-    const { flatten } = await import('@/modules/branch');
-    let node: Record<string, unknown> = { entry: { type: 'message', id: 'leaf', message: { role: 'assistant', content: '末端' } }, children: [] };
-    for (let i = 0; i < 200_000; i++) {
-      node = { entry: { type: 'message', id: `n${i}`, message: { role: 'user', content: 'x' } }, children: [node] };
-    }
-    const rows = flatten([node as never]);
-    // 200001 = 200000 层 + 末端叶子。
-    expect(rows).toHaveLength(200_001);
-    // 深度必须逐层递增，且根为 0。
-    expect(rows[0]?.depth).toBe(0);
-    expect(rows[200_000]?.depth).toBe(200_000);
+  it('提示留到片段落地；落在其它目标上不会误清', async () => {
+    const { document, cleanup } = setup();
+    const { BranchNavigator } = await import('@/modules/branch');
+    const nav = new BranchNavigator({} as never, () => {}, () => {}, () => {}, () => 's1');
+    await nav.refresh();
+    expect(document.getElementById('branch-status')!.textContent).toBe('正在读取会话树…');
+    // 别的片段（比如历史）交换不该清掉分支的提示。
+    document.dispatchEvent(new CustomEvent('htmx:afterSwap', { detail: { target: document.createElement('div') } }));
+    expect(document.getElementById('branch-status')!.textContent).toBe('正在读取会话树…');
+    document.dispatchEvent(new CustomEvent('htmx:afterSwap', { detail: { target: document.getElementById('branch-body') } }));
+    expect(document.getElementById('branch-status')!.textContent).toBe('');
+    cleanup();
   });
 
-  it('多根树保持前序', async () => {
-    const { flatten } = await import('@/modules/branch');
-    const leaf = (id: string): Record<string, unknown> => ({ entry: { type: 'message', id, message: { role: 'user', content: id } }, children: [] });
-    const rows = flatten([leaf('a') as never, leaf('b') as never]);
-    expect(rows.map((r) => (r.node as { entry: { id: string } }).entry.id)).toEqual(['a', 'b']);
-    expect(rows.every((r) => r.depth === 0)).toBe(true);
+  it('打开时先清掉上一次的残留提示', async () => {
+    const { document, cleanup } = setup();
+    document.getElementById('branch-status')!.textContent = '上一次的错误';
+    const { BranchNavigator } = await import('@/modules/branch');
+    await new BranchNavigator({} as never, () => {}, () => {}, () => {}, () => 's1').open();
+    expect(document.getElementById('branch-status')!.textContent).toBe('正在读取会话树…');
+    cleanup();
   });
 });

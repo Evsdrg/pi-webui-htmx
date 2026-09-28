@@ -17,7 +17,7 @@
     <button class="btn new-session" data-action="new"><span aria-hidden="true">＋</span> 新建会话 <kbd>⌘ K</kbd></button>
     <label class="search-box"><span aria-hidden="true">⌕</span><input id="session-search" type="search" placeholder="搜索会话" aria-label="搜索会话" autocomplete="off"></label>
     <div class="section-label">会话 <span id="session-count"></span><button class="icon-btn" data-action="refresh-sessions" aria-label="刷新会话">↻</button></div>
-    <nav id="session-list" aria-label="会话列表" hx-get="/ui/sessions" hx-trigger="sessions-refresh from:body" hx-swap="innerHTML"><p class="empty-note">连接后显示本地会话</p></nav>
+    <input type="hidden" id="search-query" name="q" value=""><span hidden hx-get="/ui/search" hx-trigger="search-refresh from:body" hx-target="#session-list" hx-swap="innerHTML" hx-include="#search-query"></span><nav id="session-list" aria-label="会话列表" hx-get="/ui/sessions" hx-trigger="sessions-refresh from:body" hx-swap="innerHTML"><p class="empty-note">连接后显示本地会话</p></nav>
     <footer class="sidebar-footer"><button class="btn btn-quiet" data-action="settings">⚙ 设置与扩展</button><span id="conn-state" class="state state-offline" role="status">连接中</span></footer>
   </aside>
   <div class="sidebar-resizer" role="separator" aria-label="调整侧栏宽度" aria-orientation="vertical" tabindex="0"></div>
@@ -110,8 +110,8 @@
   <aside id="workspace-panel" class="workspace-panel" aria-label="工作区面板" hidden>
     <header class="panel-header"><strong>工作区</strong><button class="icon-btn" data-action="workspace" aria-label="关闭工作区面板">×</button></header>
     <div class="panel-tabs" role="tablist" aria-label="工作区内容"><button role="tab" id="tab-files" aria-controls="panel-files" aria-selected="true" data-panel="files">文件</button><button role="tab" id="tab-git" aria-controls="panel-git" aria-selected="false" data-panel="git">变更</button><button role="tab" id="tab-terminal" aria-controls="panel-terminal" aria-selected="false" data-panel="terminal">终端</button></div>
-    <section id="panel-files" role="tabpanel" aria-labelledby="tab-files"><div class="path-bar"><button class="icon-btn" data-action="files-up" aria-label="上一级目录">↑</button><span id="file-path"></span><button class="icon-btn" data-action="files-refresh" aria-label="刷新文件">↻</button></div><div id="file-list"></div><div id="file-preview" hidden><div class="panel-header"><strong id="file-name"></strong><button class="icon-btn" data-action="file-close" aria-label="关闭文件">×</button></div><pre><code id="file-content"></code></pre></div></section>
-    <section id="panel-git" role="tabpanel" aria-labelledby="tab-git" hidden><button class="btn" data-action="git-refresh">刷新变更</button><div id="git-status"></div><div id="git-diff"></div></section>
+    <section id="panel-files" role="tabpanel" aria-labelledby="tab-files"><input type="hidden" id="files-path" name="path" value=""><div class="path-bar"><button class="icon-btn" data-action="files-up" aria-label="上一级目录">↑</button><span id="file-path"></span><button class="icon-btn" data-action="files-refresh" aria-label="刷新文件">↻</button></div><div id="file-list" hx-get="/ui/files" hx-trigger="files-refresh from:body" hx-include="#files-path" hx-swap="innerHTML"></div><div id="file-preview" hidden><div class="panel-header"><strong id="file-name"></strong><button class="icon-btn" data-action="file-close" aria-label="关闭文件">×</button></div><pre><code id="file-content"></code></pre></div></section>
+    <section id="panel-git" role="tabpanel" aria-labelledby="tab-git" hidden><input type="hidden" id="git-path" name="path" value=""><input type="hidden" id="diff-path" name="path" value=""><button class="btn" data-action="git-refresh">刷新变更</button><div id="git-status" hx-get="/ui/git-status" hx-trigger="git-status-refresh from:body" hx-include="#git-path" hx-swap="innerHTML"></div><div id="git-diff" hx-get="/ui/diff" hx-trigger="diff-refresh from:body" hx-include="#diff-path" hx-swap="innerHTML"></div></section>
     <section id="panel-terminal" role="tabpanel" aria-labelledby="tab-terminal" hidden><div class="terminal-actions"><button class="btn" data-action="terminal-open">启动终端</button><button class="btn" data-action="terminal-close">关闭终端</button></div><p id="terminal-notice" class="empty-note">终端仅在启动后占用资源。</p><div id="terminal-mount"></div></section>
   </aside>
 </div>
@@ -134,11 +134,14 @@
 <p class="muted">选择任一叶子查看该分支的历史；「从此处分支」会基于所选条目创建新会话。</p>
 <div class="config-actions"><button class="btn" data-action="branch-refresh">刷新</button><button class="btn" data-action="branch-current">回到当前分支</button></div>
 <p id="branch-status" class="form-error" role="alert"></p>
+<input type="hidden" id="branch-session" name="sessionId" value="">
+<div id="branch-body" hx-get="/ui/branch" hx-trigger="branch-refresh from:body" hx-include="#branch-session" hx-swap="innerHTML" hx-disabled-elt="this">
 <section id="branch-tree" class="branch-tree" aria-live="polite"></section>
 <h3>可分支的用户消息</h3>
 <section id="branch-forks" class="branch-forks" aria-live="polite"></section>
+</div>
 </dialog>
-<div id="ext-dialog-slot"></div>
+<input type="hidden" id="dialogs-session" name="sessionId" value=""><div id="ext-dialog-slot" hx-get="/ui/extensions/dialogs" hx-trigger="dialogs-refresh from:body" hx-include="#dialogs-session" hx-swap="innerHTML"></div>
 <div id="toast-root" class="toast-root" aria-live="polite" aria-atomic="false"></div>
 {{range .JS}}<script type="module" src="/assets/{{.}}"></script>{{end}}
 </body>

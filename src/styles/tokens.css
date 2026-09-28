@@ -48,23 +48,26 @@
   --chat-content-font-size: var(--chat-font-size);
 }
 
-/* dark */
+/* dark：深蓝基调。
+   底色取偏蓝的深灰蓝而不是中性灰，正文用带一点蓝的亮色，
+   强调色用偏冷的浅蓝。改色时保持这几个相对关系：面板比背景亮一档、
+   悬停再亮一档、强调色在深底上仍能达到正文级对比度。 */
 [data-theme="dark"] {
-  --bg: #1a1a1a;
-  --bg-panel: #242424;
-  --bg-hover: #2e2e2e;
-  --bg-selected: #383838;
-  --border: #454545;
-  --text: #e8e8e8;
-  --text-muted: #b7b7b7;
-  --text-dim: #a4a4a4;
-  --accent: #a4c2f4;
-  --accent-hover: #c3d8fa;
-  --accent-contrast: #182234;
-  --user-bg: #292929;
-  --assistant-bg: #1a1a1a;
-  --tool-bg: #222222;
-  --bg-subtle: rgba(255, 255, 255, 0.04);
+  --bg: #0f1720;
+  --bg-panel: #16202b;
+  --bg-hover: #1e2b39;
+  --bg-selected: #24344a;
+  --border: #2c3d4f;
+  --text: #e4edf6;
+  --text-muted: #a8bccf;
+  --text-dim: #8ea3b8;
+  --accent: #7fb3e8;
+  --accent-hover: #a3caf2;
+  --accent-contrast: #0d1620;
+  --user-bg: #1a2836;
+  --assistant-bg: #0f1720;
+  --tool-bg: #16202b;
+  --bg-subtle: rgba(148, 190, 232, 0.08);
   --chat-content-max-width: var(--chat-max-width);
   --chat-content-font-size: var(--chat-font-size);
 }

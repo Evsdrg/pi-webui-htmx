@@ -30,6 +30,26 @@ export class Workspace {
     bridge.addEventListener('disconnected', () => {
       this.terminal?.disconnected();
     }, { signal: this.abort.signal });
+    // 迟到响应的守卫必须在 htmx 交换之前：等到 beforeSwap 之后才检查，
+    // 旧目录/旧 diff 已经换进 DOM 了（U06）。
+    //
+    // 判定用「响应里的 path 是不是当前正在看的那一个」，而不是调用时的
+    // 代次快照：声明式请求发起后 JS 不再持有它的句柄，而比对当前路径
+    // 既能拦住迟到的旧响应，也不会拦错 A→B→A 这种回到同一目录的正常响应。
+    document.addEventListener('htmx:beforeSwap', (event) => {
+      const detail = (event as CustomEvent).detail as { target?: HTMLElement; xhr?: XMLHttpRequest; shouldSwap: boolean } | undefined;
+      const target = detail?.target?.id;
+      if (detail?.xhr && (target === 'file-list' || target === 'git-diff' || target === 'git-status')) {
+        const requested = new URL(detail.xhr.responseURL, location.href).searchParams.get('path') ?? '';
+        const current = target === 'file-list' ? this.path : this.cwd;
+        if (requested !== current) detail.shouldSwap = false;
+      }
+    }, { signal: this.abort.signal });
+    // 目录标签跟着实际落地的内容走：被守卫拒绝的响应不会触发 afterSwap。
+    document.addEventListener('htmx:afterSwap', (event) => {
+      const target = (event as CustomEvent).detail?.target as HTMLElement | undefined;
+      if (target?.id === 'file-list') el('file-path').textContent = this.path;
+    }, { signal: this.abort.signal });
   }
   setCwd(cwd: string): void {
     if (cwd === this.cwd) return;
@@ -43,20 +63,11 @@ export class Workspace {
     else el('file-list').textContent = '桥没有配置可浏览的工作区。';
   }
   private async list(path: string): Promise<void> {
-    const generation = ++this.generation; this.path = path;
-    const url = `/ui/files?path=${encodeURIComponent(path)}`;
-    // 守卫必须在 htmx 交换之前：beforeSwap 之后才检查，
-    // 旧目录的内容已经换进 DOM 了（U06）。htmx 的 beforeSwap 可以被
-    // 外部监听器置 shouldSwap=false，这里用它拒绝迟到响应。
-    const reject = (event: Event): void => {
-      const detail = (event as CustomEvent).detail as { xhr?: XMLHttpRequest; shouldSwap: boolean } | undefined;
-      if (generation !== this.generation && detail) detail.shouldSwap = false;
-    };
-    document.addEventListener('htmx:beforeSwap', reject, { once: true });
-    await window.htmx.ajax('get', url, { target: '#file-list', swap: 'innerHTML' });
-    document.removeEventListener('htmx:beforeSwap', reject);
-    if (generation !== this.generation) return;
-    el('file-path').textContent = path;
+    // 更新动作全部交给 htmx：参数放在隐藏输入里，由 hx-include 带上去，
+    // JS 不再拼 URL，也不再直接写 #file-list。
+    this.generation++; this.path = path;
+    el<HTMLInputElement>('files-path').value = path;
+    window.htmx.trigger(document.body, 'files-refresh');
   }
   // read 按文件类型分流：图片走 <img>，其余走文本。
   //
@@ -135,15 +146,19 @@ export class Workspace {
     } catch (error) { console.warn('ANSI 渲染失败', error); }
   }
   private async git(): Promise<void> {
+    // 「变更」面板的两块内容都是「数据 → HTML」，全部交给桥渲染：
+    // 状态行与文件列表走 /ui/git-status，差异走 /ui/diff。
+    // 之前这里用 createElement 拼状态列表，截断文案因此重复了一份，
+    // 而且和桥的服务端渲染容易走偏。
     const cwd = this.cwd;
-    const status = await this.bridge.request<{branch:string;clean:boolean;truncated?:boolean;files:{path:string;status:string}[]}>('git.status', '', { path: cwd });
-    if (cwd !== this.cwd) return;
-    const list = el('git-status'); list.replaceChildren();
-    const truncated = status.truncated === true || status.files.length > 500;
-    const label = truncated ? `${Math.min(status.files.length, 500)} 个已列出变更（列表已截断）` : status.clean ? '工作区干净' : `${status.files.length} 个变更`;
-    const heading = document.createElement('p'); heading.textContent = `${status.branch} · ${label}`; list.append(heading);
-    for (const file of status.files.slice(0, 500)) { const row = document.createElement('div'); row.className = 'file-item'; row.textContent = `${file.status}  ${file.path}`; list.append(row); }
-    await window.htmx.ajax('get', `/ui/diff?path=${encodeURIComponent(cwd)}`, { target: '#git-diff', swap: 'innerHTML' });
+    el<HTMLInputElement>('git-path').value = cwd;
+    window.htmx.trigger(document.body, 'git-status-refresh');
+    await this.diff(cwd);
+  }
+  // diff 是「变更」面板的更新动作：同样走 htmx 声明式请求。
+  private async diff(cwd: string): Promise<void> {
+    el<HTMLInputElement>('diff-path').value = cwd;
+    window.htmx.trigger(document.body, 'diff-refresh');
   }
   private async action(action: string): Promise<void> {
     switch (action) {

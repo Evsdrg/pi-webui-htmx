@@ -76,6 +76,8 @@ export class Workbench {
   private historicalModel: { provider: string; id: string } | undefined;
   private modelIntent: { provider: string; id: string } | undefined;
   private modelUnavailable = false;
+  /** searchQuery 记录当前搜索词，用于在片段落地后判断结果是否已过期。 */
+  private searchQuery = '';
   /** contextWindow 记录当前模型的上下文窗口，供「系统」面板显示。 */
   private contextWindow = 0;
 
@@ -212,7 +214,7 @@ export class Workbench {
     document.addEventListener('htmx:afterSwap', (event) => {
       const detail = (event as CustomEvent).detail as { target?: HTMLElement; xhr?: XMLHttpRequest };
       const target = detail?.target;
-      if (target?.id === 'session-list') this.markSelected();
+      if (target?.id === 'session-list') { this.markSelected(); this.finishSearch(); }
       if (target?.id === 'ext-dialog-slot') this.openExtensionDialog();
       if (target?.id === 'turns') {
         const url = detail.xhr?.responseURL ? new URL(detail.xhr.responseURL) : undefined;
@@ -546,7 +548,11 @@ export class Workbench {
     try { await window.htmx.ajax('get', `/ui/sessions/${encodeURIComponent(id)}/history${query}`, { target: '#turns', swap: 'innerHTML' }); }
     finally { if (this.historyLoading === id) this.historyLoading = ''; }
   }
-  private refreshSessions(): void { window.htmx.trigger(document.body, 'sessions-refresh'); }
+  private refreshSessions(): void {
+    // 搜索结果与普通列表共用 #session-list；刷新列表说明已经退出搜索。
+    this.searchQuery = '';
+    window.htmx.trigger(document.body, 'sessions-refresh');
+  }
   private markSelected(): void {
     for (const link of document.querySelectorAll<HTMLElement>('[data-session]')) {
       link.classList.toggle('selected', link.dataset.session === this.sessionId);
@@ -556,24 +562,16 @@ export class Workbench {
   }
   private async search(query: string): Promise<void> {
     if (!query) { this.refreshSessions(); return; }
-    try {
-      const result = await this.request<unknown>('sessions.search', { query, limit: 50 }, '');
-      if (el<HTMLInputElement>('session-search').value.trim() !== query) return;
-      const data = record(result); const rows = Array.isArray(result) ? result : (Array.isArray(data.matches) ? data.matches : []);
-      const list = el('session-list'); list.replaceChildren();
-      for (const value of rows) {
-        const item = record(value); const id = text(item.sessionId) || text(item.id); if (!id) continue;
-        const title = text(item.title) || '未命名会话';
-        const cwd = text(item.cwd); const entryId = text(item.entryId);
-        const link = document.createElement('a'); link.className = 'session-item'; link.href = `/?session=${encodeURIComponent(id)}`;
-        link.dataset.session = id; link.dataset.title = title; link.dataset.cwd = cwd; link.dataset.entryId = entryId;
-        const heading = document.createElement('span'); heading.className = 'session-title'; heading.textContent = title;
-        const path = document.createElement('span'); path.className = 'session-meta'; path.textContent = cwd;
-        const excerpt = document.createElement('span'); excerpt.className = 'search-snippet'; excerpt.textContent = text(item.snippet);
-        link.append(heading, path, excerpt); list.append(link);
-      }
-      if (!list.children.length) list.textContent = '没有匹配的会话';
-    } catch (error) { this.fail(error); }
+    // 搜索结果是「数据 → HTML」，交给桥渲染（/ui/search），
+    // 前端只用 htmx 把片段换进去。之前在这里用 createElement 搭
+    // 列表，等于把后端的排版抄了一份。
+    this.searchQuery = query;
+    el<HTMLInputElement>('search-query').value = query;
+    window.htmx.trigger(document.body, 'search-refresh');
+  }
+  /** finishSearch 在片段落地后清理：输入框已被改写说明结果不再对应当前词。 */
+  private finishSearch(): void {
+    if (el<HTMLInputElement>('session-search').value.trim() !== this.searchQuery) this.refreshSessions();
   }
   private async refreshThinking(selected?: string): Promise<void> {
     if (!this.sessionId) return; const id = this.sessionId;
@@ -738,6 +736,9 @@ export class Workbench {
   }
   private onClick(event: MouseEvent): void {
     const target = event.target as Element;
+    // 分支面板的两个动作由片段里的 data-branch-* 声明，交给模块翻译；
+    // 模块可能还没加载（面板未开过），所以先问一句。
+    if (this.branch?.handleClick(event)) return;
     const link = target.closest<HTMLElement>('[data-session]');
     if (link) { event.preventDefault(); this.selectSession(link.dataset.session ?? '', link.dataset.cwd ?? '', link.dataset.title ?? '会话', true, link.dataset.entryId ?? ''); return; }
     const command = target.closest<HTMLElement>('[data-command]');

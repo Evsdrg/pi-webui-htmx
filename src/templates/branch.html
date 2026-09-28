@@ -1,0 +1,5 @@
+{{/* 分支树：结构、缩进、当前叶子标记都由桥渲染。
+     前端只保留「点击 → 切换到该叶子 / 发起分支」这层瞬时交互。 */}}
+<section id="branch-tree" class="branch-tree" role="tree" aria-live="polite">{{if .Rows}}{{range .Rows}}<div class="branch-node" role="treeitem" aria-level="{{.Level}}"><span class="branch-kind">{{.Kind}}</span><span class="branch-text" title="{{.Summary}}">{{.Summary}}</span>{{if .EntryID}}<button type="button" class="branch-leaf" data-branch-goto="{{.EntryID}}" aria-current="{{if .Current}}true{{else}}false{{end}}">{{if .Current}}当前{{else}}查看{{end}}</button>{{end}}</div>{{end}}{{else}}<p class="branch-empty">此会话还没有分支结构。</p>{{end}}</section>
+<h3>可分支的用户消息</h3>
+<section id="branch-forks" class="branch-forks" aria-live="polite">{{if .Forks}}{{range .Forks}}<div class="branch-fork-row"><span title="{{.Text}}">{{.Text}}</span><button type="button" class="btn" data-branch-fork="{{.EntryID}}"{{if not .EntryID}} disabled{{end}}>分支</button></div>{{end}}{{else}}<p class="branch-empty">没有可分支的用户消息。</p>{{end}}</section>
