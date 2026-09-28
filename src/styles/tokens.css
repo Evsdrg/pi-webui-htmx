@@ -1,45 +1,20 @@
-/* 设计令牌：移植自 Pi Web 的 app/globals.css。
-   Pi Web 用 Tailwind v4 的 @theme 把这些变量暴露成工具类，
-   我们同样处理，因此类名写法与 Pi Web 一致。
+/* 设计令牌：主题的唯一来源。
+   每个主题只在这里定义一次调色板；app.css 不写任何主题色值
+   （曾经在 prefers-color-scheme 块里重复过一份深色值，改一处忘一处
+   就会让「跟随系统」与「显式选深色」不一致）。
 
-   这里是主题的唯一来源：每个主题只在本文件里定义一次调色板。
-   app.css 不再写任何主题色值（曾经在 prefers-color-scheme 块里重复过
-   一份深色值，改一处忘一处就会让「跟随系统」与「显式选深色」不一致）。 */
+   不使用 Tailwind 的 @theme 映射：模板里没有工具类，整条链路只用到
+   preflight 复位，我们自己的样式一律用 var(--bg) 这类原始令牌。
 
-@theme {
-  --color-bg: var(--bg);
-  --color-bg-panel: var(--bg-panel);
-  --color-bg-hover: var(--bg-hover);
-  --color-bg-selected: var(--bg-selected);
-  --color-border: var(--border);
-  --color-text: var(--text);
-  --color-text-muted: var(--text-muted);
-  --color-text-dim: var(--text-dim);
-  --color-accent: var(--accent);
-  --color-accent-hover: var(--accent-hover);
-  --color-accent-contrast: var(--accent-contrast);
-  --color-user-bg: var(--user-bg);
-  --color-assistant-bg: var(--assistant-bg);
-  --color-tool-bg: var(--tool-bg);
-  --color-bg-subtle: var(--bg-subtle);
-  --color-danger: var(--danger);
-  --color-success: var(--success);
-}
+   改动色值后请跑 `pnpm check`：scripts/check-contrast.mjs 会把
+   每个文字色与两种底色逐对核算对比度。 */
 
-/* 布局常量 */
-@theme {
-  --chat-max-width: 820px;
-  --chat-font-size: 14px;
-  --sidebar-width: 260px;
-}
 
 /* 与具体主题无关的派生令牌。
    自定义属性的值在用到时才代入，因此这里引用 var(--accent) 就够了：
    主题换了 --accent，--accent-soft 自动跟着换，不必每个主题写一遍。 */
 :root {
   --accent-soft: color-mix(in srgb, var(--accent) 14%, transparent);
-  --chat-content-max-width: var(--chat-max-width);
-  --chat-content-font-size: var(--chat-font-size);
 }
 
 /* light */

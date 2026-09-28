@@ -181,6 +181,16 @@ xterm 终端、未上传的本地附件缩略图、markdown/高亮/KaTeX/ANSI �
 
 **分节**：`app.css` 按「基础与主题 → 外壳布局 → 对话区 → 消息流 → 输入栏 → 通用控件 → 工作区面板 → …」顺序分节，响应式与无障碍放在末尾（覆盖规则靠后更确定，不必逐条核对顺序）。重排时用脚本核对过「选择器 → 声明」集合前后完全一致。
 
+**清掉的死代码**（逐项在源码/模板/桥的 Go 模板里确认过）：
+
+- `.panel-heading`、`.top-panel header strong`：面板标题行已随 Pi Web 对齐移除。
+- `.facts` 系列：旧的 `#system-facts` 列表已被桥渲染的片段取代。
+- Tailwind 的 `@theme` 颜色映射：模板里没有任何工具类，这条链路只用 preflight 复位；映射只会多写 19 个用不到的变量。
+- 第二个 `@theme`（布局常量）与 `app.css` 的 `:root` 重复；`--chat-content-*` 两个令牌无人使用。
+- `.session-action-grid` 有两份互相冲突的声明（grid 版被后面的 flex 版整体覆盖）。
+
+`!important` 只剩 5 处：`[hidden]`、移动端 `visibility:visible`、以及 reduced-motion 的三条重置——都是必须压过内联或更高特异性的场合。
+
 **顺带修掉的无障碍问题**（axe 从 2 项 violation 降到 0）：
 
 - `page-has-heading-one`：侧栏品牌名从 `<strong>` 升为 `<h1>`（视觉不变）。
