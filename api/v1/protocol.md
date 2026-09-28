@@ -193,7 +193,13 @@ htmx 换入的片段端点（`/ui/sessions`、`/ui/search`、`/ui/models`、`/ui
 GET /ui/stats?sessionId=ID
 ```
 
-布局对齐 Pi Web 的会话弹层：三栏网格（左栏「会话 / 项目 / 运行」事实，中栏消息计数，右栏 Token 与用量右对齐）。会话文件、会话 ID、工作目录、Git 分支带复制按钮（`data-copy-value` / `data-copy-label` 由桥输出，浏览器只负责写入剪贴板）。工具面板同样是两栏（左栏工具名列表、右栏该工具的定义），所有工具的详情一次性渲染进 HTML，切换选中项只是显示/隐藏，不再发请求——否则每点一次都要重新导出一次会话快照。
+布局对齐 Pi Web 的会话弹层：三栏网格 `minmax(300px,1.7fr) minmax(140px,.55fr) minmax(190px,.75fr)`（≤760px 收成单栏），左栏「会话信息 / 项目信息」，中栏消息计数，右栏 Token 与用量右对齐（对应 Pi Web 的 compact 变体，行距 4px）。行文案与 Pi Web 的 zh-CN 文案逐条对齐：会话文件 / ID / 项目目录 / Git 分支 / 用户 / 助手 / 工具调用 / 工具结果 / 总计 / 平均缓存命中率。
+
+可复制的行（会话文件、ID、项目目录、Git 分支）带复制按钮，`data-copy-value` / `data-copy-label` 由桥输出，浏览器只负责写入剪贴板。
+
+**未包含「活跃时长」**：Pi Web 由前端从内存里的会话条目按时间戳累加得出，而 `get_session_stats` 不含该值。桥要给出它就得完整扫一遍 JSONL——那正是 B37（会话标题首读扫全文件）被判定为问题的模式，因此不在打开面板时重扫。需要的话应在索引构建时累加，与 B37 一并处理。
+
+**顶栏面板没有标题行**：Pi Web 的这几个面板都是「内容直接铺满」，关闭靠再点一次工具栏按钮。因此桥渲染的片段里不含标题；壳层只放一个绝对定位的 ×（不占垂直空间，读屏/键盘用户可用），并支持 Escape 关闭。模型、思考强度、工具预设不在这块面板里重复——输入栏各有一个控件。工具面板同样是两栏（左栏工具名列表、右栏该工具的定义），所有工具的详情一次性渲染进 HTML，切换选中项只是显示/隐藏，不再发请求——否则每点一次都要重新导出一次会话快照。
 
 数字全部来自 Pi 的 `get_session_stats`（`userMessages/assistantMessages/toolCalls/toolResults/totalMessages`、`tokens.{input,output,cacheRead,cacheWrite,total}`、`cost`、`contextUsage`），桥只做分类与格式化。缓存读写与缓存命中率只在实际发生时显示。`get_session_stats` 会因失败回合整体报错，那时仍输出会话、项目、运行三组事实——面板至少该告诉你「这是哪个会话」。
 

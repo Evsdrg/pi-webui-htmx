@@ -69,11 +69,11 @@ func (r *Renderer) RenderStats(meta StatsMeta, stats map[string]any, err error) 
 		return r.execute("stats.html", data)
 	}
 	data.Message = newStatsSection("消息", []StatsField{
-		{Label: "用户消息", Value: countText(stats["userMessages"])},
-		{Label: "助手消息", Value: countText(stats["assistantMessages"])},
+		{Label: "用户", Value: countText(stats["userMessages"])},
+		{Label: "助手", Value: countText(stats["assistantMessages"])},
 		{Label: "工具调用", Value: countText(stats["toolCalls"])},
 		{Label: "工具结果", Value: countText(stats["toolResults"])},
-		{Label: "消息总数", Value: countText(stats["totalMessages"])},
+		{Label: "总计", Value: countText(stats["totalMessages"])},
 	})
 	data.Token = newStatsSection("Token", tokenFields(stats))
 	return r.execute("stats.html", data)
@@ -90,7 +90,12 @@ func newStatsSection(title string, fields []StatsField) *StatsSection {
 // 会话文件、会话 ID、工作目录、Git 分支这几项是可以直接复制去用的值，
 // 因此带上复制按钮（与 Pi Web 的会话弹层一致）。
 func infoSections(meta StatsMeta) []StatsSection {
-	session := make([]StatsField, 0, 4)
+	// 顺序与文案对齐 Pi Web 的会话弹层：名称(可选)/会话文件/ID，
+	// 项目为项目目录/Git 分支/Worktree(可选)。
+	//
+	// 模型、思考强度、工具预设不在这里重复：输入栏已经各有一个控件，
+	// Pi Web 的弹层也不含它们。
+	session := make([]StatsField, 0, 3)
 	if meta.Name != "" {
 		session = append(session, StatsField{Label: "名称", Value: meta.Name})
 	}
@@ -98,37 +103,27 @@ func infoSections(meta StatsMeta) []StatsSection {
 		session = append(session, StatsField{Label: "会话文件", Value: meta.File, Copy: meta.File, CopyLabel: "会话文件路径"})
 	}
 	if meta.ID != "" {
-		session = append(session, StatsField{Label: "会话 ID", Value: meta.ID, Copy: meta.ID, CopyLabel: "会话 ID"})
-	}
-	if meta.Status != "" {
-		session = append(session, StatsField{Label: "状态", Value: meta.Status})
+		session = append(session, StatsField{Label: "ID", Value: meta.ID, Copy: meta.ID, CopyLabel: "会话 ID"})
 	}
 
 	project := make([]StatsField, 0, 3)
 	if meta.Cwd != "" {
-		project = append(project, StatsField{Label: "工作目录", Value: meta.Cwd, Copy: meta.Cwd, CopyLabel: "工作目录"})
+		project = append(project, StatsField{Label: "项目目录", Value: meta.Cwd, Copy: meta.Cwd, CopyLabel: "项目目录"})
 	}
 	if meta.Branch != "" {
 		project = append(project, StatsField{Label: "Git 分支", Value: meta.Branch, Copy: meta.Branch, CopyLabel: "分支名"})
 	}
 	if meta.Worktree != "" {
-		project = append(project, StatsField{Label: "Git 工作树", Value: meta.Worktree, Copy: meta.Worktree, CopyLabel: "工作树路径"})
+		project = append(project, StatsField{Label: "Worktree", Value: meta.Worktree, Copy: meta.Worktree, CopyLabel: "工作树路径"})
 	}
 
-	runtime := []StatsField{
-		{Label: "模型", Value: orDash(meta.Model)},
-		{Label: "思考强度", Value: orDash(meta.Thinking)},
-		{Label: "工具预设", Value: orDash(meta.Preset)},
-	}
-
-	out := make([]StatsSection, 0, 3)
+	out := make([]StatsSection, 0, 2)
 	if len(session) > 0 {
-		out = append(out, StatsSection{Title: "会话", Fields: session})
+		out = append(out, StatsSection{Title: "会话信息", Fields: session})
 	}
 	if len(project) > 0 {
-		out = append(out, StatsSection{Title: "项目", Fields: project})
+		out = append(out, StatsSection{Title: "项目信息", Fields: project})
 	}
-	out = append(out, StatsSection{Title: "运行", Fields: runtime})
 	return out
 }
 
@@ -170,18 +165,11 @@ func tokenFields(stats map[string]any) []StatsField {
 	read, write, input := numberField(tokens["cacheRead"]), numberField(tokens["cacheWrite"]), numberField(tokens["input"])
 	if denominator := read + write + input; denominator > 0 && read+write > 0 {
 		out = append(out, StatsField{
-			Label: "缓存命中率",
+			Label: "平均缓存命中率",
 			Value: strconv.FormatFloat(read/denominator*100, 'f', 1, 64) + "%",
 		})
 	}
 	return out
-}
-
-func orDash(value string) string {
-	if value == "" {
-		return "—"
-	}
-	return value
 }
 
 // countText 把计数格式化成千位分隔；缺失时给一个明确的占位而不是 0。
