@@ -20,7 +20,11 @@
 
 `session.fork` 成功返回 `{sessionId,text,persisted}`：`text` 是原用户消息，供新分支草稿编辑；`persisted` 表示磁盘索引是否已经找到新 JSONL。Pi 0.85.1 在新分支没有 assistant 记录时延迟写盘，因此 `persisted:false` 的新 ID 只在当前 worker 中存在，关闭 worker 前若没有首条 assistant 回复就不能恢复。UI 不得按新 ID 直接请求磁盘历史；已有文件的分支仍按普通历史加载。`GET /ui/sessions/{id}/history` 对仍有活跃 worker、但磁盘尚无该会话文件的 ID 返回空正文 `204` 与 `X-Session-Unsaved: 1`；真正不存在的 ID、非法叶子仍报错。桥不替 Pi 写入伪造的会话文件。
 
-业务响应默认 no-store；内容哈希静态资产有独立缓存策略。反代信任与 Secure Cookie 的目标规则见架构 S09，当前不能据文档假设 HTTPS 回源路径已修复。
+业务响应默认 no-store；内容哈希静态资产有独立缓存策略。反代部署由 `--public-origin` 显式声明对外来源（S09）：
+声明后桥额外接受该来源的 Host 与 Origin，非环回监听也只在该开关下放行，且只接受私有/overlay 网段地址；
+会话 Cookie 的 `Secure` 跟随该来源的 scheme，而不是跟随回源连接——反代终止 TLS 时 `r.TLS` 恒为 nil，
+据此推断会把 https 页面判成 http。桥不信任任何 `X-Forwarded-*`：`scheme` 只来自 `r.TLS` 与已声明的来源。
+WebSocket 的 origin 白名单与同一规则对齐，否则库层（`Origin.Host` 必须等于 `r.Host`）会先拒掉桥自身已允许的来源。
 
 ## 2. 封装
 

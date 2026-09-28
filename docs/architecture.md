@@ -131,7 +131,7 @@
 - 本机 add-user/add-device 与服务进程使用同一状态目录锁；先采用**离线管理，服务运行时拒绝第二写者**，不增加公网安装/任意管理接口。
 - TTL 在 Claim 时校验；一次性领取原子化。按 owner/来源地址及全局预算限流，code 分桶不是唯一保护；表项与连接有硬上限/过期淘汰。
 - Cookie 使用受限 opaque subject 或编码后的结构化 payload+HMAC，显示名不作为点分隔字段。撤销同时失效凭据/现有连接，Close 遍历 tunnels 与 browsers。
-- 非环回部署要求明确 external origin；反代只信显式配置的来源，不能相信任意 X-Forwarded-*。默认回源只绑定 loopback，cookie Secure 由已配置 HTTPS public origin 决定，Host/Origin 分别严格核对。
+- 非环回部署要求明确 external origin；反代只信显式配置的来源，不能相信任意 X-Forwarded-*。默认回源只绑定 loopback，cookie Secure 由已配置 HTTPS public origin 决定，Host/Origin 分别严格核对。**已实现（桥侧）：** `--public-origin` 声明对外来源后，桥额外接受该来源的 Host 与 Origin，`Secure` 跟随其 scheme；非环回监听只在该开关下放行，且只接受私有/overlay 网段地址（RFC1918、IPv6 ULA、链路本地、100.64.0.0/10）。WebSocket 的库层 origin 白名单必须与同一规则对齐——`coder/websocket` 默认要求 `Origin.Host == r.Host`，代理改写 Host 时会先拒掉桥自己已允许的来源。这是本地桥而非 relay 路径的实现；relay 侧仍按 B35 自行推断。
 - 设备 token 放 WS upgrade Authorization，不放 query；非环回只允许 WSS。relay TLS 终止会看见转发明文，承诺只能是**不持久化正文、不记录秘密**，不是“接触不到模型密钥”或端到端加密。
 
 **验收：** CLI 发凭据后重启服务可认证；过期/重复领取失败；写失败重试、race、撤销活连接、点用户名、HTTPS 反代、连接洪峰均有探针。

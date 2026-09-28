@@ -61,6 +61,7 @@
 | B33 | 中 | Bridge | workspace 图片读取允许最多 4 MiB，`files.image` 却把图片 base64 放进 512 KiB WS 响应；大部分被桥识别为受支持的图片无法预览。 | `internal/workspace/files.go`；`internal/transport/server.go` |
 | B34 | 中 | Bridge | `README.md` 仍标 A 阶段，并称 replay、持久去重、终端、Git、配置管理等未实现；能力端点也固定返回 `phase: A`，与实际实现及协议文档矛盾。 | `pi-bridge-go/README.md`；`internal/transport/server.go`；`api/v1/protocol.md` |
 | B35 | ✅ 已修 | Relay | **修复：** scheme 推断信任 `X-Forwarded-Proto`（仅接受明确 https，其余按 http），Cookie `Secure` 同步跟随；无代理头时仍按 r.TLS。 | `internal/relay/server.go`；`relay_transport_test.go` |
+| B35b | ✅ 已实现 | Transport | **修复：** 桥自身 HTTP/WS 路径原先只接受环回监听，且 Host/Origin 与监听地址逐字比较、`scheme` 只看 `r.TLS`——反代终止 TLS 时恒为 http，https 页面必被 403。现由 `--public-origin` 显式声明对外来源：非环回监听仅在该开关下放行且只接受私有/overlay 网段；Host/Origin 额外接受该来源；Cookie `Secure` 跟随其 scheme；WebSocket origin 白名单与同一规则对齐。不信任任何 `X-Forwarded-*`（S09）。 | `internal/transport/public_origin.go`、`cmd/pi-bridge/main.go`；`public_origin_test.go` |
 | B36 | 中 | Bridge | `setStatus` 快照只按 key 全局存储，不含 sessionId；不同 Pi worker 的同名状态互相覆盖，切换会话可能看到另一会话的扩展状态。Pi Web 将状态保存在 per-session state。 | `internal/transport/extension_state.go`；`internal/transport/server.go`；`pi-web/hooks/useAgentSession.ts` |
 | B37 | 中 | Bridge | 会话列表首次补标题时，`titleForPage` 为每条当前页会话从文件头扫描到尾，以找最新 `session_info`。多个长会话时列表请求重复读取大量完整 JSONL；这条路径不使用 History 的 scan cache。 | `internal/sessions/metadata.go`；`internal/sessions/index.go` |
 | B38 | 中 | Bridge | 每次惰性加载 thinking/tool image 都由 `rawEntry` 从 JSONL 文件头逐行扫描到目标条目；History 建好的偏移索引/scan cache 未复用，展开多个旧块会重复扫描长会话。 | `internal/sessions/lazy.go`；`internal/sessions/cache.go` |
