@@ -1,13 +1,13 @@
 {{/* 会话详情：布局对齐 Pi Web 的会话弹层。
-     左栏「会话 / 项目 / 运行」事实（可复制的行带按钮），
-     中栏消息计数，右栏 Token 与用量（右对齐、紧凑）。
+     左栏「会话信息 / 项目信息」事实（可复制的行带按钮），
+     中栏消息计数，右栏 Token 与用量。
+     列模板在 app.css 里按 .stats-info / .stats-message / .stats-token 分别给出。
      数字全部来自 Pi 的 get_session_stats，桥只做分类与格式化。 */}}
 <div class="stats-grid">
   <div class="stats-info">
-    {{range .Info}}<div class="stats-section"><div class="stats-title">{{.Title}}</div><dl class="stats-rows">{{range .Fields}}<dt>{{.Label}}</dt><dd>{{.Value}}</dd>{{if .Copy}}<dd class="stats-copy"><button type="button" class="copy-btn" data-copy-value="{{.Copy}}" data-copy-label="{{.CopyLabel}}" title="复制{{.CopyLabel}}" aria-label="复制{{.CopyLabel}}">⧉</button></dd>{{else}}<dd class="stats-copy"></dd>{{end}}{{end}}</dl></div>
+    {{range .Info}}<div class="stats-section"><div class="stats-title">{{.Title}}</div><dl class="stats-rows">{{range .Fields}}<dt>{{.Label}}</dt><dd>{{.Value}}</dd>{{if .Copy}}<dd class="stats-copy"><button type="button" class="copy-btn" data-copy-value="{{.Copy}}" data-copy-label="{{.CopyLabel}}" title="复制{{.CopyLabel}}" aria-label="复制{{.CopyLabel}}"><svg class="copy-icon" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg><svg class="check-icon" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="20 6 9 17 4 12"/></svg></button></dd>{{else}}<dd class="stats-copy"></dd>{{end}}{{end}}</dl></div>
     {{end}}
   </div>
-  {{if .Error}}<div class="stats-section"><div class="stats-title">统计</div><p class="empty-note">{{.Error}}</p></div>{{end}}
-  {{if .Message}}<div class="stats-section"><div class="stats-title">{{.Message.Title}}</div><dl class="stats-rows">{{range .Message.Fields}}<dt>{{.Label}}</dt><dd>{{.Value}}</dd>{{end}}</dl></div>{{end}}
+  {{if .Message}}<div class="stats-section stats-message"><div class="stats-title">{{.Message.Title}}</div><dl class="stats-rows">{{range .Message.Fields}}<dt>{{.Label}}</dt><dd>{{.Value}}</dd>{{end}}</dl></div>{{end}}
   {{if .Token}}<div class="stats-section stats-token"><div class="stats-title">{{.Token.Title}}</div><dl class="stats-rows">{{range .Token.Fields}}<dt>{{.Label}}</dt><dd>{{.Value}}</dd>{{end}}</dl></div>{{end}}
 </div>

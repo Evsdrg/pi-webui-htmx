@@ -31,7 +31,7 @@ export function selectTool(item: HTMLElement): void {
   }
 }
 
-// copyValue 复制一行事实到剪贴板，并给出短暂的可见反馈。
+// copyValue 复制一行事实到剪贴板，并给出短暂的可见反馈（图标换成对勾）。
 //
 // 剪贴板 API 在非安全上下文或权限被拒时会失败，因此退回选中文本的提示，
 // 而不是静默什么都不做——用户至少知道要手动复制。
@@ -52,8 +52,9 @@ async function copyValue(button: HTMLButtonElement): Promise<void> {
     try { ok = document.execCommand('copy'); } catch { ok = false; }
     holder.remove();
   }
+  // 图标切换交给 CSS（.copy-btn.copied），这里只改 class 与提示文案：
+  // 不去改 textContent，避免把模板里的图标抹掉。
   button.classList.toggle('copied', ok);
-  button.textContent = ok ? '✓' : '×';
-  button.title = ok ? `已复制${label}` : `${label}复制失败，请手动选择`;
-  window.setTimeout(() => { button.classList.remove('copied'); button.textContent = '⧉'; button.title = `复制${label}`; }, 1600);
+  button.title = ok ? `已复制${label}` : `复制${label}失败，请手动选择`;
+  if (ok) window.setTimeout(() => { button.classList.remove('copied'); button.title = `复制${label}`; }, 1600);
 }

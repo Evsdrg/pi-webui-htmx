@@ -362,15 +362,27 @@ input,select,textarea { background:var(--bg); border:1px solid var(--border); bo
 .stats-info { display:flex; flex-direction:column; gap:20px; min-width:0; }
 .stats-section { min-width:0; }
 .stats-title { margin-bottom:6px; font-size:11px; font-weight:700; color:var(--text); }
-.stats-rows { display:grid; grid-template-columns:auto minmax(0,1fr) 22px; column-gap:12px; row-gap:8px; align-items:start; margin:0; padding:0; }
+/* 每组的列模板由各自的选择器给出（见下），这里只给共用的排布。
+   不要再在这里或后代选择器里写「通用」的列模板：那会与下面的分组规则
+   争夺特异性，最终由类数量而非意图决定谁生效（Token 段曾被此坑到）。 */
+.stats-rows { display:grid; align-items:start; margin:0; padding:0; }
 .stats-rows dt { color:var(--text-dim); white-space:nowrap; }
 .stats-rows dd { margin:0; min-width:0; color:var(--text-muted); overflow-wrap:anywhere; }
-.copy-btn { display:inline-flex; align-items:center; justify-content:center; width:22px; height:22px; padding:0; border:1px solid var(--border); border-radius:4px; background:transparent; color:var(--text-dim); font-size:11px; line-height:1; }
+.copy-btn { display:inline-flex; align-items:center; justify-content:center; width:22px; height:22px; padding:0; border:1px solid var(--border); border-radius:4px; background:transparent; color:var(--text-dim); }
+.copy-btn .check-icon { display:none; }
+.copy-btn.copied .copy-icon { display:none; }
+.copy-btn.copied .check-icon { display:block; }
 .copy-btn:hover { color:var(--accent); border-color:var(--accent); background:var(--bg-hover); }
 .copy-btn.copied { color:var(--accent); border-color:var(--accent); }
 /* 中栏消息只有「标签 + 值」两列；右栏 Token 与用量右对齐、紧凑
    （对应 Pi Web 的 compact 变体）。 */
-.stats-grid > .stats-section > .stats-rows { grid-template-columns:auto minmax(0,1fr); row-gap:4px; }
+/* 消息：标签 / 值 两列，行距 4px（Pi Web section() 的默认形态）。 */
+.stats-message .stats-rows { grid-template-columns:auto minmax(0,1fr); column-gap:12px; row-gap:4px; }
+/* 会话 / 项目事实：标签 / 值 / 复制按钮 三列，行距 8px，值可换行。 */
+.stats-info .stats-rows { grid-template-columns:auto minmax(0,1fr) auto; column-gap:12px; row-gap:8px; }
+/* Token / 用量：紧凑形态。列宽取内容（max-content）而不是撑满，整组靠左，
+   数值在这条窄列内右对齐——Pi Web 的 compact 变体正是这两条属性。
+   若改成 1fr，数字会被推到面板最右侧，与 Pi Web 的观感明显不同。 */
 .stats-token .stats-rows { grid-template-columns:max-content max-content; column-gap:14px; row-gap:4px; justify-content:start; }
 .stats-token .stats-rows dd { text-align:right; white-space:nowrap; }
 @media (max-width:760px) {

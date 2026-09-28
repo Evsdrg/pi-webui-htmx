@@ -90,6 +90,14 @@ htmx 侧重 HTML 与后端，因此边界按「数据 → HTML 归桥，瞬时�
 
 行距也一致：左栏事实 8px，消息与 Token 列 4px；面板内边距 `12px 16px`。
 
+**三组的列模板必须写成分组选择器**（`.stats-info .stats-rows` / `.stats-message .stats-rows` / `.stats-token .stats-rows`），通用 `.stats-rows` 只放共用排布、**不得**声明 `grid-template-columns`。
+
+踩过这个坑：通用规则曾写成 `.stats-grid > .stats-section > .stats-rows`（3 个类），特异性压过 `.stats-token .stats-rows`（2 个类），于是 Token 段的值列从 `max-content` 变成 `1fr` —— **数字被推到面板最右侧**，与 Pi Web 观感明显不同（Pi Web 的数值是贴着标签的）。`scripts/check-contract.mjs` 现在把「谁决定列模板」锁死；把通用规则改回会声明列模板的样子，检查会失败。
+
+**Token / 用量是 Pi Web 的 compact 形态**，两条属性缺一不可：`grid-template-columns: max-content max-content`（列宽取内容）+ `justify-content: start`（整组靠左），值列内 `text-align: right` + `nowrap`。实测（1280 面板、同一份数据）：Pi Web `24.02px 7.20px`，本仓 `36.02px 60.02px`（差值来自本仓多一行「上下文」以及标签集不同，都是各自 `max-content` 的结果），gap 与 `justify-content` 一致。数值右边缘距该列右边缘约 110px —— 而不是贴到列的最右。
+
+**数字格式逐条对齐 Pi Web**：千位分隔用 `toLocaleString` 语义；上下文窗口用 `formatCompact`（≥1e6 → 一位小数 + `M`，≥1000 → 整数 + **小写 `k`**，否则原样）；百分比一位小数；费用四位小数。千位后缀曾写成大写 `K`，与 Pi Web 的 `66k` 不符，已改。
+
 **唯一未移植的行是「活跃时长」**：Pi Web 由前端从内存条目按时间戳累加，`get_session_stats` 不含它；桥要给出就得整份扫 JSONL，属于 B37 同类模式，故未做（补齐应在索引构建时累加）。
 
 **模型选择器的可见文本改为只用模型名**（provider 进 `title`），与 Pi Web 一致；这也修掉了 390px 下 `DeepSeek Flash (test) · CPA-Responses` 被 `<select>` 硬截断的问题。
