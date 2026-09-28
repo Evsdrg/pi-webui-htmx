@@ -214,10 +214,13 @@ func (w *Worker) AbortRetry(ctx context.Context) error {
 }
 
 // Stats 返回会话用量统计。
+// Pi 0.85.1 的 get_session_stats 在会话里存在 usage 为空的 assistant 条目
+// （例如供应商报错后写入的失败回合）时会抛 JS 异常；这里必须换成可读的
+// 中文错误，不能把上游堆栈原样透给调用方。
 func (w *Worker) Stats(ctx context.Context) (map[string]any, error) {
 	raw, err := w.call(ctx, "get_session_stats", nil, false)
 	if err != nil {
-		return nil, err
+		return nil, protocol.E("pi_error", "Pi 无法汇总本次会话的用量统计（可能包含失败的回合）")
 	}
 	var out map[string]any
 	if json.Unmarshal(raw, &out) != nil {

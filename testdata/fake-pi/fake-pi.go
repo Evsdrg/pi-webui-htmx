@@ -54,6 +54,10 @@ func main() {
 			script[strings.TrimSpace(name)] = true
 		}
 	}
+	// 可选地把启动参数写盘，供测试断言桥确实把工具预设翻译成了 CLI 参数。
+	if path := os.Getenv("FAKE_PI_ARGS_FILE"); path != "" {
+		_ = os.WriteFile(path, []byte(strings.Join(os.Args, "\n")+"\n"), 0600)
+	}
 	delay, _ := strconv.Atoi(envOr("FAKE_PI_DELAY_MS", "0"))
 	reader := bufio.NewReader(os.Stdin)
 	for {

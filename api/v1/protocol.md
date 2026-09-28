@@ -49,6 +49,7 @@
 | 进程与会话 | `worker.list`、`session.start`、`session.state`、`session.prompt`、`session.abort`、`session.stop`、`session.subscribe`、`session.unsubscribe` |
 | 排队 | `session.steer`、`session.follow_up`、`session.set_queue_mode` |
 | 模型 | `session.models`、`session.set_model`、`session.cycle_model`、`session.thinking_levels`、`session.set_thinking`、`session.cycle_thinking` |
+| 工具预设 | `session.start` 的 `toolPreset` 参数（`chat-only`/`read-only`/`default`/`full`），见第 5 节 |
 | 压缩与重试 | `session.compact`、`session.set_auto_compaction`、`session.set_auto_retry`、`session.abort_retry` |
 | 分支 | `session.new`、`session.switch`、`session.fork`、`session.clone`、`session.tree`、`session.fork_messages`、`session.entries` |
 | bash | `session.bash`、`session.abort_bash`、`session.bash_output` |
@@ -109,6 +110,16 @@ Pi 原事件通过 `pi.event` 传递并绑定基线版本；不是跨 agent 通�
 - 目标校验包括完整坏行、重复 ID、断链、循环；仅忽略尾部半行。B12/B13 的缓存身份和快路径结构校验已修，剩余边界见审计台账。
 - `sessions.search` 返回 `{matches:[{sessionId,entryId,title,cwd,role,snippet,timestamp}],scanned,truncated}`；标题优先取本次扫描中的 `session_info`，否则退回首条用户消息，不为匹配项额外重扫文件。UI 用 `entryId` 加载截至命中位置的只读历史，并明确提示可返回当前分支。搜索还需受命中、访问文件、目录、字节、时间、并发上限约束；B28/B52 已修，B43/B72 仍待处理。
 - 删除前协调活跃 worker、trash 存在但失败不降级永久删除的 B08/B62 已修，具体 force 行为见审计台账。
+
+### 工具预设与思考强度
+
+`session.start` 接受可选 `toolPreset`，取值 `chat-only`/`read-only`/`default`/`full`，未知值必须报 `invalid_params`，不静默回落默认。预设只在拉起 Pi 进程时通过 CLI 生效，运行中切换需要先 `session.stop` 再以新预设 `session.start`；`worker.list`/启动响应回带 `toolPreset`，管理器按会话记住最近一次选择，空闲回收后重启沿用。
+
+预设到 Pi CLI 的映射与 Pi Web 的 `lib/tool-presets.ts` 对齐：`default` 不加参数（Pi 默认 read/bash/edit/write，扩展工具可用），`chat-only` 用 `--no-tools`，`read-only` 用 `--exclude-tools bash,edit,write`。**`full` 只能用 `--tools` 白名单启用 grep/find/ls，而 Pi 的白名单同时作用于扩展工具，因此 `full` 会禁用 magic-context 等扩展工具**——这是上游限制，UI 必须明示，不能假装与 Pi Web 完全一致。
+
+`session.thinking_levels` 返回当前模型支持的等级（来自 Pi 的 `get_available_thinking_levels`，无模型时仅 `off`）。UI 的「自动」不是 Pi 等级，而是“不发送 `session.set_thinking`”的语义，由 Pi 按 settings 的 `defaultThinkingLevel` 与模型能力决定；Pi 没有“未设置”读回字段，因此自动/等级选择只能按会话在本地记忆，界面必须标注这是本机偏好而非 Pi 实时状态。
+
+`session.stats` 的 `contextUsage` 形如 `{tokens,contextWindow,percent}`：只有 worker 持有带 contextWindow 的模型时才非空；压缩后尚未产生新的 assistant 回复时 Pi 返回 `tokens/percent` 为 `null`，UI 必须显示未知而不是 0。magic-context 另有一条自己的 `mc: ...` 扩展状态行（经 `setStatus` 到达 `#ext-status-slot`），两者数据来源不同，不合并、不互相推导。
 
 ### 惰性内容
 
