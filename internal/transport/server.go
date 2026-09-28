@@ -1865,7 +1865,13 @@ func (s *Server) serveExport(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.Header().Set("Content-Disposition", `attachment; filename="`+name+`"`)
+	// inline 与 Pi Web 的 /export?inline=1 一致：在新标签页里直接阅读，
+	// 默认仍是附件下载。两种模式共用同一套鉴权与体积上限。
+	if r.URL.Query().Get("inline") == "1" {
+		w.Header().Set("Content-Disposition", "inline")
+	} else {
+		w.Header().Set("Content-Disposition", `attachment; filename="`+name+`"`)
+	}
 	w.Header().Set("Vary", "Accept-Encoding")
 	if presentation.ShouldCompress(body, encoding) {
 		w.Header().Set("Content-Encoding", encoding)
