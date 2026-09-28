@@ -37,7 +37,7 @@ function mount() {
  <section id=panel-title hidden><button data-action=panel-title-close></button><form id=title-form><input id=local-title></form></section><section id=panel-system hidden><button data-action=panel-system-close></button><dl id=system-facts></dl></section><section id=panel-tools hidden><button data-action=panel-tools-close></button><form id=tool-preset-form><select id=tool-preset-select><option value=chat-only>仅聊天</option><option value=read-only>只读</option><option value=default selected>默认</option><option value=full>完整</option></select><p id=tool-preset-note></p></form></section>
  <dialog id=models-dialog><p id=models-status></p><textarea id=models-editor></textarea><input id=discover-url><input id=discover-api><input id=discover-key><textarea id=discover-headers></textarea><div id=discover-result></div><button data-action=models-edit>编辑</button><button data-action=models-reload>重读</button><button data-action=models-save>保存</button><button data-action=models-discover>发现</button><button data-action=models-test>测试</button></dialog>`;
  for(const id of ['live','conn-state','connection-notice','session-state','session-title','session-cwd','session-list','session-count','turns','older-slot','chat-scroll','welcome','command-menu','ext-status-slot','ext-widgets-before','ext-widgets-after','ext-dialog-slot','usage','toast-root']) {const node=document.createElement('div');node.id=id;document.body.append(node);}
-{for(const id of ['search-query','system-session','tools-session','branch-session','files-path','git-path','diff-path']){const node=document.createElement('input');node.type='hidden';node.id=id;document.body.append(node);}}
+{for(const id of ['search-query','system-session','tools-session','stats-session','branch-session','files-path','git-path','diff-path']){const node=document.createElement('input');node.type='hidden';node.id=id;document.body.append(node);}}
  document.body.dataset.sessionId='s1';
  Object.defineProperty(HTMLDialogElement.prototype,'showModal',{configurable:true,value:function(this:HTMLDialogElement){this.open=true;this.dataset.modal='true';}});
  Object.defineProperty(HTMLDialogElement.prototype,'close',{configurable:true,value:function(this:HTMLDialogElement){this.open=false;delete this.dataset.modal;}});
@@ -1039,9 +1039,9 @@ describe('顶栏功能面板', () => {
     await vi.waitFor(() => expect(document.body.dataset.sessionId).toBe('s1'));
     document.querySelector('[data-action="panel-info"]')!.dispatchEvent(new Event('click', { bubbles: true }));
     await vi.waitFor(() => expect(document.getElementById('panel-info')!.hidden).toBe(false));
-    const facts = document.getElementById('session-facts')!.textContent ?? '';
-    expect(facts).toContain('/tmp/a');
-    expect(facts).toContain('s1');
+    // 详情整体由桥渲染（/ui/stats）：前端只带上会话 ID 触发刷新。
+    expect((document.getElementById('stats-session') as HTMLInputElement).value).toBe('s1');
+    expect(vi.mocked(window.htmx.trigger).mock.calls.some((call) => call[1] === 'stats-refresh')).toBe(true);
     // 顶栏本身不再显示会话标题：标题只在侧栏与信息面板里。
     expect(document.querySelector('.topbar #session-title')).toBeNull();
     expect(document.querySelector('.session-heading')).toBeNull();

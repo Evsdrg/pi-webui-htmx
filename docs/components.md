@@ -70,13 +70,15 @@ htmx 侧重 HTML 与后端，因此边界按「数据 → HTML 归桥，瞬时�
 | 项 | Pi Web 的做法 | 本仓现状 |
 |---|---|---|
 | 完整历史 | 新标签页打开 `/api/sessions/{id}/export?inline=1`，即 Pi 自己的导出 HTML（内嵌完整 entries，有树导航） | 同语义：`session.export_html` + `/ui/exports/{name}?inline=1`。差别是**需要活动 worker** |
-| 生成标题 | `generateSessionTitle()`：独立一次 one-shot 调用（短系统提示、无工具、同会话模型、最低思考等级、256 token 上限、90 秒超时），再 `setSessionName` | **未实现**：桥会为标题多起一个一次性 Pi 进程，不能借会话本身发请求污染上下文 |
+| 生成标题 | `generateSessionTitle()`：独立一次 one-shot 调用（短系统提示、无工具、同会话模型、最低思考等级、256 token 上限、90 秒超时），再 `setSessionName` | **不做**（已与用户确认）：手动命名足够；模型调用留给对话本身 |
 | 从此处编辑 | 悬停用户消息 → `navigate_tree(targetId)` 改活动叶子 + 把该消息文本放回输入框 | **只做了只读一半**：`leafId` 视图 + 草稿预填。`navigate_tree` 不在 RPC 命令表里（只作为扩展的 `commandContextActions` 暴露），改叶子做不到 |
 | 系统 | `state.systemPrompt`（进程内 SDK） | ✅ `/ui/system`：按需导出一份快照解析 |
 | 工具 | `get_tools`（进程内 SDK）：`getAllTools()` + `getActiveToolNames()` 打 `active` 标记 | ✅ `/ui/tools`：同一份快照的 `tools` 即实际生效集合（RPC 无 `get_tools`） |
-| 右上角会话面板 | `activeTopPanel === "session"`：会话/项目/消息/Token/费用/缓存命中/上下文分段表格 | 部分：已显示上下文用量与基本事实，分段统计待补 |
+| 右上角会话面板 | `activeTopPanel === "session"`：会话/项目/消息/Token/费用/缓存命中/上下文分段表格 | ✅ `/ui/stats`：同样分组（会话/项目/消息/Token/运行/用量），数字全部来自 `get_session_stats` |
 
-**已迁完**：`/ui/git-status`、`/ui/search`、`/ui/branch`（2026-09-28）。`branch.ts` 从 7.1 KB / 11 处 DOM 降到 3.4 KB / 1 处。
+**已迁完**：`/ui/git-status`、`/ui/search`、`/ui/branch`（2026-09-28），随后是 `/ui/system`、`/ui/tools`、`/ui/stats`。
+
+**片段端点的状态机约定**：htmx 换入的片段端点一律返回 200 + 可读 HTML，包括「worker 未启动」这类前置状态。原因是 htmx 默认不交换 4xx/5xx，按错误码返回会让面板停在旧内容上且没有解释（真机复现过）。由服务端渲染状态（`RenderNote`）是 htmx 的用法本意。`/ui/file-text`、`/ui/file-image`、lazy 加载、`/ui/exports/*` 不是 htmx 交换目标，保留真实状态码。`branch.ts` 从 7.1 KB / 11 处 DOM 降到 3.4 KB / 1 处。
 
 **同一条判据下还剩这些候选**（尚未迁）：`topbar.ts` 的「会话信息 / 系统」事实表（来自 `session.state` 与 `session.stats`）、
 `models.ts` 的「发现模型」结果列表（来自 `config.models.discover`）、`workbench.ts` 的思考等级下拉与工作目录 datalist、

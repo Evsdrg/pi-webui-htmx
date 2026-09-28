@@ -41,7 +41,11 @@ export function toggle(host: TopbarHost, target: string, force?: boolean): void 
     document.querySelector(`[aria-controls="${id}"]`)?.setAttribute('aria-expanded', String(id === target && open));
   }
   if (!open) return;
-  if (target === 'panel-info') renderSessionFacts(host);
+  if (target === 'panel-info') {
+    // 会话详情整体由桥渲染（Pi 的统计数字只存在于活的进程里）。
+    el<HTMLInputElement>('stats-session').value = host.sessionId();
+    window.htmx.trigger(document.body, 'stats-refresh');
+  }
   if (target === 'panel-title') prefillLocalTitle();
   if (target === 'panel-system') {
     // 提示词由桥渲染（它得先让 Pi 导出一份快照）；这里只负责带上会话 ID 触发刷新。
@@ -55,25 +59,6 @@ export function toggle(host: TopbarHost, target: string, force?: boolean): void 
     window.htmx.trigger(document.body, 'tools-refresh');
     renderToolPresetNote(host);
   }
-}
-
-// renderSessionFacts 是「会话信息」面板：顶栏不再显示会话标题，
-// 名称与工作目录搬到这里，与 Pi Web 的 session 弹层一致。
-function renderSessionFacts(host: TopbarHost): void {
-  const rows: [string, string][] = [
-    ['模型', host.modelLabel()],
-    ['上下文窗口', host.contextWindow() > 0 ? `${host.contextWindow().toLocaleString()} tokens` : '未知'],
-    ['工作目录', host.cwd() || '未选择'],
-    ['会话 ID', host.sessionId() || '尚未分配'],
-    ['思考强度', host.thinking() || '自动'],
-    ['工具预设', host.preset()],
-  ];
-  const list = el('session-facts');
-  list.replaceChildren(...rows.flatMap(([label, value]) => {
-    const term = document.createElement('dt'); term.textContent = label;
-    const desc = document.createElement('dd'); desc.textContent = value;
-    return [term, desc];
-  }));
 }
 
 // openFullHistory 与 Pi Web 的「完整历史」一致：在新标签页里直接阅读

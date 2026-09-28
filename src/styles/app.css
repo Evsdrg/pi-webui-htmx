@@ -312,6 +312,8 @@ input,select,textarea { background:var(--bg); border:1px solid var(--border); bo
 /* 系统提示词与工具定义面板：内容由桥渲染，这里只负责排版。 */
 .system-prompt { margin:0; max-height:min(420px,50dvh); overflow:auto; padding:12px 14px; border:1px solid var(--border); border-radius:8px; background:var(--tool-bg); color:var(--text-muted); font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:12px; line-height:1.6; white-space:pre-wrap; overflow-wrap:anywhere; }
 #tools-body { max-height:min(460px,52dvh); overflow:auto; }
+/* 会话详情有 6 组数据，给这块面板更多纵向空间（其余面板维持 44vh）。 */
+#panel-info { max-height:64vh; }
 .tool-def { border:1px solid var(--border); border-radius:8px; padding:9px 11px; margin:8px 0; background:var(--tool-bg); }
 .tool-def h4 { margin:0 0 4px; font-size:13px; font-family:ui-monospace,SFMono-Regular,Menlo,monospace; color:var(--text); }
 .tool-desc { margin:0 0 6px; font-size:12px; color:var(--text-muted); }
@@ -320,3 +322,19 @@ input,select,textarea { background:var(--bg); border:1px solid var(--border); bo
 .tool-params td { padding:2px 6px 2px 0; color:var(--text-muted); vertical-align:top; }
 .tool-param-desc td { color:var(--text-dim); padding-bottom:6px; }
 .top-panel h3 { margin:14px 0 6px; font-size:12px; color:var(--text-muted); }
+
+/* 慢面板的载入提示。
+   这三个片段要先让 Pi 导出一份会话快照（可能几秒），而 htmx 在未指定
+   hx-indicator 时会把 htmx-request 加到发起请求的元素上（htmx.js 的
+   addRequestIndicatorClasses：indicators 为 undefined 就取 [elt]）。
+   于是这里只用 CSS 就能给出「正在读取…」而不是继续显示上一次的旧内容。
+   其它片段（会话列表、历史、文件）刷新很快，保持原样以免闪烁。 */
+#stats-body.htmx-request > *, #system-body.htmx-request > *, #tools-body.htmx-request > * { display:none; }
+#stats-body.htmx-request::before, #system-body.htmx-request::before, #tools-body.htmx-request::before { content:"正在读取…"; color:var(--text-muted); font-style:italic; }
+
+/* 会话详情：分组表格，标签与值两列。 */
+.stats-section { margin:10px 0; }
+.stats-section h4 { margin:0 0 5px; font-size:11px; font-weight:700; color:var(--text); }
+.stats-section .facts { margin:0; }
+.stats-section .facts dd { overflow-wrap:anywhere; }
+.top-panel .empty-note { margin:8px 0; }
