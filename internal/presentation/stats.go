@@ -5,41 +5,33 @@ import (
 	"strings"
 )
 
-// StatsRow 是详情表里的一行。
-type StatsRow struct {
+// StatsField 是详情里的一行。
+type StatsField struct {
 	Label string
 	Value string
+	// Copy 非空时在该行右侧给一个复制按钮；值为要复制的原文。
+	Copy string
+	// CopyLabel 是复制按钮提示里的宾语（例如「会话 ID」），
+	// 提示文案由它拼成「复制会话 ID」/「已复制会话 ID」。
+	CopyLabel string
 }
 
-// StatsSection 是详情表的一组。
+// StatsSection 是详情里的一组。
 type StatsSection struct {
-	Title string
-	Rows  []StatsRow
+	Title  string
+	Fields []StatsField
 }
 
 // StatsData 驱动会话详情片段。
+//
+// 布局对齐 Pi Web 的会话弹层：左栏是「会话 / 项目」事实（带复制按钮），
+// 中栏是消息计数，右栏是 Token 与用量（右对齐、紧凑）。
 type StatsData struct {
-	Sections []StatsSection
+	Info    []StatsSection
+	Message *StatsSection
+	Token   *StatsSection
 	// Error 非空时只显示这一条说明（例如 Pi 无法汇总失败回合）。
 	Error string
-}
-
-// RenderStats 渲染会话详情（消息、Token、费用、上下文）。
-//
-// 这些数字全部来自 Pi 的 get_session_stats；桥只做分类与格式化，
-// 不在前端重算——前端拿到的就是可以展示的文本。
-func (r *Renderer) RenderStats(meta StatsMeta, stats map[string]any, err error) (string, error) {
-	data := StatsData{}
-	if err != nil || stats == nil {
-		if err != nil {
-			data.Error = err.Error()
-		} else {
-			data.Error = "Pi 尚未返回统计信息。"
-		}
-		return r.execute("stats.html", data)
-	}
-	data.Sections = statsSections(meta, stats)
-	return r.execute("stats.html", data)
 }
 
 // StatsMeta 是与统计无关、但同属「这次会话是什么」的事实。
@@ -59,93 +51,130 @@ type StatsMeta struct {
 	Status   string
 }
 
-func statsSections(meta StatsMeta, stats map[string]any) []StatsSection {
-	sections := make([]StatsSection, 0, 5)
+// RenderStats 渲染会话详情。
+//
+// 数字全部来自 Pi 的 get_session_stats；桥只做分类与格式化，
+// 不在前端重算——前端拿到的就是可以展示的文本。
+func (r *Renderer) RenderStats(meta StatsMeta, stats map[string]any, err error) (string, error) {
+	// 会话与项目事实不依赖统计，先无条件建立：
+	// 含失败回合的会话会让 get_session_stats 整体报错，那时面板
+	// 至少还该说清「这是哪个会话」，而不是只剩一句错误。
+	data := StatsData{Info: infoSections(meta)}
+	if err != nil {
+		data.Error = err.Error()
+		return r.execute("stats.html", data)
+	}
+	if stats == nil {
+		data.Error = "Pi 尚未返回统计信息。"
+		return r.execute("stats.html", data)
+	}
+	data.Message = newStatsSection("消息", []StatsField{
+		{Label: "用户消息", Value: countText(stats["userMessages"])},
+		{Label: "助手消息", Value: countText(stats["assistantMessages"])},
+		{Label: "工具调用", Value: countText(stats["toolCalls"])},
+		{Label: "工具结果", Value: countText(stats["toolResults"])},
+		{Label: "消息总数", Value: countText(stats["totalMessages"])},
+	})
+	data.Token = newStatsSection("Token", tokenFields(stats))
+	return r.execute("stats.html", data)
+}
 
-	session := make([]StatsRow, 0, 4)
+func newStatsSection(title string, fields []StatsField) *StatsSection {
+	if len(fields) == 0 {
+		return nil
+	}
+	return &StatsSection{Title: title, Fields: fields}
+}
+
+// infoSections 给出左栏：会话与项目。
+// 会话文件、会话 ID、工作目录、Git 分支这几项是可以直接复制去用的值，
+// 因此带上复制按钮（与 Pi Web 的会话弹层一致）。
+func infoSections(meta StatsMeta) []StatsSection {
+	session := make([]StatsField, 0, 4)
 	if meta.Name != "" {
-		session = append(session, StatsRow{"名称", meta.Name})
+		session = append(session, StatsField{Label: "名称", Value: meta.Name})
 	}
 	if meta.File != "" {
-		session = append(session, StatsRow{"会话文件", meta.File})
+		session = append(session, StatsField{Label: "会话文件", Value: meta.File, Copy: meta.File, CopyLabel: "会话文件路径"})
 	}
 	if meta.ID != "" {
-		session = append(session, StatsRow{"会话 ID", meta.ID})
-	}
-	if len(session) > 0 {
-		sections = append(sections, StatsSection{Title: "会话", Rows: session})
-	}
-
-	project := make([]StatsRow, 0, 3)
-	if meta.Cwd != "" {
-		project = append(project, StatsRow{"工作目录", meta.Cwd})
-	}
-	if meta.Branch != "" {
-		project = append(project, StatsRow{"Git 分支", meta.Branch})
-	}
-	if meta.Worktree != "" {
-		project = append(project, StatsRow{"Git 工作树", meta.Worktree})
-	}
-	if len(project) > 0 {
-		sections = append(sections, StatsSection{Title: "项目", Rows: project})
-	}
-
-	message := []StatsRow{
-		{"用户消息", countText(stats["userMessages"])},
-		{"助手消息", countText(stats["assistantMessages"])},
-		{"工具调用", countText(stats["toolCalls"])},
-		{"工具结果", countText(stats["toolResults"])},
-		{"消息总数", countText(stats["totalMessages"])},
-	}
-	sections = append(sections, StatsSection{Title: "消息", Rows: message})
-
-	if tokens := recordOf(stats["tokens"]); len(tokens) > 0 {
-		rows := []StatsRow{{"输入", countText(tokens["input"])}, {"输出", countText(tokens["output"])}}
-		// 缓存读写只有实际发生时才显示，避免用一串 0 淹没有效信息。
-		if numberField(tokens["cacheRead"]) > 0 {
-			rows = append(rows, StatsRow{"缓存读取", countText(tokens["cacheRead"])})
-		}
-		if numberField(tokens["cacheWrite"]) > 0 {
-			rows = append(rows, StatsRow{"缓存写入", countText(tokens["cacheWrite"])})
-		}
-		rows = append(rows, StatsRow{"总计", countText(tokens["total"])})
-		sections = append(sections, StatsSection{Title: "Token", Rows: rows})
-	}
-
-	runtime := []StatsRow{
-		{"模型", orDash(meta.Model)},
-		{"思考强度", orDash(meta.Thinking)},
-		{"工具预设", orDash(meta.Preset)},
+		session = append(session, StatsField{Label: "会话 ID", Value: meta.ID, Copy: meta.ID, CopyLabel: "会话 ID"})
 	}
 	if meta.Status != "" {
-		runtime = append([]StatsRow{{"状态", meta.Status}}, runtime...)
+		session = append(session, StatsField{Label: "状态", Value: meta.Status})
 	}
-	sections = append(sections, StatsSection{Title: "运行", Rows: runtime})
 
-	extra := make([]StatsRow, 0, 3)
+	project := make([]StatsField, 0, 3)
+	if meta.Cwd != "" {
+		project = append(project, StatsField{Label: "工作目录", Value: meta.Cwd, Copy: meta.Cwd, CopyLabel: "工作目录"})
+	}
+	if meta.Branch != "" {
+		project = append(project, StatsField{Label: "Git 分支", Value: meta.Branch, Copy: meta.Branch, CopyLabel: "分支名"})
+	}
+	if meta.Worktree != "" {
+		project = append(project, StatsField{Label: "Git 工作树", Value: meta.Worktree, Copy: meta.Worktree, CopyLabel: "工作树路径"})
+	}
+
+	runtime := []StatsField{
+		{Label: "模型", Value: orDash(meta.Model)},
+		{Label: "思考强度", Value: orDash(meta.Thinking)},
+		{Label: "工具预设", Value: orDash(meta.Preset)},
+	}
+
+	out := make([]StatsSection, 0, 3)
+	if len(session) > 0 {
+		out = append(out, StatsSection{Title: "会话", Fields: session})
+	}
+	if len(project) > 0 {
+		out = append(out, StatsSection{Title: "项目", Fields: project})
+	}
+	out = append(out, StatsSection{Title: "运行", Fields: runtime})
+	return out
+}
+
+// tokenFields 给出右栏：Token 与用量。
+// 缓存读写、费用、命中率只在实际发生时出现，不用一串 0 淹没有效信息。
+func tokenFields(stats map[string]any) []StatsField {
+	tokens := recordOf(stats["tokens"])
+	out := make([]StatsField, 0, 8)
+	if len(tokens) == 0 {
+		return out
+	}
+	out = append(out,
+		StatsField{Label: "输入", Value: countText(tokens["input"])},
+		StatsField{Label: "输出", Value: countText(tokens["output"])},
+	)
+	if numberField(tokens["cacheRead"]) > 0 {
+		out = append(out, StatsField{Label: "缓存读取", Value: countText(tokens["cacheRead"])})
+	}
+	if numberField(tokens["cacheWrite"]) > 0 {
+		out = append(out, StatsField{Label: "缓存写入", Value: countText(tokens["cacheWrite"])})
+	}
+	out = append(out, StatsField{Label: "总计", Value: countText(tokens["total"])})
+
 	if cost := numberField(stats["cost"]); cost > 0 {
-		extra = append(extra, StatsRow{"费用", "$" + strconv.FormatFloat(cost, 'f', 4, 64)})
+		out = append(out, StatsField{Label: "费用", Value: "$" + strconv.FormatFloat(cost, 'f', 4, 64)})
 	}
 	if usage := recordOf(stats["contextUsage"]); len(usage) > 0 {
 		percent := "?"
 		if value, ok := usage["percent"].(float64); ok {
 			percent = strconv.FormatFloat(value, 'f', 1, 64) + "%"
 		}
-		window := numberField(usage["contextWindow"])
-		extra = append(extra, StatsRow{"上下文", percent + " / " + compactNumber(window)})
+		out = append(out, StatsField{
+			Label: "上下文",
+			Value: percent + " / " + compactNumber(numberField(usage["contextWindow"])),
+		})
 	}
-	if tokens := recordOf(stats["tokens"]); len(tokens) > 0 {
-		// 命中率 = 缓存读取 /（输入 + 缓存写入 + 缓存读取），
-		// 分母覆盖全部输入类 Token，否则会算出 >100%。
-		read, write, input := numberField(tokens["cacheRead"]), numberField(tokens["cacheWrite"]), numberField(tokens["input"])
-		if denominator := read + write + input; denominator > 0 && read+write > 0 {
-			extra = append(extra, StatsRow{"缓存命中率", strconv.FormatFloat(read/denominator*100, 'f', 1, 64) + "%"})
-		}
+	// 命中率 = 缓存读取 /（输入 + 缓存写入 + 缓存读取），
+	// 分母覆盖全部输入类 Token，否则会算出 >100%。
+	read, write, input := numberField(tokens["cacheRead"]), numberField(tokens["cacheWrite"]), numberField(tokens["input"])
+	if denominator := read + write + input; denominator > 0 && read+write > 0 {
+		out = append(out, StatsField{
+			Label: "缓存命中率",
+			Value: strconv.FormatFloat(read/denominator*100, 'f', 1, 64) + "%",
+		})
 	}
-	if len(extra) > 0 {
-		sections = append(sections, StatsSection{Title: "用量", Rows: extra})
-	}
-	return sections
+	return out
 }
 
 func orDash(value string) string {

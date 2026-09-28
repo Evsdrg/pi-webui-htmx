@@ -95,8 +95,8 @@ func Test工具参数标注必填(t *testing.T) {
 	if !strings.Contains(out, "<code>path</code>") || !strings.Contains(out, "<code>oldText</code>") {
 		t.Fatalf("参数名缺失：%s", out)
 	}
-	if strings.Count(out, ">是<") != 1 {
-		t.Fatalf("应恰好有一个必填项：%s", out)
+	if strings.Count(out, ">必填<") != 1 || !strings.Contains(out, ">可选<") {
+		t.Fatalf("应恰好有一个必填项、一个可选项：%s", out)
 	}
 }
 

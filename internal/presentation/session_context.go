@@ -75,22 +75,29 @@ func ParseSessionContext(html []byte) (SessionContext, error) {
 	return SessionContext{SystemPrompt: payload.SystemPrompt, Tools: tools}, nil
 }
 
-// ToolParam 是工具参数表里的一行。
+// ToolParam 是工具参数表里的一项。
 type ToolParam struct {
-	Name        string
-	Type        string
-	Required    bool
-	Description string
+	Name     string
+	Type     string
+	Required bool
+	Desc     string
+	// Enum 与 Default 直接来自 JSON Schema，有才展示。
+	Enum    string
+	Default string
 }
 
-// ToolView 是工具定义面板的一项。
+// ToolView 是一个工具的完整定义。
 type ToolView struct {
 	Name        string
 	Description string
 	Params      []ToolParam
 }
 
-// ToolsData 驱动工具定义片段。
+// ToolsData 驱动工具定义面板。
+//
+// 结构对齐 Pi Web 的 ToolDefinitionsPanel：左栏是工具名列表，右栏是所选
+// 工具的详情。全部详情都渲染进 HTML，点击只切换可见性——切换是瞬时交互
+// 状态，不该为它再发一次请求（那会重新导出一次会话快照）。
 type ToolsData struct {
 	Tools []ToolView
 }
@@ -138,14 +145,26 @@ func toolParams(schema json.RawMessage) []ToolParam {
 			Description string `json:"description"`
 			Enum        []any  `json:"enum"`
 			AnyOf       []any  `json:"anyOf"`
+			Default     any    `json:"default"`
 		}
 		_ = json.Unmarshal(parsed.Properties[name], &field)
-		params = append(params, ToolParam{
-			Name:        name,
-			Type:        schemaType(field.Type, field.Enum, field.AnyOf),
-			Required:    required[name],
-			Description: strings.TrimSpace(field.Description),
-		})
+		param := ToolParam{
+			Name:     name,
+			Type:     schemaType(field.Type, field.Enum, field.AnyOf),
+			Required: required[name],
+			Desc:     strings.TrimSpace(field.Description),
+		}
+		if len(field.Enum) > 0 {
+			values := make([]string, 0, len(field.Enum))
+			for _, value := range field.Enum {
+				values = append(values, literalText(value))
+			}
+			param.Enum = strings.Join(values, ", ")
+		}
+		if field.Default != nil {
+			param.Default = literalText(field.Default)
+		}
+		params = append(params, param)
 	}
 	return params
 }
@@ -181,6 +200,19 @@ func schemaType(raw any, enum []any, anyOf []any) string {
 		}
 	}
 	return ""
+}
+
+// literalText 把 JSON Schema 里的字面值渲染成短文本。
+// 字符串按原样（枚举值就是给用户看的），其余走 JSON。
+func literalText(value any) string {
+	if text, ok := value.(string); ok {
+		return text
+	}
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		return ""
+	}
+	return string(encoded)
 }
 
 func uniqueStrings(values []string) []string {

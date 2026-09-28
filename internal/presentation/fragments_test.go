@@ -161,3 +161,43 @@ func Test分支空状态有提示(t *testing.T) {
 		t.Fatalf("空状态应给出提示：%s", html)
 	}
 }
+
+// 会话详情：布局对齐 Pi Web 的会话弹层（左栏事实 + 中栏消息 + 右栏 Token）。
+// 可复制的那几行必须带复制按钮，否则用户没法把会话路径/ID 直接拿去用。
+func Test详情可复制行带按钮(t *testing.T) {
+	renderer := testRenderer(t)
+	html, err := renderer.RenderStats(StatsMeta{
+		Name: "示例", File: "/tmp/s.jsonl", ID: "abc123",
+		Cwd: "/repo", Branch: "main", Model: "m", Thinking: "off", Preset: "default",
+	}, map[string]any{
+		"userMessages": 3.0, "assistantMessages": 4.0, "totalMessages": 7.0,
+		"tokens": map[string]any{"input": 10.0, "output": 20.0, "total": 30.0},
+	}, nil)
+	if err != nil {
+		t.Fatalf("渲染失败：%v", err)
+	}
+	for _, want := range []string{`data-copy-value="/tmp/s.jsonl"`, `data-copy-value="abc123"`, `data-copy-value="/repo"`, `data-copy-value="main"`} {
+		if !strings.Contains(html, want) {
+			t.Fatalf("缺少复制按钮 %s：%s", want, html)
+		}
+	}
+	// 三栏结构：左栏事实、消息、Token。
+	for _, want := range []string{"stats-info", "消息", "Token"} {
+		if !strings.Contains(html, want) {
+			t.Fatalf("详情布局缺少 %q：%s", want, html)
+		}
+	}
+}
+
+// 统计失败时仍要给出会话事实：失败回合会让 get_session_stats 整体报错，
+// 那时面板至少该说清「这是哪个会话」。
+func Test详情统计失败仍显示事实(t *testing.T) {
+	renderer := testRenderer(t)
+	html, err := renderer.RenderStats(StatsMeta{ID: "abc123", Cwd: "/repo"}, nil, nil)
+	if err != nil {
+		t.Fatalf("渲染失败：%v", err)
+	}
+	if !strings.Contains(html, "abc123") || !strings.Contains(html, "/repo") {
+		t.Fatalf("统计缺失时仍应显示会话事实：%s", html)
+	}
+}
