@@ -5,11 +5,13 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
 	"pi-bridge-go/internal/presentation"
 	"pi-bridge-go/internal/protocol"
+	run "pi-bridge-go/internal/runtime"
 )
 
 // sessionContextTTL 是会话元数据的缓存时长。
@@ -114,4 +116,37 @@ func contextStatus(err error) int {
 		}
 	}
 	return 500
+}
+
+// statsMeta 汇总「这次会话是什么」的稳定事实。
+// 会话文件与名称来自 Pi 的 get_state；分支来自只读的 git.status，
+// 取不到就当没有——项目不在 Git 仓库里不该让整个面板失败。
+func (s *Server) statsMeta(ctx context.Context, worker *run.Worker) presentation.StatsMeta {
+	var meta presentation.StatsMeta
+	if state, err := worker.State(ctx); err == nil {
+		meta.Name = state.SessionName
+		meta.File = state.SessionFile
+		meta.ID = state.SessionID
+		meta.Thinking = state.ThinkingLevel
+		if state.Model != nil && state.Model.Provider != "" && !strings.EqualFold(state.Model.Provider, "unknown") {
+			meta.Model = state.Model.Name
+			if meta.Model == "" {
+				meta.Model = state.Model.Provider + "/" + state.Model.ID
+			}
+		}
+	}
+	if info := worker.Info(); info.ToolPreset != "" {
+		meta.Preset = info.ToolPreset
+	} else {
+		meta.Preset = "default"
+	}
+	if cwd := worker.Info().Cwd; cwd != "" {
+		meta.Cwd = cwd
+		if status, err := s.files.GitStatus(ctx, cwd); err == nil {
+			if branch, ok := status["branch"].(string); ok {
+				meta.Branch = branch
+			}
+		}
+	}
+	return meta
 }

@@ -1,6 +1,7 @@
 package transport
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -56,5 +57,28 @@ func Test会话元数据缓存有上限(t *testing.T) {
 func Test会话元数据错误状态码(t *testing.T) {
 	if code := contextStatus(nil); code != 500 {
 		t.Fatalf("未知错误应为 500，实际 %d", code)
+	}
+}
+
+// 片段端点的前置状态必须以 200 + 可读 HTML 返回。
+//
+// 理由：这些端点服务于 htmx，而 htmx 默认不交换 4xx/5xx 响应——
+// 若按错误码返回，面板会停在旧内容上且没有任何解释。真机复现过：
+// 未启动 worker 时点「会话信息」，请求确实发出，但界面一直显示占位文字。
+func Test片段端点前置状态渲染成内容(t *testing.T) {
+	renderer, err := presentation.LoadFromDir("../../../pi-webui-htmx")
+	if err != nil {
+		t.Skip("需要 pi-webui-htmx 构建产物")
+	}
+	note, rerr := renderer.RenderNote("请先显式启动会话")
+	if rerr != nil {
+		t.Fatalf("渲染说明片段失败：%v", rerr)
+	}
+	if !strings.Contains(note, "请先显式启动会话") {
+		t.Fatalf("说明片段应包含原因：%s", note)
+	}
+	// 片段自身必须能被直接交换进面板：不依赖脚本、不夹带文档结构。
+	if strings.Contains(note, "<script") {
+		t.Fatalf("说明片段不得含脚本：%s", note)
 	}
 }

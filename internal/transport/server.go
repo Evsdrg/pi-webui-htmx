@@ -294,22 +294,22 @@ func (s *Server) serveUI(w http.ResponseWriter, r *http.Request) bool {
 	case path == "/ui/sessions":
 		offset, err := number(r, "offset", 0)
 		if err != nil {
-			writeError(w, encoding, 400, err)
+			s.fragmentIssue(w, encoding, err)
 			return true
 		}
 		limit, err := number(r, "limit", 50)
 		if err != nil {
-			writeError(w, encoding, 400, err)
+			s.fragmentIssue(w, encoding, err)
 			return true
 		}
 		list, lerr := s.store.List(r.Context(), offset, limit)
 		if lerr != nil {
-			writeError(w, encoding, 400, lerr)
+			s.fragmentIssue(w, encoding, lerr)
 			return true
 		}
 		html, rerr := s.ui.RenderSessionsPage(list, r.URL.Query().Get("selected"), offset)
 		if rerr != nil {
-			writeError(w, encoding, 500, rerr)
+			s.fragmentIssue(w, encoding, rerr)
 			return true
 		}
 		writeHTML(w, encoding, html)
@@ -375,13 +375,13 @@ func (s *Server) serveUI(w http.ResponseWriter, r *http.Request) bool {
 	case path == "/ui/models":
 		out, merr := s.piConfig.Models()
 		if merr != nil {
-			writeError(w, encoding, 400, merr)
+			s.fragmentIssue(w, encoding, merr)
 			return true
 		}
 		models := presentation.ConfigModels(out)
 		html, rerr := s.ui.RenderModels(models, "")
 		if rerr != nil {
-			writeError(w, encoding, 500, rerr)
+			s.fragmentIssue(w, encoding, rerr)
 			return true
 		}
 		writeHTML(w, encoding, html)
@@ -390,12 +390,12 @@ func (s *Server) serveUI(w http.ResponseWriter, r *http.Request) bool {
 	case path == "/ui/diff":
 		diff, truncated, err := s.files.GitDiff(r.Context(), r.URL.Query().Get("path"), r.URL.Query().Get("staged") == "true", 512<<10)
 		if err != nil {
-			writeError(w, encoding, 400, err)
+			s.fragmentIssue(w, encoding, err)
 			return true
 		}
 		html, err := s.ui.RenderDiff("", presentation.ParseDiff(diff))
 		if err != nil {
-			writeError(w, encoding, 500, err)
+			s.fragmentIssue(w, encoding, err)
 			return true
 		}
 		if truncated {
@@ -407,12 +407,12 @@ func (s *Server) serveUI(w http.ResponseWriter, r *http.Request) bool {
 	case path == "/ui/packages":
 		pkgs, perr := s.piConfig.Packages(r.Context(), s.discovery)
 		if perr != nil {
-			writeError(w, encoding, 400, perr)
+			s.fragmentIssue(w, encoding, perr)
 			return true
 		}
 		html, rerr := s.ui.RenderPackages(toAnyMaps(pkgs))
 		if rerr != nil {
-			writeError(w, encoding, 500, rerr)
+			s.fragmentIssue(w, encoding, rerr)
 			return true
 		}
 		writeHTML(w, encoding, html)
@@ -428,12 +428,12 @@ func (s *Server) serveUI(w http.ResponseWriter, r *http.Request) bool {
 		}
 		entries, truncated, ferr := s.files.List(root)
 		if ferr != nil {
-			writeError(w, encoding, 400, ferr)
+			s.fragmentIssue(w, encoding, ferr)
 			return true
 		}
 		html, rerr := s.ui.RenderFiles(root, toAnyMaps(entries), truncated)
 		if rerr != nil {
-			writeError(w, encoding, 500, rerr)
+			s.fragmentIssue(w, encoding, rerr)
 			return true
 		}
 		writeHTML(w, encoding, html)
@@ -442,12 +442,12 @@ func (s *Server) serveUI(w http.ResponseWriter, r *http.Request) bool {
 	case path == "/ui/git-status":
 		status, gerr := s.files.GitStatus(r.Context(), r.URL.Query().Get("path"))
 		if gerr != nil {
-			writeError(w, encoding, 400, gerr)
+			s.fragmentIssue(w, encoding, gerr)
 			return true
 		}
 		html, rerr := s.ui.RenderGitStatus(status)
 		if rerr != nil {
-			writeError(w, encoding, 500, rerr)
+			s.fragmentIssue(w, encoding, rerr)
 			return true
 		}
 		writeHTML(w, encoding, html)
@@ -459,14 +459,14 @@ func (s *Server) serveUI(w http.ResponseWriter, r *http.Request) bool {
 		if query != "" {
 			result, serr := s.store.Search(r.Context(), query, sessions.DefaultSearchLimits())
 			if serr != nil {
-				writeError(w, encoding, 400, serr)
+				s.fragmentIssue(w, encoding, serr)
 				return true
 			}
 			hits = toAnyMaps(result.Matches)
 		}
 		html, rerr := s.ui.RenderSearch(query, hits)
 		if rerr != nil {
-			writeError(w, encoding, 500, rerr)
+			s.fragmentIssue(w, encoding, rerr)
 			return true
 		}
 		writeHTML(w, encoding, html)
@@ -477,12 +477,12 @@ func (s *Server) serveUI(w http.ResponseWriter, r *http.Request) bool {
 		// 没有纯磁盘等价物。未启动时给可读提示，不静默返回空树。
 		worker, werr := s.manager.Get(r.URL.Query().Get("sessionId"))
 		if werr != nil {
-			writeError(w, encoding, 409, werr)
+			s.fragmentIssue(w, encoding, werr)
 			return true
 		}
 		tree, terr := worker.Tree(r.Context())
 		if terr != nil {
-			writeError(w, encoding, 400, terr)
+			s.fragmentIssue(w, encoding, terr)
 			return true
 		}
 		forks, ferr := worker.ForkMessages(r.Context())
@@ -492,7 +492,7 @@ func (s *Server) serveUI(w http.ResponseWriter, r *http.Request) bool {
 		rows, forkRows := presentation.BranchRows(tree, forks, r.URL.Query().Get("leafId"))
 		html, rerr := s.ui.RenderBranch(rows, forkRows)
 		if rerr != nil {
-			writeError(w, encoding, 500, rerr)
+			s.fragmentIssue(w, encoding, rerr)
 			return true
 		}
 		writeHTML(w, encoding, html)
@@ -501,12 +501,12 @@ func (s *Server) serveUI(w http.ResponseWriter, r *http.Request) bool {
 	case path == "/ui/system":
 		value, cerr := s.sessionContext(r.Context(), r.URL.Query().Get("sessionId"))
 		if cerr != nil {
-			writeError(w, encoding, contextStatus(cerr), cerr)
+			s.fragmentIssue(w, encoding, cerr)
 			return true
 		}
 		html, rerr := s.ui.RenderSystem(value.SystemPrompt)
 		if rerr != nil {
-			writeError(w, encoding, 500, rerr)
+			s.fragmentIssue(w, encoding, rerr)
 			return true
 		}
 		writeHTML(w, encoding, html)
@@ -515,12 +515,30 @@ func (s *Server) serveUI(w http.ResponseWriter, r *http.Request) bool {
 	case path == "/ui/tools":
 		value, cerr := s.sessionContext(r.Context(), r.URL.Query().Get("sessionId"))
 		if cerr != nil {
-			writeError(w, encoding, contextStatus(cerr), cerr)
+			s.fragmentIssue(w, encoding, cerr)
 			return true
 		}
 		html, rerr := s.ui.RenderTools(value.Tools)
 		if rerr != nil {
-			writeError(w, encoding, 500, rerr)
+			s.fragmentIssue(w, encoding, rerr)
+			return true
+		}
+		writeHTML(w, encoding, html)
+		return true
+
+	case path == "/ui/stats":
+		worker, werr := s.manager.Get(r.URL.Query().Get("sessionId"))
+		if werr != nil {
+			s.fragmentIssue(w, encoding, werr)
+			return true
+		}
+		meta := s.statsMeta(r.Context(), worker)
+		stats, serr := worker.Stats(r.Context())
+		// 统计失败仍要输出会话事实：失败回合会让 get_session_stats 整体报错，
+		// 那时面板至少还应告诉你「这是哪个会话」。
+		html, rerr := s.ui.RenderStats(meta, stats, serr)
+		if rerr != nil {
+			s.fragmentIssue(w, encoding, rerr)
 			return true
 		}
 		writeHTML(w, encoding, html)

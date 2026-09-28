@@ -997,3 +997,19 @@ func shortID(id string) string {
 	}
 	return id
 }
+
+// NoteData 驱动一条纯文本提示片段。
+type NoteData struct {
+	Message string
+}
+
+// RenderNote 渲染一条说明片段。
+//
+// 用途：片段端点服务于 htmx，而 htmx 默认不交换 4xx/5xx 响应，
+// 因此「还没启动会话」这类前置状态如果按 HTTP 错误返回，用户只会看到
+// 上一次的内容、得不到任何解释。与其在前端用 JS 强制交换错误响应，
+// 不如让端点直接把状态当作内容渲染出来——这也是 htmx 的用法本意：
+// 由服务端决定用户看到什么。
+func (r *Renderer) RenderNote(message string) (string, error) {
+	return r.execute("note.html", NoteData{Message: message})
+}

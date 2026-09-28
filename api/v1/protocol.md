@@ -173,7 +173,23 @@ GET /ui/tools?sessionId=ID      当前实际暴露给模型的工具：name/desc
 - 桥按需导出一次到**自己的临时目录**（不是导出目录，避免内部产物被 `/ui/exports` 下载），读回后立即删除。
 - 结果按 `(sessionId, epoch)` 缓存 120 秒、上限 8 条。epoch 变化（fork/clone/切换身份）即失效；不缓存就等于每开一次面板都重导一次完整会话。
 - `tools` 是 `AgentState.tools`，也就是**实际生效**的工具集合，受启动时的工具预设与扩展追加影响，不是"全部可用工具目录"。
-- 两个端点都需要活动 worker（`systemPrompt`/`tools` 只存在于活的 Pi 进程里，JSONL 不含它们）。未启动返回 `409 worker_not_running`；导出超过 64 MiB 返回 `413`；模板里找不到数据块时明确失败，不静默返回空面板。
+- 两个端点都需要活动 worker（`systemPrompt`/`tools` 只存在于活的 Pi 进程里，JSONL 不含它们）。导出超过 64 MiB（`limit_exceeded`）或模板里找不到数据块时明确失败，不静默返回空面板。
+
+### 片段端点的状态码约定
+
+htmx 换入的片段端点（`/ui/sessions`、`/ui/search`、`/ui/models`、`/ui/files`、`/ui/git-status`、`/ui/diff`、`/ui/branch`、`/ui/system`、`/ui/tools`、`/ui/stats`、`/ui/extensions/*`）**一律返回 `200` + 一段可读 HTML**，包括「worker 未启动」这类前置状态：
+
+- 理由是 htmx 默认不交换 4xx/5xx 响应。若按错误码返回，面板会停在旧内容上且没有任何解释——这是真机复现过的现象（未启动 worker 时点「会话信息」，请求确实发出，界面却一直显示占位文字）。
+- 与其在前端用 JS 强制交换错误响应，不如让端点把状态当作内容渲染（`internal/presentation` 的 `RenderNote`）：由服务端决定用户看到什么。
+- **不适用**于非 htmx 端点：`/ui/file-text`、`/ui/file-image`、`/ui/sessions/{id}/lazy` 由 JS 的 `response.ok` 判断，`/ui/exports/*` 是浏览器导航——它们保留真实状态码。
+
+### 会话详情
+
+```text
+GET /ui/stats?sessionId=ID
+```
+
+数字全部来自 Pi 的 `get_session_stats`（`userMessages/assistantMessages/toolCalls/toolResults/totalMessages`、`tokens.{input,output,cacheRead,cacheWrite,total}`、`cost`、`contextUsage`），桥只做分类与格式化。缓存读写与缓存命中率只在实际发生时显示。`get_session_stats` 会因失败回合整体报错，那时仍输出会话、项目、运行三组事实——面板至少该告诉你「这是哪个会话」。
 
 ### 工作区文件
 

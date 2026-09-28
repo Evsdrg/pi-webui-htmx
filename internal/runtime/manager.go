@@ -56,10 +56,12 @@ type State struct {
 	IsCompacting        bool   `json:"isCompacting"`
 	PendingMessageCount int    `json:"pendingMessageCount"`
 	MessageCount        int    `json:"messageCount"`
-	SteeringMode        string `json:"steeringMode,omitempty"`
-	FollowUpMode        string `json:"followUpMode,omitempty"`
-	AutoCompaction      bool   `json:"autoCompactionEnabled"`
-	Model               *struct {
+	// SessionFile 是 Pi 当前写入的会话文件；未落盘的新建会话为空。
+	SessionFile    string `json:"sessionFile,omitempty"`
+	SteeringMode   string `json:"steeringMode,omitempty"`
+	FollowUpMode   string `json:"followUpMode,omitempty"`
+	AutoCompaction bool   `json:"autoCompactionEnabled"`
+	Model          *struct {
 		ID       string `json:"id"`
 		Name     string `json:"name"`
 		Provider string `json:"provider"`
