@@ -36,8 +36,7 @@
       <button class="icon-btn" data-action="workspace" aria-label="打开工作区面板" aria-controls="workspace-panel" aria-expanded="false">▤</button>
     </header>
     <section id="panel-info" class="top-panel" hidden>
-      <header><strong>会话信息</strong><button class="icon-btn" type="button" data-action="panel-info-close" aria-label="关闭会话信息">×</button></header>
-      <p class="panel-heading"><strong id="session-title">新会话</strong><span id="session-cwd" class="muted">选择工作目录，开始对话</span></p>
+      <button class="icon-btn panel-close" type="button" data-action="panel-info-close" aria-label="关闭会话信息">×</button>
       <input type="hidden" id="stats-session" name="sessionId" value="">
       <div id="stats-body" hx-get="/ui/stats" hx-trigger="stats-refresh from:body" hx-include="#stats-session" hx-swap="innerHTML"><p class="muted">打开时读取会话详情。</p></div>
     </section>
@@ -52,28 +51,14 @@
       </form>
     </section>
     <section id="panel-system" class="top-panel" hidden>
-      <header><strong>系统</strong><button class="icon-btn" type="button" data-action="panel-system-close" aria-label="关闭系统面板">×</button></header>
-      <p class="muted">Pi 的 RPC 没有直接暴露系统提示词的命令；这两个面板的数据来自一次按需导出的会话快照（<code>export_html</code> 会把 Pi 内部的 systemPrompt 与 tools 一并写入）。下面是 Pi 实际组装的完整提示词。</p>
+      <button class="icon-btn panel-close" type="button" data-action="panel-system-close" aria-label="关闭系统面板">×</button>
       <input type="hidden" id="system-session" name="sessionId" value="">
-      <div id="system-body" hx-get="/ui/system" hx-trigger="system-refresh from:body" hx-include="#system-session" hx-swap="innerHTML"><p class="muted">打开时读取。</p></div>
-      <h3>进入提示词的其它输入</h3>
-      <dl id="system-facts" class="facts"></dl>
+      <div id="system-body" hx-get="/ui/system" hx-trigger="system-refresh from:body" hx-include="#system-session" hx-swap="innerHTML" title="Pi 的 RPC 不直接暴露系统提示词；此处内容来自一次按需导出的会话快照。"><p class="muted">打开时读取。</p></div>
     </section>
     <section id="panel-tools" class="top-panel" hidden>
-      <header><strong>工具</strong><button class="icon-btn" type="button" data-action="panel-tools-close" aria-label="关闭工具面板">×</button></header>
-      <p class="muted">工具预设只在启动工作进程时生效；下方清单是**本次进程实际暴露给模型**的工具，会随预设与已装扩展变化。</p>
-      <form id="tool-preset-form" class="panel-form">
-        <label for="tool-preset-select">工具预设</label>
-        <select id="tool-preset-select">
-          <option value="chat-only">仅聊天（不启用任何工具）</option>
-          <option value="read-only">只读（read/grep/find/ls）</option>
-          <option value="default" selected>默认（read/bash/edit/write）</option>
-          <option value="full">完整（内置 7 项全部启用）</option>
-        </select>
-        <p class="muted" id="tool-preset-note"></p>
-      </form>
+      <button class="icon-btn panel-close" type="button" data-action="panel-tools-close" aria-label="关闭工具面板">×</button>
       <input type="hidden" id="tools-session" name="sessionId" value="">
-      <div id="tools-body" hx-get="/ui/tools" hx-trigger="tools-refresh from:body" hx-include="#tools-session" hx-swap="innerHTML"><p class="muted">打开时读取。</p></div>
+      <div id="tools-body" hx-get="/ui/tools" hx-trigger="tools-refresh from:body" hx-include="#tools-session" hx-swap="innerHTML" title="以下是本次工作进程实际暴露给模型的工具，随启动时的工具预设与已装扩展变化。"><p class="muted">打开时读取。</p></div>
     </section>
     <div id="connection-notice" class="notice" role="status" hidden></div>
     <div id="history-scope" class="history-scope" hidden><span>仅显示所选位置以前的历史；发送仍沿会话当前分支继续。</span><button class="btn-quiet" type="button" data-action="branch-current">返回最新</button></div>

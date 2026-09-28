@@ -16,6 +16,8 @@ export interface TopbarHost {
   setPreset(value: string): void;
   presetKey(): string;
   presetBySession(): Map<string, string>;
+  /** setTitle 记录会话名；侧栏列表负责显示，这里只更新内部状态。 */
+  setTitle(title: string): void;
   request<T = unknown>(method: Method, params?: unknown, session?: string): Promise<T>;
   notify(message: string, kind?: string): void;
   fail(error: unknown): void;
@@ -51,13 +53,11 @@ export function toggle(host: TopbarHost, target: string, force?: boolean): void 
     // 提示词由桥渲染（它得先让 Pi 导出一份快照）；这里只负责带上会话 ID 触发刷新。
     el<HTMLInputElement>('system-session').value = host.sessionId();
     window.htmx.trigger(document.body, 'system-refresh');
-    renderSystemFacts(host);
   }
   if (target === 'panel-tools') {
     // 工具面板同理：显示的是本次进程实际暴露给模型的工具，不是预设的自述。
     el<HTMLInputElement>('tools-session').value = host.sessionId();
     window.htmx.trigger(document.body, 'tools-refresh');
-    renderToolPresetNote(host);
   }
 }
 
@@ -70,22 +70,6 @@ export async function openFullHistory(host: TopbarHost): Promise<void> {
   if (!file) { host.notify('Pi 没有返回导出文件', 'warning'); return; }
   window.open(`/ui/exports/${encodeURIComponent(file)}?inline=1`, '_blank', 'noopener,noreferrer');
   host.notify('已在新标签页打开完整历史。');
-}
-
-function renderSystemFacts(host: TopbarHost): void {
-  const rows: [string, string][] = [
-    ['模型', host.modelLabel()],
-    ['上下文窗口', host.contextWindow() > 0 ? `${host.contextWindow().toLocaleString()} tokens` : '未知'],
-    ['工作目录', host.cwd() || '未选择'],
-    ['会话 ID', host.sessionId() || '尚未分配'],
-    ['思考强度', host.thinking() || '自动'],
-    ['工具预设', host.preset()],
-  ];
-  el('system-facts').replaceChildren(...rows.flatMap(([label, value]) => {
-    const term = document.createElement('dt'); term.textContent = label;
-    const desc = document.createElement('dd'); desc.textContent = value;
-    return [term, desc];
-  }));
 }
 
 function prefillLocalTitle(): void {
@@ -108,16 +92,6 @@ export async function saveLocalTitle(host: TopbarHost): Promise<void> {
   } catch (error) { host.fail(error); }
 }
 
-function renderToolPresetNote(host: TopbarHost): void {
-  const notes: Record<string, string> = {
-    'chat-only': '不启用任何工具（内置与扩展），只做纯对话。',
-    'read-only': '保留 read/grep/find/ls 与扩展工具，禁用 bash/edit/write。',
-    default: 'Pi 的默认工具集 read/bash/edit/write，扩展工具保持可用。',
-    full: '启用内置 7 项工具。Pi 的 --tools 是白名单，会连带禁用扩展工具（含 magic-context），这是上游限制。',
-  };
-  el('tool-preset-note').textContent = notes[host.preset()] ?? '';
-}
-
 // changeToolPreset 切换工具预设。Pi 的工具集只能在拉起进程时通过
 // --tools/--exclude-tools/--no-tools 指定，RPC 没有运行中切换入口，
 // 因此改动必须停掉当前 worker 再用新预设启动；运行中的任务会随之中断，
@@ -131,7 +105,6 @@ export async function changeToolPreset(host: TopbarHost): Promise<void> {
     host.setPreset(previous || 'default');
     return;
   }
-  renderToolPresetNote(host);
   try {
     if (host.sessionId()) await host.request('session.stop', { force: false }, host.sessionId()).catch(() => {});
     host.presetBySession().set(key, preset);

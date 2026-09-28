@@ -34,7 +34,7 @@ function mount() {
  <div class=queue-hint id=queue-hint hidden></div>
  <header class=topbar><nav class=topbar-tools aria-label=功能区><button data-action=full-history>完整历史</button><button data-action=panel-title aria-controls=panel-title aria-expanded=false>生成标题</button><button data-action=panel-system aria-controls=panel-system aria-expanded=false>系统</button><button data-action=panel-tools aria-controls=panel-tools aria-expanded=false>工具</button></nav><button id=context-usage data-action=panel-info aria-controls=panel-info aria-expanded=false hidden></button><span id=session-state class=state>就绪</span></header>
  <section id=panel-info hidden><button data-action=panel-info-close></button><dl id=session-facts></dl></section>
- <section id=panel-title hidden><button data-action=panel-title-close></button><form id=title-form><input id=local-title></form></section><section id=panel-system hidden><button data-action=panel-system-close></button><dl id=system-facts></dl></section><section id=panel-tools hidden><button data-action=panel-tools-close></button><form id=tool-preset-form><select id=tool-preset-select><option value=chat-only>仅聊天</option><option value=read-only>只读</option><option value=default selected>默认</option><option value=full>完整</option></select><p id=tool-preset-note></p></form></section>
+ <section id=panel-title hidden><button data-action=panel-title-close></button><form id=title-form><input id=local-title></form></section><section id=panel-system hidden><button data-action=panel-system-close></button><div id=system-body></div></section><section id=panel-tools hidden><button data-action=panel-tools-close></button><div id=tools-body></div></section>
  <dialog id=models-dialog><p id=models-status></p><textarea id=models-editor></textarea><input id=discover-url><input id=discover-api><input id=discover-key><textarea id=discover-headers></textarea><div id=discover-result></div><button data-action=models-edit>编辑</button><button data-action=models-reload>重读</button><button data-action=models-save>保存</button><button data-action=models-discover>发现</button><button data-action=models-test>测试</button></dialog>`;
  for(const id of ['live','conn-state','connection-notice','session-state','session-title','session-cwd','session-list','session-count','turns','older-slot','chat-scroll','welcome','command-menu','ext-status-slot','ext-widgets-before','ext-widgets-after','ext-dialog-slot','usage','toast-root']) {const node=document.createElement('div');node.id=id;document.body.append(node);}
 {for(const id of ['search-query','system-session','tools-session','stats-session','branch-session','files-path','git-path','diff-path']){const node=document.createElement('input');node.type='hidden';node.id=id;document.body.append(node);}}
@@ -419,7 +419,9 @@ describe('搜索结果归属与定位', () => {
     expect(link.dataset.cwd).toBe('/fixture');
     link.click();
     await vi.waitFor(() => expect(document.body.dataset.sessionId).toBe('s2'));
-    expect(document.getElementById('session-title')?.textContent).toBe('Sample workspace review');
+    // 会话名不再有独立的显示节点：侧栏列表负责显示，Workbench 只保存内部状态
+    // （重命名流程与搜索结果标题都用它）。
+    expect(workbench.title()).toBe('Sample workspace review');
     expect(vi.mocked(window.htmx.ajax).mock.calls.some((call) => String(call[1]).includes('/ui/sessions/s2/history?leafId=a1'))).toBe(true);
 
     const turns = document.getElementById('turns')!;
@@ -924,8 +926,8 @@ function stubHost(overrides: { busy?: boolean } = {}) {
     contextWindow: () => 65536,
     setContextWindow: () => {},
     thinking: () => '',
-    preset: () => (document.getElementById('tool-preset-select') as HTMLSelectElement).value,
-    setPreset: (value: string) => { for (const id of ['tool-preset-select', 'tool-preset-quick']) { const node = document.getElementById(id) as HTMLSelectElement | null; if (node) node.value = value; } },
+    preset: () => (document.getElementById('tool-preset-quick') as HTMLSelectElement).value,
+    setPreset: (value: string) => { const node = document.getElementById('tool-preset-quick') as HTMLSelectElement | null; if (node) node.value = value; },
     presetKey: () => 's1',
     request: async (method: string, params?: unknown) => {
       if (method === 'session.stop') { state.stopCalls.push(params); return {}; }
@@ -950,7 +952,7 @@ describe('工具预设切换需要重启 worker', () => {
   it('空闲时直接停止并按新预设重启', async () => {
     workbench.selectSession('s1', '/tmp/a', 'A');
     await vi.waitFor(() => expect(document.body.dataset.sessionId).toBe('s1'));
-    const select = document.getElementById('tool-preset-select') as HTMLSelectElement;
+    const select = document.getElementById('tool-preset-quick') as HTMLSelectElement;
     select.value = 'read-only';
     select.dispatchEvent(new Event('change', { bubbles: true }));
     await vi.waitFor(() => expect(startCalls().some((params) => params.toolPreset === 'read-only')).toBe(true));
@@ -961,14 +963,13 @@ describe('工具预设切换需要重启 worker', () => {
     const topbar = await import('../../src/modules/topbar');
     const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false);
     const host = stubHost({ busy: true });
-    (document.getElementById('tool-preset-select') as HTMLSelectElement).value = 'chat-only';
+    (document.getElementById('tool-preset-quick') as HTMLSelectElement).value = 'chat-only';
     await topbar.changeToolPreset(host);
     expect(confirm).toHaveBeenCalledTimes(1);
     expect(confirm.mock.calls[0]?.[0]).toContain('重启');
     expect(host.stopCalls).toHaveLength(0);
     expect(host.startCalls).toHaveLength(0);
-    // 取消后两个入口都必须回到上一个值，不能停在用户刚点的那个。
-    expect((document.getElementById('tool-preset-select') as HTMLSelectElement).value).toBe('default');
+    // 取消后必须回到上一个值，不能停在用户刚点的那个。
     expect((document.getElementById('tool-preset-quick') as HTMLSelectElement).value).toBe('default');
     confirm.mockRestore();
   });
@@ -977,7 +978,7 @@ describe('工具预设切换需要重启 worker', () => {
     const topbar = await import('../../src/modules/topbar');
     const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true);
     const host = stubHost({ busy: true });
-    (document.getElementById('tool-preset-select') as HTMLSelectElement).value = 'full';
+    (document.getElementById('tool-preset-quick') as HTMLSelectElement).value = 'full';
     await topbar.changeToolPreset(host);
     expect(host.stopCalls).toEqual([{ force: false }]);
     expect(host.startCalls).toEqual([{ cwd: '/tmp/a', toolPreset: 'full' }]);
@@ -988,7 +989,7 @@ describe('工具预设切换需要重启 worker', () => {
   it('预设按会话隔离', async () => {
     workbench.selectSession('s1', '/tmp/a', 'A');
     await vi.waitFor(() => expect(document.body.dataset.sessionId).toBe('s1'));
-    const select = document.getElementById('tool-preset-select') as HTMLSelectElement;
+    const select = document.getElementById('tool-preset-quick') as HTMLSelectElement;
     select.value = 'full';
     select.dispatchEvent(new Event('change', { bubbles: true }));
     await vi.waitFor(() => expect(startCalls().some((params) => params.toolPreset === 'full')).toBe(true));
@@ -1017,15 +1018,16 @@ describe('顶栏功能面板', () => {
     await vi.waitFor(() => expect(tools.hidden).toBe(true));
   });
 
-  it('工具面板说明 full 会禁用扩展工具', async () => {
-    const note = document.getElementById('tool-preset-note')!;
+  // 工具面板本体由桥渲染（/ui/tools）：这里只锁前端职责——把会话 ID 交给请求、
+  // 触发一次刷新。列表内容（实际暴露给模型的工具、受预设控制）由桥的片段测试覆盖。
+  it('工具面板把会话 ID 交给片段请求', async () => {
+    workbench.selectSession('s1', '/tmp/a', 'A');
+    await vi.waitFor(() => expect(document.body.dataset.sessionId).toBe('s1'));
     document.querySelector('[data-action="panel-tools"]')!.dispatchEvent(new Event('click', { bubbles: true }));
     await vi.waitFor(() => expect(document.getElementById('panel-tools')!.hidden).toBe(false));
-    expect(note.textContent).toContain('read/bash/edit/write');
-    const select = document.getElementById('tool-preset-select') as HTMLSelectElement;
-    select.value = 'full';
-    select.dispatchEvent(new Event('change', { bubbles: true }));
-    await vi.waitFor(() => expect(note.textContent).toContain('禁用扩展工具'));
+    expect((document.getElementById('tools-session') as HTMLInputElement).value).toBe('s1');
+    expect(vi.mocked(window.htmx.trigger).mock.calls.some((call) => call[1] === 'tools-refresh')).toBe(true);
+    expect(document.getElementById('tools-body')).not.toBeNull();
   });
 
   it('会话信息面板承载会话名称与工作目录', async () => {
@@ -1064,7 +1066,7 @@ describe('顶栏功能面板', () => {
     open.mockRestore();
   });
 
-  it('系统面板展示真实可得的事实，不编系统提示词', async () => {
+  it('系统面板把会话 ID 交给片段请求', async () => {
     workbench.selectSession('s1', '/tmp/a', 'A');
     await vi.waitFor(() => expect(document.body.dataset.sessionId).toBe('s1'));
     fake.request.mockImplementation(async (method: string) => {
@@ -1078,9 +1080,8 @@ describe('顶栏功能面板', () => {
     await vi.waitFor(() => expect(document.getElementById('context-usage')!.hidden).toBe(false));
     document.querySelector('[data-action="panel-system"]')!.dispatchEvent(new Event('click', { bubbles: true }));
     await vi.waitFor(() => expect(document.getElementById('panel-system')!.hidden).toBe(false));
-    const facts = document.getElementById('system-facts')!.textContent ?? '';
-    expect(facts).toContain('65,536');
-    expect(facts).toContain('s1');
-    expect(facts).not.toContain('系统提示词');
+    // 提示词内容由桥渲染；前端只负责带上会话 ID 与触发刷新。
+    expect((document.getElementById('system-session') as HTMLInputElement).value).toBe('s1');
+    expect(vi.mocked(window.htmx.trigger).mock.calls.some((call) => call[1] === 'system-refresh')).toBe(true);
   });
 });

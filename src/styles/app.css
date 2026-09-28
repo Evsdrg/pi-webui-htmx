@@ -64,12 +64,10 @@ kbd { font-size:10px; color:var(--text-dim); margin-left:auto; }
    把对话压下去；这里用同一语义的绝对定位（.conversation 是定位祖先），
    只需要知道顶栏高度——CSS 给出默认值，JS 用 ResizeObserver 校正实际值。 */
 .conversation { --topbar-h:40px; }
-.top-panel { position:absolute; top:var(--topbar-h); left:0; right:0; z-index:6; max-height:calc(100dvh - var(--topbar-h)); overflow:auto; padding:14px 20px 18px; border-bottom:1px solid var(--border); background:var(--bg-panel); box-shadow:0 12px 28px #0002; font-size:12px; line-height:1.6; }
-.top-panel header { display:flex; align-items:center; justify-content:space-between; }
+.top-panel { position:absolute; top:var(--topbar-h); left:0; right:0; z-index:6; max-height:calc(100dvh - var(--topbar-h)); overflow:auto; padding:12px 16px; border-bottom:1px solid var(--border); background:var(--bg-panel); box-shadow:0 12px 28px #0002; font-size:12px; line-height:1.6; }
 .top-panel header strong { font-size:13px; }
 .top-panel p { margin:4px 0; }
 .top-panel code { font-size:11px; padding:1px 4px; border-radius:4px; background:var(--bg); }
-.top-panel header,.panel-heading { margin-bottom:6px; }
 .panel-form { display:flex; align-items:center; gap:8px; margin-top:8px; flex-wrap:wrap; }
 .panel-form label { font-size:11px; color:var(--text-muted); }
 .panel-form input,.panel-form select { font-size:12px; padding:5px 8px; }
@@ -372,7 +370,7 @@ input,select,textarea { background:var(--bg); border:1px solid var(--border); bo
 .copy-btn.copied { color:var(--accent); border-color:var(--accent); }
 /* 中栏消息只有「标签 + 值」两列；右栏 Token 与用量右对齐、紧凑
    （对应 Pi Web 的 compact 变体）。 */
-.stats-grid > .stats-section > .stats-rows { grid-template-columns:auto minmax(0,1fr); }
+.stats-grid > .stats-section > .stats-rows { grid-template-columns:auto minmax(0,1fr); row-gap:4px; }
 .stats-token .stats-rows { grid-template-columns:max-content max-content; column-gap:14px; row-gap:4px; justify-content:start; }
 .stats-token .stats-rows dd { text-align:right; white-space:nowrap; }
 @media (max-width:760px) {
@@ -380,6 +378,15 @@ input,select,textarea { background:var(--bg); border:1px solid var(--border); bo
   .stats-info { gap:16px; }
 }
 .top-panel .empty-note { margin:8px 0; }
+/* 关闭按钮绝对定位：Pi Web 的这几个面板没有标题行，关闭靠再点一次工具栏按钮。
+   我们保留一个显式的 ×（可访问性更好）但不让它占一行高度。 */
+/* 关闭按钮浮在面板右上角（Pi Web 的面板没有标题行，关闭靠再点一次工具栏按钮；
+   我们保留一个显式 × 以便键盘/读屏用户，但不让它占一行高度）。
+   背景不透明，避免它压在正文上时字迹互相穿透。 */
+.top-panel > .panel-close { position:absolute; top:6px; right:8px; z-index:2; background:var(--bg-panel); border-color:var(--border); }
+.top-panel > .panel-close:hover { background:var(--bg-hover); }
+/* 给浮动的 × 让出宽度，正文不会钻到它下面。 */
+#system-body, #tools-body { padding-right:20px; }
 
 /* 回合操作：默认弱化，鼠标悬停或键盘聚焦到该回合时显形。
    与 Pi Web 一致地「悬停才出现」，但用 :focus-within 保住键盘可达性——

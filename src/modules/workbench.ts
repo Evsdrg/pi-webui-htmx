@@ -76,6 +76,8 @@ export class Workbench {
   private historicalModel: { provider: string; id: string } | undefined;
   private modelIntent: { provider: string; id: string } | undefined;
   private modelUnavailable = false;
+  /** sessionTitle 是当前会话名；侧栏列表负责显示，这里只保存供重命名等流程使用。 */
+  private sessionTitle = '';
   /** searchQuery 记录当前搜索词，用于在片段落地后判断结果是否已过期。 */
   private searchQuery = '';
   /** contextWindow 记录当前模型的上下文窗口，供「系统」面板显示。 */
@@ -164,12 +166,10 @@ export class Workbench {
       void this.command('session.set_thinking', { level }).catch((err) => this.fail(err));
     }, { signal });
     // 两个预设入口共用同一处理：先把快捷选择的值同步到面板，再走切换。
-    for (const id of ['tool-preset-select', 'tool-preset-quick']) {
-      el(id).addEventListener('change', () => {
-        if (id === 'tool-preset-quick') el<HTMLSelectElement>('tool-preset-select').value = el<HTMLSelectElement>('tool-preset-quick').value;
-        void this.topbar().then((m) => m.changeToolPreset(this.host)).catch((err) => this.fail(err));
-      }, { signal });
-    }
+    // 工具预设只有输入栏一个选择器（面板里不再重复一份）。
+    el('tool-preset-quick').addEventListener('change', () => {
+      void this.topbar().then((m) => m.changeToolPreset(this.host)).catch((err) => this.fail(err));
+    }, { signal });
     el('title-form').addEventListener('submit', (event) => { event.preventDefault(); void this.topbar().then((m) => m.saveLocalTitle(this.host)).catch((err) => this.fail(err)); }, { signal });
     for (const action of ['panel-info', 'panel-title', 'panel-system', 'panel-tools']) {
       document.querySelector(`[data-action="${action}"]`)?.addEventListener('click', () => this.toggleTopPanel(action), { signal });
@@ -188,6 +188,13 @@ export class Workbench {
     }
     document.addEventListener('click', (event) => this.onClick(event), { signal });
     document.addEventListener('keydown', (event) => { if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'k') { event.preventDefault(); void this.newSession().catch((err) => this.fail(err)); } }, { signal });
+    // Escape 关闭已打开的顶栏面板（同时只开一个）。
+    document.addEventListener('keydown', (event) => {
+      if (event.key !== 'Escape') return;
+      for (const action of ['panel-info', 'panel-title', 'panel-system', 'panel-tools']) {
+        if (!el(action === 'panel-info' ? 'panel-info' : action).hidden) { this.toggleTopPanel(action, false); return; }
+      }
+    }, { signal });
     window.addEventListener('popstate', () => this.selectSession(new URL(location.href).searchParams.get('session') ?? '', '', '会话', false), { signal });
     document.addEventListener('visibilitychange', () => { if (!document.hidden && this.bridge.connected) void this.reconcile().catch((err) => this.fail(err)); }, { signal });
     document.addEventListener('htmx:beforeSwap', (event) => {
@@ -308,7 +315,7 @@ export class Workbench {
       document.body.dataset.sessionId = this.sessionId;
       history.replaceState(null, '', `/?session=${encodeURIComponent(info.sessionId)}`);
     }
-    this.cwd = info.cwd; el('session-cwd').textContent = this.cwd;
+    this.cwd = info.cwd;
     await this.subscribe();
     await this.refreshState(activeScope);
     // 启动后立刻取一次统计：上下文用量只有 worker 持有模型时才非空，
@@ -339,7 +346,7 @@ export class Workbench {
     let state: State;
     try { state = await this.request<State>('session.state'); } catch { return; }
     if (!scope.alive()) return;
-    if (state.sessionName) el('session-title').textContent = state.sessionName;
+    if (state.sessionName) this.sessionTitle = state.sessionName;
     this.applyStateModel(state);
     await this.refreshThinking(state.thinkingLevel);
     this.refreshQueueState(state);
@@ -365,7 +372,7 @@ export class Workbench {
       this.currentModel = undefined; this.modelUnavailable = false; this.renderModel();
       this.setRun('idle'); return;
     }
-    this.cwd = worker.cwd; el('session-cwd').textContent = this.cwd;
+    this.cwd = worker.cwd;
     await this.subscribe();
     const stateSeq = this.cursor.seq;
     const state = await this.request<State>('session.state');
@@ -373,7 +380,7 @@ export class Workbench {
     const wasBusy = this.run !== 'idle';
     const busy = state.isStreaming || state.isCompacting || (state.pendingMessageCount ?? 0) > 0;
     this.setRun(busy ? (state.isCompacting ? 'compacting' : 'running') : 'idle');
-    if (state.sessionName) el('session-title').textContent = state.sessionName;
+    if (state.sessionName) this.sessionTitle = state.sessionName;
     this.applyStateModel(state);
     if (wasBusy && !busy) await this.settled();
     else if (!busy && el('connection-notice').textContent === SUBSCRIPTION_CHECK_NOTICE) this.notice('');
@@ -399,7 +406,7 @@ export class Workbench {
     this.statuses.clear(); this.widgets.clear(); this.renderExtensions(); this.commands = [];
     el('turns').replaceChildren(); el('older-slot').replaceChildren(); el('ext-dialog-slot').replaceChildren();
     el('history-scope').hidden = true; el('unsaved-branch').hidden = !id || persisted;
-    el('welcome').hidden = !!id; el('session-title').textContent = title; el('session-cwd').textContent = cwd || '选择工作目录，开始对话';
+    el('welcome').hidden = !!id; this.sessionTitle = title; this.cwd = cwd;
     // 发送进行中不覆盖输入框：那条消息还没发出去，切换会话后
     // 用户要能在这里继续重发（U13）。其余情况照常载入目标会话草稿。
     // 附件按会话隔离：上一会话的图片不能留在新会话里被发送出去（U01）。
@@ -411,7 +418,8 @@ export class Workbench {
     const thinkingSelect = el<HTMLSelectElement>('thinking-select');
     thinkingSelect.value = rememberedThinking && Array.from(thinkingSelect.options).some((option) => option.value === rememberedThinking) ? rememberedThinking : '';
     // 工具预设在 worker 启动时生效；这里只回显该会话上次的选择。
-    for (const node of ['tool-preset-select', 'tool-preset-quick']) { const select = document.getElementById(node) as HTMLSelectElement | null; if (select) select.value = this.toolPresetBySession.get(id) ?? 'default'; }
+    const presetSelect = document.getElementById('tool-preset-quick') as HTMLSelectElement | null;
+    if (presetSelect) presetSelect.value = this.toolPresetBySession.get(id) ?? 'default';
     if (!this.sending) el<HTMLTextAreaElement>('prompt').value = readDraft(this.draftKey());
     document.body.dataset.sessionId = id; this.setRun('idle'); this.notice(''); closeMobileSidebar();
     if (push) history.pushState(null, '', id ? `/?session=${encodeURIComponent(id)}` : '/');
@@ -556,7 +564,7 @@ export class Workbench {
   private markSelected(): void {
     for (const link of document.querySelectorAll<HTMLElement>('[data-session]')) {
       link.classList.toggle('selected', link.dataset.session === this.sessionId);
-      if (link.dataset.session === this.sessionId && !this.cwd) { this.cwd = link.dataset.cwd ?? ''; el('session-cwd').textContent = this.cwd; el('session-title').textContent = link.dataset.title ?? '会话'; }
+      if (link.dataset.session === this.sessionId && !this.cwd) { this.cwd = link.dataset.cwd ?? ''; this.sessionTitle = link.dataset.title ?? '会话'; }
     }
     el('session-count').textContent = String(document.querySelectorAll('[data-session]').length);
   }
@@ -595,6 +603,9 @@ export class Workbench {
     void this.topbar().then((m) => m.toggle(this.host, target, force)).catch((err) => this.fail(err));
   }
   // topbarHost 把顶栏面板需要的最小能力交给独立模块，避免把面板逻辑留在首屏包内。
+  /** title 暴露当前会话名，供测试与重命名流程读取。 */
+  title(): string { return this.sessionTitle; }
+
   private get host(): TopbarHost {
     return {
       sessionId: () => this.sessionId,
@@ -604,8 +615,9 @@ export class Workbench {
       contextWindow: () => this.contextWindow,
       setContextWindow: (value) => { this.contextWindow = value; },
       thinking: () => el<HTMLSelectElement>('thinking-select').value,
-      preset: () => el<HTMLSelectElement>('tool-preset-select').value,
-      setPreset: (value) => { for (const id of ['tool-preset-select', 'tool-preset-quick']) { const node = document.getElementById(id) as HTMLSelectElement | null; if (node) node.value = value; } },
+      preset: () => el<HTMLSelectElement>('tool-preset-quick').value,
+      setTitle: (title) => { this.sessionTitle = title; },
+      setPreset: (value) => { const node = document.getElementById('tool-preset-quick') as HTMLSelectElement | null; if (node) node.value = value; },
       presetKey: () => this.queueChoiceKey(),
       presetBySession: () => this.toolPresetBySession,
       request: (method, params, session) => this.request(method, params, session),
@@ -632,7 +644,7 @@ export class Workbench {
     select.querySelectorAll('option[data-model-status]').forEach((option) => option.remove());
     if (this.modelIntent) {
       const option = Array.from(select.options).find((item) => item.dataset.provider === this.modelIntent?.provider && item.dataset.modelId === this.modelIntent?.id);
-      if (option) { select.value = option.value; select.title = option.textContent?.trim() ?? ''; this.updateControls(); return; }
+      if (option) { select.value = option.value; select.title = option.title || option.textContent?.trim() || ''; this.updateControls(); return; }
     }
     if (this.currentModel) {
       this.selectModel(this.currentModel.provider, this.currentModel.id, this.currentModel.name);
@@ -647,16 +659,16 @@ export class Workbench {
     }
     select.title = this.historicalModel && !this.currentModel
       ? `${this.historicalModel.provider}/${this.historicalModel.id} · ${this.modelUnavailable ? '历史模型，当前不可用' : '历史模型，待启动确认'}`
-      : select.selectedOptions[0]?.textContent?.trim() ?? '';
+      : (select.selectedOptions[0]?.title || select.selectedOptions[0]?.textContent?.trim() || '');
     this.updateControls();
   }
   private selectModel(provider: string, id: string, name = id): void {
     this.currentModel = { provider, id, name };
     const select = el<HTMLSelectElement>('model-select');
     let option = Array.from(select.options).find((item) => item.dataset.provider === provider && item.dataset.modelId === id);
-    if (!option) { option = new Option(`${name} · ${provider}`, `${provider}/${id}`); option.dataset.provider = provider; option.dataset.modelId = id; option.dataset.runtimeModel = 'true'; select.add(option); }
+    if (!option) { option = new Option(name, `${provider}/${id}`); option.title = `${provider}/${id}`; option.dataset.provider = provider; option.dataset.modelId = id; option.dataset.runtimeModel = 'true'; select.add(option); }
     select.value = option.value;
-    select.title = option.textContent?.trim() ?? '';
+    select.title = option.title || option.textContent?.trim() || '';
   }
   private async changeModel(): Promise<void> {
     const selected = this.selectedModel();
@@ -781,7 +793,7 @@ export class Workbench {
       case 'models-discover': await this.models?.discover(); break;
       case 'models-test': await this.models?.test(); break;
       case 'session-menu': {
-        el<HTMLInputElement>('session-name').value = el('session-title').textContent ?? '';
+        el<HTMLInputElement>('session-name').value = this.sessionTitle;
         openDialog('session-dialog');
         if (this.sessionId) await this.refreshState();
         break;
@@ -790,7 +802,7 @@ export class Workbench {
         await this.request('session.abort');
         if (this.run !== 'idle') this.notice(ABORT_PENDING_NOTICE);
         break;
-      case 'rename': await this.command('session.set_name', { name: el<HTMLInputElement>('session-name').value }); el('session-title').textContent = el<HTMLInputElement>('session-name').value; this.refreshSessions(); break;
+      case 'rename': this.sessionTitle = el<HTMLInputElement>('session-name').value; await this.command('session.set_name', { name: this.sessionTitle }); this.refreshSessions(); break;
       case 'compact': this.setRun('compacting'); try { await this.command('session.compact'); await this.refreshHistory(); } finally { await this.reconcile(); } break;
       case 'clone': { const result = await this.command<{sessionId:string}>('session.clone'); this.selectSession(result.sessionId, this.cwd, '克隆会话'); this.refreshSessions(); break; }
       case 'fork': await this.forkFrom(button.dataset.entryId ?? ''); break;
