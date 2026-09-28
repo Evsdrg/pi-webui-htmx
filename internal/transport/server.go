@@ -88,14 +88,17 @@ type Server struct {
 	receipts        *storage.Receipts
 	metrics         *observe.Metrics
 	token, host     string
-	connections     chan struct{}
-	operations      chan struct{}
-	claims          *claims
-	tunnelBridge    *TunnelBridge
+	// publicOrigin 是部署时显式声明的对外来源；零值表示只接受监听地址本身。
+	publicOrigin PublicOrigin
+	connections  chan struct{}
+	operations   chan struct{}
+	claims       *claims
+	tunnelBridge *TunnelBridge
 }
 
 // New 构造入口；token 至少 32 字符，host 为监听地址上的主机名。
-func New(manager *run.Manager, store *sessions.Store, terminals *terminal.Manager, files *workspace.Files, piConfig *management.Config, discovery management.DiscoveryLimits, exportDir string, receipts *storage.Receipts, metrics *observe.Metrics, token, host string, ui *presentation.Renderer) *Server {
+// publicOrigin 为空值时只接受 host 本身（本地用法不变）。
+func New(manager *run.Manager, store *sessions.Store, terminals *terminal.Manager, files *workspace.Files, piConfig *management.Config, discovery management.DiscoveryLimits, exportDir string, receipts *storage.Receipts, metrics *observe.Metrics, token, host string, publicOrigin PublicOrigin, ui *presentation.Renderer) *Server {
 	return &Server{
 		manager:         manager,
 		store:           store,
@@ -111,6 +114,7 @@ func New(manager *run.Manager, store *sessions.Store, terminals *terminal.Manage
 		metrics:         metrics,
 		token:           token,
 		host:            host,
+		publicOrigin:    publicOrigin,
 		connections:     make(chan struct{}, 8),
 		operations:      make(chan struct{}, 16),
 		claims:          newClaims(1024),
@@ -662,15 +666,11 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// 编码协商是纯函数，写响应的辅助函数各自按需调用即可；
 	// 不再需要一次协商后靠内部 Header 键往下传。
 	encoding := presentation.PickEncoding(r.Header.Get("Accept-Encoding"))
-	if r.Host != s.host {
+	if !s.hostAllowed(r.Host) {
 		writeError(w, encoding, http.StatusForbidden, protocol.E("host_denied", "Host 不在预期范围内"))
 		return
 	}
-	scheme := "http"
-	if r.TLS != nil {
-		scheme = "https"
-	}
-	if origin := r.Header.Get("Origin"); origin != "" && origin != scheme+"://"+s.host {
+	if !s.originAllowed(r) {
 		writeError(w, encoding, http.StatusForbidden, protocol.E("origin_denied", "未启用跨源访问"))
 		return
 	}
@@ -685,7 +685,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		expires := time.Now().Add(8 * time.Hour)
 		exp := strconv.FormatInt(expires.Unix(), 10)
-		http.SetCookie(w, &http.Cookie{Name: cookieName, Value: exp + "." + s.signature(exp), HttpOnly: true, Secure: r.TLS != nil, SameSite: http.SameSiteStrictMode, Path: "/", Expires: expires, MaxAge: 8 * 60 * 60})
+		http.SetCookie(w, &http.Cookie{Name: cookieName, Value: exp + "." + s.signature(exp), HttpOnly: true, Secure: s.secureCookie(r), SameSite: http.SameSiteStrictMode, Path: "/", Expires: expires, MaxAge: 8 * 60 * 60})
 		writeJSON(w, encoding, 200, map[string]any{"ok": true})
 		return
 	}
@@ -1009,7 +1009,7 @@ func (s *Server) serveWS(w http.ResponseWriter, r *http.Request) {
 		writeError(w, encoding, 429, protocol.E("limit_exceeded", "连接数量已达上限"))
 		return
 	}
-	ws, err := websocket.Accept(w, r, nil)
+	ws, err := websocket.Accept(w, r, &websocket.AcceptOptions{OriginPatterns: s.wsOriginPatterns()})
 	if err != nil {
 		return
 	}

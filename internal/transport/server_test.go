@@ -100,7 +100,7 @@ func newTestServer(t *testing.T) (*Server, *run.Manager, string) {
 		}
 		ui = rendered
 	}
-	return New(m, store, terminals, files, piConfig, management.DefaultDiscoveryLimits(), exportDir, receipts, metrics, testToken, "127.0.0.1:30142", ui), m, cwd
+	return New(m, store, terminals, files, piConfig, management.DefaultDiscoveryLimits(), exportDir, receipts, metrics, testToken, "127.0.0.1:30142", PublicOrigin{}, ui), m, cwd
 }
 
 func writeSessionFile(t *testing.T, dir, id, cwd string) {

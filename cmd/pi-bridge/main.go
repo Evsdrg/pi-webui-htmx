@@ -40,7 +40,8 @@ func serve() error {
 	if err != nil {
 		return err
 	}
-	listen := flag.String("listen", "127.0.0.1:30142", "仅接受环回地址的监听地址")
+	listen := flag.String("listen", "127.0.0.1:30142", "监听地址：环回地址，或私有/overlay 网段地址（后者必须同时指定 --public-origin）")
+	publicOriginRaw := flag.String("public-origin", "", "对外访问来源，例如 https://example.com:39080；声明后 Host/Origin 也接受它，Cookie 的 Secure 跟随其 scheme")
 	relayURL := flag.String("relay", "", "云端转发器地址，例如 wss://relay.example.com；为空表示仅本地")
 	deviceID := flag.String("device-id", "", "设备标识；启用 --relay 时必填")
 	deviceName := flag.String("device-name", "", "设备显示名，随配对信息一起登记")
@@ -69,13 +70,27 @@ func serve() error {
 	if len(token) < 32 {
 		return errors.New("请设置 PI_BRIDGE_TOKEN，至少 32 个随机字符")
 	}
+	publicOrigin, err := transport.ParsePublicOrigin(*publicOriginRaw)
+	if err != nil {
+		return err
+	}
 	host, _, err := net.SplitHostPort(*listen)
 	if err != nil {
 		return err
 	}
 	ip := net.ParseIP(host)
-	if ip == nil || !ip.IsLoopback() {
-		return errors.New("A 阶段只接受环回 IP")
+	if ip == nil {
+		return errors.New("--listen 必须是 IP:端口")
+	}
+	if !ip.IsLoopback() {
+		// 非环回监听等于把桥暴露给隧道/局域网对端，因此要求两件事：
+		// 地址本身不是可路由到公网的地址，且部署者显式声明对外来源。
+		if !privateOrOverlay(ip) {
+			return errors.New("--listen 只接受环回、私有网段或 overlay 网段地址")
+		}
+		if !publicOrigin.Enabled() {
+			return errors.New("绑定非环回地址时必须显式指定 --public-origin")
+		}
 	}
 	if *idle < time.Second || *maxWorkers < 1 || *maxWorkers > 32 {
 		return errors.New("空闲超时或工作进程上限取值无效")
@@ -161,7 +176,7 @@ func serve() error {
 	}
 
 	piConfig := management.NewConfig(*agentDir, management.DefaultLimits())
-	handler := transport.New(manager, store, terminals, files, piConfig, management.DefaultDiscoveryLimits(), exportDir, receipts, metrics, token, ln.Addr().String(), ui)
+	handler := transport.New(manager, store, terminals, files, piConfig, management.DefaultDiscoveryLimits(), exportDir, receipts, metrics, token, ln.Addr().String(), publicOrigin, ui)
 
 	// 云端隧道：本地主动外连，relay 只搬运字节。
 	var tunnelClient *tunnel.Client
@@ -206,4 +221,18 @@ func serve() error {
 	ctx, stop := context.WithTimeout(context.Background(), 5*time.Second)
 	defer stop()
 	return server.Shutdown(ctx)
+}
+
+// privateOrOverlay 判断监听地址是否属于「不会路由到公网」的网段：
+// RFC1918 私有地址、IPv6 ULA、链路本地，以及 RFC6598 的 100.64.0.0/10
+// （运营商级 NAT，Tailscale / EasyTier 这类 overlay 常用）。
+// 桥一旦绑定这类地址，对端就是隧道/局域网里的设备，而不是整个互联网。
+func privateOrOverlay(ip net.IP) bool {
+	if ip.IsPrivate() || ip.IsLinkLocalUnicast() {
+		return true
+	}
+	if v4 := ip.To4(); v4 != nil {
+		return v4[0] == 100 && v4[1]&0xc0 == 64
+	}
+	return false
 }
