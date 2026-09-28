@@ -73,43 +73,47 @@ const wsTextBudget = 448 << 10
 
 // Server 是 HTTP 与 WebSocket 入口，只做接入、鉴权与限额。
 type Server struct {
-	manager      *run.Manager
-	store        *sessions.Store
-	terminals    *terminal.Manager
-	files        *workspace.Files
-	piConfig     *management.Config
-	discovery    management.DiscoveryLimits
-	exportDir    string
-	ui           *presentation.Renderer
-	extState     *extensionState
-	receipts     *storage.Receipts
-	metrics      *observe.Metrics
-	token, host  string
-	connections  chan struct{}
-	operations   chan struct{}
-	claims       *claims
-	tunnelBridge *TunnelBridge
+	manager   *run.Manager
+	store     *sessions.Store
+	terminals *terminal.Manager
+	files     *workspace.Files
+	piConfig  *management.Config
+	discovery management.DiscoveryLimits
+	exportDir string
+	// sessionContexts 缓存「系统提示词 + 工具定义」；它们只能靠导出一次
+	// 会话 HTML 取回，按 (sessionId, epoch) 缓存以免每次开面板都重导。
+	sessionContexts *sessionContextCache
+	ui              *presentation.Renderer
+	extState        *extensionState
+	receipts        *storage.Receipts
+	metrics         *observe.Metrics
+	token, host     string
+	connections     chan struct{}
+	operations      chan struct{}
+	claims          *claims
+	tunnelBridge    *TunnelBridge
 }
 
 // New 构造入口；token 至少 32 字符，host 为监听地址上的主机名。
 func New(manager *run.Manager, store *sessions.Store, terminals *terminal.Manager, files *workspace.Files, piConfig *management.Config, discovery management.DiscoveryLimits, exportDir string, receipts *storage.Receipts, metrics *observe.Metrics, token, host string, ui *presentation.Renderer) *Server {
 	return &Server{
-		manager:     manager,
-		store:       store,
-		terminals:   terminals,
-		files:       files,
-		piConfig:    piConfig,
-		discovery:   discovery,
-		exportDir:   exportDir,
-		ui:          ui,
-		extState:    newExtensionState(64),
-		receipts:    receipts,
-		metrics:     metrics,
-		token:       token,
-		host:        host,
-		connections: make(chan struct{}, 8),
-		operations:  make(chan struct{}, 16),
-		claims:      newClaims(1024),
+		manager:         manager,
+		store:           store,
+		terminals:       terminals,
+		files:           files,
+		piConfig:        piConfig,
+		discovery:       discovery,
+		exportDir:       exportDir,
+		sessionContexts: newSessionContextCache(),
+		ui:              ui,
+		extState:        newExtensionState(64),
+		receipts:        receipts,
+		metrics:         metrics,
+		token:           token,
+		host:            host,
+		connections:     make(chan struct{}, 8),
+		operations:      make(chan struct{}, 16),
+		claims:          newClaims(1024),
 	}
 }
 
@@ -487,6 +491,34 @@ func (s *Server) serveUI(w http.ResponseWriter, r *http.Request) bool {
 		}
 		rows, forkRows := presentation.BranchRows(tree, forks, r.URL.Query().Get("leafId"))
 		html, rerr := s.ui.RenderBranch(rows, forkRows)
+		if rerr != nil {
+			writeError(w, encoding, 500, rerr)
+			return true
+		}
+		writeHTML(w, encoding, html)
+		return true
+
+	case path == "/ui/system":
+		value, cerr := s.sessionContext(r.Context(), r.URL.Query().Get("sessionId"))
+		if cerr != nil {
+			writeError(w, encoding, contextStatus(cerr), cerr)
+			return true
+		}
+		html, rerr := s.ui.RenderSystem(value.SystemPrompt)
+		if rerr != nil {
+			writeError(w, encoding, 500, rerr)
+			return true
+		}
+		writeHTML(w, encoding, html)
+		return true
+
+	case path == "/ui/tools":
+		value, cerr := s.sessionContext(r.Context(), r.URL.Query().Get("sessionId"))
+		if cerr != nil {
+			writeError(w, encoding, contextStatus(cerr), cerr)
+			return true
+		}
+		html, rerr := s.ui.RenderTools(value.Tools)
 		if rerr != nil {
 			writeError(w, encoding, 500, rerr)
 			return true

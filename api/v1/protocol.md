@@ -161,6 +161,20 @@ GET /ui/models、/ui/packages、/ui/extensions/*
 
 留浏览器侧的只有「转瞬即逝的交互状态」：按键补全与斜杠菜单、滚动锚定、WS 流式增量、textarea 自适应高度、xterm、未上传的本地附件缩略图、以及 markdown/高亮/KaTeX/ANSI 渲染管线。判据是「这份数据在服务端有没有权威版本」。
 
+### 系统提示词与工具定义
+
+Pi 的 RPC **没有**暴露这两项的命令（`rpc-mode` 的命令表里 `get_state` 只给模型/思考等级/流式状态/会话文件，没有 `systemPrompt` 也没有 `tools`）。唯一带着它们的出口是 `export_html`：它把 `AgentState` 的 `systemPrompt` 与 `tools` 一并写进导出 HTML 内嵌的 `<script id="session-data">`（base64 编码的 JSON，字段 `header/entries/leafId/systemPrompt/tools`）。
+
+```text
+GET /ui/system?sessionId=ID     系统提示词（含按工具集重建的规则段与扩展追加部分）
+GET /ui/tools?sessionId=ID      当前实际暴露给模型的工具：name/description/parameters
+```
+
+- 桥按需导出一次到**自己的临时目录**（不是导出目录，避免内部产物被 `/ui/exports` 下载），读回后立即删除。
+- 结果按 `(sessionId, epoch)` 缓存 120 秒、上限 8 条。epoch 变化（fork/clone/切换身份）即失效；不缓存就等于每开一次面板都重导一次完整会话。
+- `tools` 是 `AgentState.tools`，也就是**实际生效**的工具集合，受启动时的工具预设与扩展追加影响，不是"全部可用工具目录"。
+- 两个端点都需要活动 worker（`systemPrompt`/`tools` 只存在于活的 Pi 进程里，JSONL 不含它们）。未启动返回 `409 worker_not_running`；导出超过 64 MiB 返回 `413`；模板里找不到数据块时明确失败，不静默返回空面板。
+
 ### 工作区文件
 
 - `files.index` 无 query 返回 `{files:[...],truncated}`，有 query 返回 `{matches:[{path,isDir}],truncated}`；这是同方法的两种显式模式。
