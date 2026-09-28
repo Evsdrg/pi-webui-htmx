@@ -216,13 +216,14 @@ func withThousands(value int64) string {
 	return builder.String()
 }
 
-// compactNumber 把大数字压成 1.2M / 66K 这类短标签。
+// compactNumber 把大数字压成 1.2M / 66k 这类短标签。
+// 阈值、小数位与后缀大小写都对齐 Pi Web 的 formatCompact（千位用小写 k）。
 func compactNumber(value float64) string {
 	switch {
 	case value >= 1_000_000:
 		return strconv.FormatFloat(value/1_000_000, 'f', 1, 64) + "M"
 	case value >= 1_000:
-		return strconv.FormatFloat(value/1_000, 'f', 0, 64) + "K"
+		return strconv.FormatFloat(value/1_000, 'f', 0, 64) + "k"
 	default:
 		return strconv.FormatFloat(value, 'f', 0, 64)
 	}
