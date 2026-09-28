@@ -46,6 +46,54 @@ for(const [name,relative] of Object.entries(manifest.templates??{})){
  if(!/text-align\s*:\s*right/.test(body('.stats-token .stats-rows dd')))fail('Token 组的值需在窄列内右对齐');
  if(!/grid-template-columns\s*:\s*auto minmax\(0,\s*1fr\) auto/.test(body('.stats-info .stats-rows')))fail('会话事实组需要标签/值/复制按钮三列');
 }
+// 深色主题有两处入口：「显式选深色」与「跟随系统」。两者必须给出完全相同的
+// 令牌集合，否则在深色系统上看到的界面会和手动选深色不一致——这类分叉不会
+// 报错，只会让某个主题路径静默变样（历史上 app.css 就重复写过一份深色值）。
+{
+ const extract=(css,pattern)=>{
+  const match=new RegExp(`${pattern}\\s*\\{([^}]*)\\}`,'m').exec(css);
+  if(!match)return null;
+  return match[1].split(';').map(part=>part.split(':')[0].trim()).filter(Boolean).sort();
+ };
+ for(const file of ['src/styles/tokens.css','src/styles/code.css']){
+  const css=readFileSync(resolve(root,file),'utf8').replace(/\/\*[\s\S]*?\*\//g,'');
+  const explicit=extract(css,'\\[data-theme="dark"\\]');
+  const system=extract(css,':root:not\\(\\[data-theme\\]\\)');
+  if(!explicit||!system){fail(`${file} 缺少深色主题的某个入口（显式选择 / 跟随系统）`);continue;}
+  if(JSON.stringify(explicit)!==JSON.stringify(system))fail(`${file} 的深色两处入口令牌不一致：显式 ${explicit.join(',')} / 系统 ${system.join(',')}`);
+  else ok(`${file} 深色两处入口一致（${explicit.length} 个令牌）`);
+ }
+}
+// 主题色值只能出现在 tokens.css / code.css：app.css 里写死颜色会让
+// 「跟随系统」与显式主题在某些组件上不同步。
+{
+ const css=readFileSync(resolve(root,'src/styles/app.css'),'utf8').replace(/\/\*[\s\S]*?\*\//g,'');
+ const has=(re)=>[...css.matchAll(re)].map(match=>match[0]);
+ // 允许的例外：叠加层/阴影用的黑色透明白（与主题无关），以及 xterm 终端底色。
+ const allowed=/^#000[0-9a-f]?$|^rgba\(0,0,0,\.[0-9]+\)$/i;
+ const offenders=has(/#[0-9a-f]{6,8}\b/gi).filter(value=>!allowed.test(value));
+ if(offenders.length)fail(`app.css 里出现了具体主题色值（应放进 tokens.css）：${[...new Set(offenders)].join(' ')}`);
+ else ok('app.css 未内联主题色值');
+}
+// 代码配色表必须与高亮模块一起按需加载，不能进首屏：
+// 它只在有代码块时才需要，而首屏预算已经很紧。
+{
+ const entry=readFileSync(resolve(root,'src/entry/app.ts'),'utf8');
+ if(/styles\/code\.css/.test(entry))fail('code.css 被入口引入，会进首屏；应由 hljs 模块按需引入');
+ else ok('code.css 未进首屏');
+ const hljs=readFileSync(resolve(root,'src/lib/hljs.ts'),'utf8');
+ if(!/styles\/code\.css/.test(hljs))fail('hljs 模块未引入 code.css，代码块会没有配色');
+ if(/highlight\.js\/styles/.test(hljs))fail('hljs 模块仍引入 highlight.js 自带主题（浅色主题下会成为深色方块）');
+}
+// 高亮配色必须由令牌驱动，且 .hljs 自身不得画背景：
+// 厂商主题给 <code> 铺的底色会在浅色 <pre> 上形成「浅框套深块」。
+{
+ const css=readFileSync(resolve(root,'src/styles/code.css'),'utf8');
+ if(!/\.hljs\s*\{[^}]*background\s*:\s*transparent/.test(css))fail('code.css 必须清掉 .hljs 自身的背景');
+ const hardcoded=[...css.matchAll(/color\s*:\s*#[0-9a-f]{3,8}/gi)].map(match=>match[0]);
+ if(hardcoded.length)fail(`code.css 里出现硬编码颜色，应改为 var(--code-*)：${hardcoded.slice(0,3).join(' ')}`);
+ else ok('高亮配色由令牌驱动');
+}
 const seen=new Set();
 for(const group of ['fireAndForget','needsResponse','unsupportedByRpc']){
  const methods=manifest.extensionChannel?.[group];

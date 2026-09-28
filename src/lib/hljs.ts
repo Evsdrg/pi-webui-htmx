@@ -19,16 +19,11 @@ for (const [name, def] of Object.entries({
   hljs.registerLanguage(name, def as never);
 }
 
-// 样式按需注入，避免首屏 CSS 带上整套主题。
-const styleId = "hljs-theme";
-if (!document.getElementById(styleId)) {
-  void import("highlight.js/styles/github-dark.css?inline").then((mod) => {
-    const style = document.createElement("style");
-    style.id = styleId;
-    style.textContent = mod.default as string;
-    document.head.appendChild(style);
-  });
-}
+// 配色跟随主题：用我们自己的样式表（src/styles/code.css，由本模块引入，
+// 因此与高亮代码一起按需下载）。以前这里注入 highlight.js 的 github-dark
+// 主题，它在四个浅色主题下会留下一块深色代码背景 + 浅灰字（正文对比度
+// 只有 1.5:1），且不受主题切换影响。
+import "@/styles/code.css";
 
 export function highlightElement(el: HTMLElement): void {
   hljs.highlightElement(el as never);

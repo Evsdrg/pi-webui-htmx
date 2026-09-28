@@ -1,6 +1,10 @@
 /* 设计令牌：移植自 Pi Web 的 app/globals.css。
    Pi Web 用 Tailwind v4 的 @theme 把这些变量暴露成工具类，
-   我们同样处理，因此类名写法与 Pi Web 一致。 */
+   我们同样处理，因此类名写法与 Pi Web 一致。
+
+   这里是主题的唯一来源：每个主题只在本文件里定义一次调色板。
+   app.css 不再写任何主题色值（曾经在 prefers-color-scheme 块里重复过
+   一份深色值，改一处忘一处就会让「跟随系统」与「显式选深色」不一致）。 */
 
 @theme {
   --color-bg: var(--bg);
@@ -18,6 +22,8 @@
   --color-assistant-bg: var(--assistant-bg);
   --color-tool-bg: var(--tool-bg);
   --color-bg-subtle: var(--bg-subtle);
+  --color-danger: var(--danger);
+  --color-success: var(--success);
 }
 
 /* 布局常量 */
@@ -25,6 +31,15 @@
   --chat-max-width: 820px;
   --chat-font-size: 14px;
   --sidebar-width: 260px;
+}
+
+/* 与具体主题无关的派生令牌。
+   自定义属性的值在用到时才代入，因此这里引用 var(--accent) 就够了：
+   主题换了 --accent，--accent-soft 自动跟着换，不必每个主题写一遍。 */
+:root {
+  --accent-soft: color-mix(in srgb, var(--accent) 14%, transparent);
+  --chat-content-max-width: var(--chat-max-width);
+  --chat-content-font-size: var(--chat-font-size);
 }
 
 /* light */
@@ -44,32 +59,80 @@
   --assistant-bg: #ffffff;
   --tool-bg: #f9fafb;
   --bg-subtle: rgba(0, 0, 0, 0.03);
-  --chat-content-max-width: var(--chat-max-width);
-  --chat-content-font-size: var(--chat-font-size);
+  --danger: #b3261e;
+  --success: #166b2f;
+  /* 阴影在浅色上是淡淡的蓝黑，在深色上要更重才看得出层次。 */
+  --shadow-color: rgba(15, 23, 42, 0.06);
 }
 
 /* dark：深蓝基调。
    底色取偏蓝的深灰蓝而不是中性灰，正文用带一点蓝的亮色，
    强调色用偏冷的浅蓝。改色时保持这几个相对关系：面板比背景亮一档、
    悬停再亮一档、强调色在深底上仍能达到正文级对比度。 */
+:root {
+  --dark-bg: #0f1720;
+  --dark-bg-panel: #16202b;
+  --dark-bg-hover: #1e2b39;
+  --dark-bg-selected: #24344a;
+  --dark-border: #2c3d4f;
+  --dark-text: #e4edf6;
+  --dark-text-muted: #a8bccf;
+  --dark-text-dim: #8ea3b8;
+  --dark-accent: #7fb3e8;
+  --dark-accent-hover: #a3caf2;
+  --dark-accent-contrast: #0d1620;
+  --dark-user-bg: #1a2836;
+  --dark-tool-bg: #16202b;
+  --dark-bg-subtle: rgba(148, 190, 232, 0.08);
+  /* 深底上的语义色要比浅底更亮：原来的 #d13c45 / #278353 在 #16202b 上
+     只有 3.5:1，作为正文色不达 WCAG AA 的 4.5:1。 */
+  --dark-danger: #ff7b72;
+  --dark-success: #3fb950;
+  --dark-shadow-color: rgba(0, 0, 0, 0.45);
+}
+/* 深色的两处入口（显式选择 / 跟随系统）必须完全一致。
+   下面两个块逐行相同，check-contract.mjs 会核对它们没有分叉。 */
 [data-theme="dark"] {
-  --bg: #0f1720;
-  --bg-panel: #16202b;
-  --bg-hover: #1e2b39;
-  --bg-selected: #24344a;
-  --border: #2c3d4f;
-  --text: #e4edf6;
-  --text-muted: #a8bccf;
-  --text-dim: #8ea3b8;
-  --accent: #7fb3e8;
-  --accent-hover: #a3caf2;
-  --accent-contrast: #0d1620;
-  --user-bg: #1a2836;
-  --assistant-bg: #0f1720;
-  --tool-bg: #16202b;
-  --bg-subtle: rgba(148, 190, 232, 0.08);
-  --chat-content-max-width: var(--chat-max-width);
-  --chat-content-font-size: var(--chat-font-size);
+  --bg: var(--dark-bg);
+  --bg-panel: var(--dark-bg-panel);
+  --bg-hover: var(--dark-bg-hover);
+  --bg-selected: var(--dark-bg-selected);
+  --border: var(--dark-border);
+  --text: var(--dark-text);
+  --text-muted: var(--dark-text-muted);
+  --text-dim: var(--dark-text-dim);
+  --accent: var(--dark-accent);
+  --accent-hover: var(--dark-accent-hover);
+  --accent-contrast: var(--dark-accent-contrast);
+  --user-bg: var(--dark-user-bg);
+  --assistant-bg: var(--dark-bg);
+  --tool-bg: var(--dark-tool-bg);
+  --bg-subtle: var(--dark-bg-subtle);
+  --danger: var(--dark-danger);
+  --success: var(--dark-success);
+  --shadow-color: var(--dark-shadow-color);
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme]) {
+    --bg: var(--dark-bg);
+    --bg-panel: var(--dark-bg-panel);
+    --bg-hover: var(--dark-bg-hover);
+    --bg-selected: var(--dark-bg-selected);
+    --border: var(--dark-border);
+    --text: var(--dark-text);
+    --text-muted: var(--dark-text-muted);
+    --text-dim: var(--dark-text-dim);
+    --accent: var(--dark-accent);
+    --accent-hover: var(--dark-accent-hover);
+    --accent-contrast: var(--dark-accent-contrast);
+    --user-bg: var(--dark-user-bg);
+    --assistant-bg: var(--dark-bg);
+    --tool-bg: var(--dark-tool-bg);
+    --bg-subtle: var(--dark-bg-subtle);
+    --danger: var(--dark-danger);
+    --success: var(--dark-success);
+    --shadow-color: var(--dark-shadow-color);
+  }
 }
 
 /* mist */
@@ -81,7 +144,8 @@
   --border: #c3d0dd;
   --text: #1c2430;
   --text-muted: #4d5a6b;
-  --text-dim: #5f6d80;
+  /* 次级文字在面板底上也要够 4.5:1（原 #5f6d80 在 #e8edf2 上 4.47）。 */
+  --text-dim: #5c6a7d;
   --accent: #2f6f9f;
   --accent-hover: #255a83;
   --accent-contrast: #ffffff;
@@ -89,8 +153,9 @@
   --assistant-bg: #f7fafc;
   --tool-bg: #eef3f8;
   --bg-subtle: rgba(28, 36, 48, 0.04);
-  --chat-content-max-width: var(--chat-max-width);
-  --chat-content-font-size: var(--chat-font-size);
+  --danger: #b3261e;
+  --success: #166b2f;
+  --shadow-color: rgba(15, 23, 42, 0.06);
 }
 
 /* rose */
@@ -110,8 +175,9 @@
   --assistant-bg: #fffafb;
   --tool-bg: #faf0f2;
   --bg-subtle: rgba(43, 29, 33, 0.04);
-  --chat-content-max-width: var(--chat-max-width);
-  --chat-content-font-size: var(--chat-font-size);
+  --danger: #b3261e;
+  --success: #166b2f;
+  --shadow-color: rgba(15, 23, 42, 0.06);
 }
 
 /* pine */
@@ -124,14 +190,23 @@
   --text: #17251c;
   --text-muted: #43584b;
   --text-dim: #546a5c;
-  --accent: #2f7a4f;
-  --accent-hover: #256340;
+  /* 强调色在面板底上要够 4.5:1（它会给 10–11px 的小字上色），
+     原 #2f7a4f 在 #e6efe8 上只有 4.45，这里压深一档。 */
+  --accent: #2d7449;
+  --accent-hover: #236039;
   --accent-contrast: #ffffff;
   --user-bg: #e2f0e6;
   --assistant-bg: #f8fbf9;
   --tool-bg: #ecf4ee;
   --bg-subtle: rgba(23, 37, 28, 0.04);
-  --chat-content-max-width: var(--chat-max-width);
-  --chat-content-font-size: var(--chat-font-size);
+  --danger: #b3261e;
+  --success: #166b2f;
+  --shadow-color: rgba(15, 23, 42, 0.06);
 }
 
+/* 终端固定用深色配色（xterm 实例写死 #181818/#ededed），
+   与页面主题无关，因此定义在基础层而不是各主题里。 */
+:root { --terminal-bg: #181818; }
+
+/* 组件级调色板（代码高亮）不在这里：它只被 src/styles/code.css 使用，
+   与高亮模块一起按需加载，定义也放在那里，避免首屏带上用不到的令牌。 */

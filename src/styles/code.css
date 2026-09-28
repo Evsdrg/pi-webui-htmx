@@ -1,0 +1,102 @@
+/* 代码高亮（highlight.js）的配色。
+   单独一个样式表、且只在 highlight 模块被加载时引入：没有代码块的会话
+   不必为首屏带上这组规则（首屏预算很紧）。
+   配色由 tokens.css 的 --code-* 驱动，随主题切换。
+   不引 highlight.js 自带主题文件的原因：它的 light/dark 两套是固定色值，
+   与我们的 6 个主题（尤其 mist/rose/pine）对不上。它还额外要求 .hljs
+   自身不画背景——厂商主题会给 <code> 铺一块自己的底色，在我们 <pre> 的
+   浅色底上就成了一大块深色方块（padding 处露浅色，形成「浅框套深块」）。
+   浅色取值在四个浅色主题的代码块底色上都不低于 4.5:1（脚本核算，最差 4.95）。 */
+:root {
+  --code-comment: #5f6875;
+  --code-keyword: #c9252d;
+  --code-entity: #6f42c1;
+  --code-constant: #005cc5;
+  --code-string: #032f62;
+  --code-builtin: #a04100;
+  --code-name: #196c2e;
+  --code-bullet: #a04100;
+  --code-addition: #166b2f;
+  --code-deletion: #b3261e;
+}
+/* 深色的两处入口必须一致（与 tokens.css 的深色调色板同一约定）。 */
+[data-theme="dark"] {
+  --code-comment: #8b949e;
+  --code-keyword: #ff7b72;
+  --code-entity: #d2a8ff;
+  --code-constant: #79c0ff;
+  --code-string: #a5d6ff;
+  --code-builtin: #ffa657;
+  --code-name: #7ee787;
+  --code-bullet: #f2cc60;
+  --code-addition: #7ee787;
+  --code-deletion: #ffa198;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme]) {
+    --code-comment: #8b949e;
+    --code-keyword: #ff7b72;
+    --code-entity: #d2a8ff;
+    --code-constant: #79c0ff;
+    --code-string: #a5d6ff;
+    --code-builtin: #ffa657;
+    --code-name: #7ee787;
+    --code-bullet: #f2cc60;
+    --code-addition: #7ee787;
+    --code-deletion: #ffa198;
+  }
+}
+.hljs { background:transparent; color:inherit; }
+.hljs-comment,.hljs-code,.hljs-formula { color:var(--code-comment); }
+.hljs-doctag,.hljs-keyword,.hljs-meta .hljs-keyword,.hljs-template-tag,.hljs-template-variable,.hljs-type,.hljs-variable.language_ { color:var(--code-keyword); }
+.hljs-title,.hljs-title.class_,.hljs-title.class_.inherited__,.hljs-title.function_ { color:var(--code-entity); }
+.hljs-attr,.hljs-attribute,.hljs-literal,.hljs-meta,.hljs-number,.hljs-operator,.hljs-variable,.hljs-selector-attr,.hljs-selector-class,.hljs-selector-id { color:var(--code-constant); }
+.hljs-regexp,.hljs-string,.hljs-meta .hljs-string { color:var(--code-string); }
+.hljs-built_in,.hljs-symbol { color:var(--code-builtin); }
+.hljs-name,.hljs-quote,.hljs-selector-tag,.hljs-selector-pseudo { color:var(--code-name); }
+.hljs-bullet { color:var(--code-bullet); }
+.hljs-section { color:var(--code-constant); font-weight:bold; }
+.hljs-addition { color:var(--code-addition); }
+.hljs-deletion { color:var(--code-deletion); }
+.hljs-emphasis { font-style:italic; }
+.hljs-strong { font-weight:bold; }
+.hljs-char.escape_,.hljs-link,.hljs-params,.hljs-property,.hljs-punctuation,.hljs-tag { color:var(--text); }
+
+:root {
+  --code-comment: #5f6875;
+  --code-keyword: #c9252d;
+  --code-entity: #6f42c1;
+  --code-constant: #005cc5;
+  --code-string: #032f62;
+  --code-builtin: #a04100;
+  --code-name: #196c2e;
+  --code-bullet: #a04100;
+  --code-addition: #166b2f;
+  --code-deletion: #b3261e;
+}
+[data-theme="dark"] {
+  --code-comment: #8b949e;
+  --code-keyword: #ff7b72;
+  --code-entity: #d2a8ff;
+  --code-constant: #79c0ff;
+  --code-string: #a5d6ff;
+  --code-builtin: #ffa657;
+  --code-name: #7ee787;
+  --code-bullet: #f2cc60;
+  --code-addition: #7ee787;
+  --code-deletion: #ffa198;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme]) {
+    --code-comment: #8b949e;
+    --code-keyword: #ff7b72;
+    --code-entity: #d2a8ff;
+    --code-constant: #79c0ff;
+    --code-string: #a5d6ff;
+    --code-builtin: #ffa657;
+    --code-name: #7ee787;
+    --code-bullet: #f2cc60;
+    --code-addition: #7ee787;
+    --code-deletion: #ffa198;
+  }
+}

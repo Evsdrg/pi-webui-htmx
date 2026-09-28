@@ -12,8 +12,9 @@
 <body data-session-id="{{.SessionID}}" hx-history="false">
 <a class="skip-link" href="#prompt">跳到消息输入框</a>
 <div class="app-shell" id="workbench">
-  <aside class="sidebar" id="sidebar" aria-label="会话侧栏">
-    <div class="sidebar-brand"><span class="brand-mark" aria-hidden="true">π</span><strong>Pi</strong><span class="tag">工作台</span><button class="icon-btn mobile-only" data-action="sidebar" aria-label="关闭侧栏">×</button></div>
+  <div class="sidebar-column" role="complementary" aria-label="会话侧栏">
+  <aside class="sidebar" id="sidebar">
+    <div class="sidebar-brand"><span class="brand-mark" aria-hidden="true">π</span><h1 class="brand-name">Pi</h1><span class="tag">工作台</span><button class="icon-btn mobile-only" data-action="sidebar" aria-label="关闭侧栏">×</button></div>
     <button class="btn new-session" data-action="new"><span aria-hidden="true">＋</span> 新建会话 <kbd>⌘ K</kbd></button>
     <label class="search-box"><span aria-hidden="true">⌕</span><input id="session-search" type="search" placeholder="搜索会话" aria-label="搜索会话" autocomplete="off"></label>
     <div class="section-label">会话 <span id="session-count"></span><button class="icon-btn" data-action="refresh-sessions" aria-label="刷新会话">↻</button></div>
@@ -21,6 +22,7 @@
     <footer class="sidebar-footer"><button class="btn btn-quiet" data-action="settings">⚙ 设置与扩展</button><span id="conn-state" class="state state-offline" role="status">连接中</span></footer>
   </aside>
   <div class="sidebar-resizer" role="separator" aria-label="调整侧栏宽度" aria-orientation="vertical" tabindex="0"></div>
+  </div>
   <main class="conversation" id="main">
     <header class="topbar">
       <button class="icon-btn" data-action="sidebar" aria-label="切换侧栏" aria-controls="sidebar" aria-expanded="true">☰</button>
