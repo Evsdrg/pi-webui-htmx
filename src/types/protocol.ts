@@ -301,6 +301,27 @@ export interface WorkerInfo {
   status: WorkerStatus;
   busy: boolean;
   seq: number;
+  /** 本次启动使用的工具预设；缺省表示 Pi 默认工具集。 */
+  toolPreset?: ToolPreset;
+}
+
+/** 工具预设与 Pi Web 的四个选项对齐。 */
+export type ToolPreset = "chat-only" | "read-only" | "default" | "full";
+
+/** Pi 的 get_session_stats 里的上下文用量投影。 */
+export interface ContextUsage {
+  /** 已占用的上下文 token 数；压缩后未知时为 null。 */
+  tokens: number | null;
+  contextWindow: number;
+  percent: number | null;
+}
+
+export interface SessionStats {
+  sessionId?: string;
+  totalMessages?: number;
+  cost?: number;
+  tokens?: { input?: number; output?: number; total?: number };
+  contextUsage?: ContextUsage | null;
 }
 
 export type WorkerStatus =

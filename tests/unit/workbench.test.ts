@@ -18,13 +18,13 @@ let workbench: Workbench;
 let pending: string[];
 let busy: boolean;
 let sequence: number;
-const methods = ['session.start','session.prompt','session.abort','session.fork','session.subscribe','session.set_model','sessions.search','worker.list','session.state','session.thinking_levels','session.pending_dialogs','session.ui_response','session.stats','session.set_queue_mode','session.set_auto_compaction','session.set_auto_retry','session.abort_retry','session.export_html','config.models.raw','config.models.write','config.models.discover','config.models.test'];
+const methods = ['session.start','session.prompt','session.abort','session.fork','session.subscribe','session.set_model','sessions.search','worker.list','session.state','session.thinking_levels','session.pending_dialogs','session.ui_response','session.stats','session.set_queue_mode','session.set_thinking','session.stop','session.set_auto_compaction','session.set_auto_retry','session.abort_retry','session.export_html','config.models.raw','config.models.write','config.models.discover','config.models.test'];
 function emit(type: string, extra: Record<string, unknown> = {}) {
  fake.instance!.dispatchEvent(new CustomEvent('message', { detail: { version:1,kind:'event',event:'pi.event',sessionId:'s1',epoch:'test',seq:++sequence,data:{type,...extra} } }));
 }
 function mount() {
  document.body.innerHTML = `<form id=auth-form><input id=bridge-token><button>连接</button></form><dialog id=auth-dialog></dialog><div id=auth-error></div>
- <form id=composer><textarea id=prompt></textarea><div id=attachments hidden></div><p id=composer-drop hidden></p><input id=attach-input type=file><button id=send-button></button><button id=abort-button></button><select id=model-select><option value="">Pi 默认模型</option></select><select id=thinking-select></select></form>
+ <form id=composer><textarea id=prompt></textarea><div id=attachments hidden></div><p id=composer-drop hidden></p><input id=attach-input type=file><button id=send-button></button><button id=abort-button></button><select id=model-select><option value="">Pi 默认模型</option></select><select id=thinking-select></select><select id=tool-preset-quick><option value=chat-only>仅聊天</option><option value=read-only>只读</option><option value=default selected>默认</option><option value=full>完整</option></select></form>
  <div id=history-scope hidden><button type=button data-action=branch-current>返回最新</button></div><div id=unsaved-branch hidden>会话尚未写盘；首条回复前关闭工作进程会丢失这个临时分支。</div>
  <form id=new-form><input id=cwd-input></form><dialog id=new-dialog></dialog><datalist id=workspace-roots></datalist><input id=session-search>
  <button class=icon-btn data-action=session-menu aria-label=会话操作>···</button><dialog id=session-dialog><input id=session-name><div class=session-action-grid><button data-action=rename>保存名称</button><button data-action=compact>压缩</button><button data-action=clone>克隆</button><button data-action=export>导出</button><button data-action=stop>释放</button><button data-action=delete>删除</button></div>
@@ -32,6 +32,8 @@ function mount() {
  <button data-action=abort-retry>中止重试</button>
  <fieldset class=queue-modes><label class=switch><input type=radio name=queue-kind value=steering checked><span>插入指令</span></label><label class=switch><input type=radio name=queue-kind value=followUp><span>完成后追加</span></label></fieldset></dialog>
  <div class=queue-hint id=queue-hint hidden></div>
+ <header class=topbar><nav class=topbar-tools aria-label=功能区><button data-action=panel-title aria-controls=panel-title aria-expanded=false>生成标题</button><button data-action=panel-system aria-controls=panel-system aria-expanded=false>系统</button><button data-action=panel-tools aria-controls=panel-tools aria-expanded=false>工具</button></nav><span id=context-usage hidden></span></header>
+ <section id=panel-title hidden><button data-action=panel-title-close></button><form id=title-form><input id=local-title></form></section><section id=panel-system hidden><button data-action=panel-system-close></button><dl id=system-facts></dl></section><section id=panel-tools hidden><button data-action=panel-tools-close></button><form id=tool-preset-form><select id=tool-preset-select><option value=chat-only>仅聊天</option><option value=read-only>只读</option><option value=default selected>默认</option><option value=full>完整</option></select><p id=tool-preset-note></p></form></section>
  <dialog id=models-dialog><p id=models-status></p><textarea id=models-editor></textarea><input id=discover-url><input id=discover-api><input id=discover-key><textarea id=discover-headers></textarea><div id=discover-result></div><button data-action=models-edit>编辑</button><button data-action=models-reload>重读</button><button data-action=models-save>保存</button><button data-action=models-discover>发现</button><button data-action=models-test>测试</button></dialog>`;
  for(const id of ['live','conn-state','connection-notice','session-state','session-title','session-cwd','session-list','session-count','turns','older-slot','chat-scroll','welcome','command-menu','ext-status-slot','ext-widgets-before','ext-widgets-after','ext-dialog-slot','usage','toast-root']) {const node=document.createElement('div');node.id=id;document.body.append(node);}
  document.body.dataset.sessionId='s1';
@@ -49,6 +51,9 @@ function mount() {
 }
 
 beforeEach(async () => {
+ // 顶栏面板是动态 import 的独立分块；先预热模块缓存，
+ // 否则假定时器下测试要等一个真实模块加载才能看到 DOM 变化。
+ await import('../../src/modules/topbar');
  vi.useFakeTimers(); pending=[];busy=false;sequence=0;mount();
  vi.stubGlobal('fetch',vi.fn(async () => new Response(JSON.stringify({version:1,methods}),{status:200})));
  fake.request.mockImplementation(async (method:string) => {
@@ -60,6 +65,7 @@ beforeEach(async () => {
   if(method==='config.models.discover')return{models:[{id:'gpt-x',name:'GPT X'}]};
   if(method==='config.models.test')return{ok:true,message:'连通正常'};
   if(method==='session.pending_dialogs')return{ids:[...pending]};
+  if(method==='session.start')return{sessionId:'s1',cwd:'/fixture',epoch:'e1',pid:1,status:'idle',busy:false,seq:0};
   if(method==='session.ui_response'){pending=[];busy=false;emit('agent_settled');return{answered:true};}
   return{};
  });
@@ -784,5 +790,253 @@ describe('自动重试偏好按会话隔离', () => {
     workbench.selectSession('s1', '/tmp/a', 'A');
     await vi.waitFor(() => expect(document.body.dataset.sessionId).toBe('s1'));
     expect(box.checked).toBe(true);
+  });
+});
+
+describe('思考强度：自动 + 会话记忆', () => {
+  // 「自动」不是 Pi 的等级，而是“不覆盖”的语义：绝不能发出 set_thinking。
+  it('选择自动时只记住偏好，不发送 set_thinking', async () => {
+    const select = document.getElementById('thinking-select') as HTMLSelectElement;
+    workbench.selectSession('s1', '/tmp/a', 'A');
+    await vi.waitFor(() => expect(document.body.dataset.sessionId).toBe('s1'));
+    await vi.waitFor(() => expect(select.options.length).toBeGreaterThan(1));
+    expect(select.value).toBe('');
+    select.value = '';
+    select.dispatchEvent(new Event('change', { bubbles: true }));
+    await vi.waitFor(() => expect(fake.request).toHaveBeenCalledWith('session.thinking_levels', 's1', undefined, 30_000));
+    const calls = fake.request.mock.calls.filter(([method]) => method === 'session.set_thinking');
+    expect(calls).toHaveLength(0);
+  });
+
+  it('选择具体等级时会发送 set_thinking 并按会话记住', async () => {
+    const select = document.getElementById('thinking-select') as HTMLSelectElement;
+    workbench.selectSession('s1', '/tmp/a', 'A');
+    await vi.waitFor(() => expect(select.options.length).toBeGreaterThan(1));
+    select.value = 'high';
+    select.dispatchEvent(new Event('change', { bubbles: true }));
+    await vi.waitFor(() => expect(fake.request).toHaveBeenCalledWith('session.set_thinking', 's1', { level: 'high' }, 30_000));
+    // 切到别的会话再切回：选择必须保留，不能悄悄回到“自动”。
+    workbench.selectSession('s2', '/tmp/b', 'B');
+    await vi.waitFor(() => expect(document.body.dataset.sessionId).toBe('s2'));
+    workbench.selectSession('s1', '/tmp/a', 'A');
+    await vi.waitFor(() => expect(document.body.dataset.sessionId).toBe('s1'));
+    expect(select.value).toBe('high');
+  });
+
+  it('新会话默认显示自动', async () => {
+    const select = document.getElementById('thinking-select') as HTMLSelectElement;
+    workbench.selectSession('s9', '/tmp/c', 'C');
+    await vi.waitFor(() => expect(document.body.dataset.sessionId).toBe('s9'));
+    expect(select.value).toBe('');
+    expect(select.selectedOptions[0]?.textContent).toBe('自动');
+  });
+});
+
+describe('上下文用量来自 Pi 统计', () => {
+  it('有 contextWindow 时显示占比与 token 数', async () => {
+    const node = document.getElementById('context-usage')!;
+    workbench.selectSession('s1', '/tmp/a', 'A');
+    await vi.waitFor(() => expect(document.body.dataset.sessionId).toBe('s1'));
+    fake.request.mockImplementation(async (method: string) => {
+      if (method === 'worker.list') return [{ sessionId: 's1', cwd: '/fixture' }];
+      if (method === 'session.state') return { sessionId: 's1', isStreaming: false };
+      if (method === 'session.thinking_levels') return ['off', 'high'];
+      if (method === 'session.stats') return { totalMessages: 3, cost: 0.001, contextUsage: { tokens: 32000, contextWindow: 65536, percent: 48.8 } };
+      return undefined;
+    });
+    emit('agent_settled');
+    await vi.waitFor(() => expect(node.hidden).toBe(false));
+    expect(node.textContent).toBe('49% · 32K / 66K');
+    expect(node.title).toContain('48.8%');
+  });
+
+  it('压缩后 percent 为 null 时显示未知而不是 0', async () => {
+    const node = document.getElementById('context-usage')!;
+    workbench.selectSession('s1', '/tmp/a', 'A');
+    await vi.waitFor(() => expect(document.body.dataset.sessionId).toBe('s1'));
+    fake.request.mockImplementation(async (method: string) => {
+      if (method === 'worker.list') return [{ sessionId: 's1', cwd: '/fixture' }];
+      if (method === 'session.state') return { sessionId: 's1', isStreaming: false };
+      if (method === 'session.thinking_levels') return ['off', 'high'];
+      if (method === 'session.stats') return { contextUsage: { tokens: null, contextWindow: 65536, percent: null } };
+      return undefined;
+    });
+    emit('agent_settled');
+    await vi.waitFor(() => expect(node.hidden).toBe(false));
+    expect(node.textContent).toBe('? / 66K');
+    expect(node.title).toContain('压缩后');
+  });
+
+  it('Pi 统计失败时仍显示已知的上下文窗口并标注未知', async () => {
+    const node = document.getElementById('context-usage')!;
+    workbench.selectSession('s1', '/tmp/a', 'A');
+    await vi.waitFor(() => expect(document.body.dataset.sessionId).toBe('s1'));
+    fake.request.mockImplementation(async (method: string) => {
+      if (method === 'worker.list') return [{ sessionId: 's1', cwd: '/fixture' }];
+      if (method === 'session.state') return { sessionId: 's1', isStreaming: false, model: { provider: 'CPA-Responses', id: 'deepseek-flash', name: 'DeepSeek Flash', contextWindow: 65536 } };
+      if (method === 'session.thinking_levels') return ['off', 'high'];
+      if (method === 'session.stats') throw new Error('Pi 无法汇总本次会话的用量统计（可能包含失败的回合）');
+      return {};
+    });
+    emit('agent_settled');
+    await vi.waitFor(() => expect(node.hidden).toBe(false));
+    expect(node.textContent).toBe('? / 66K');
+    expect(node.title).toContain('统计不可用');
+  });
+
+  it('没有 contextUsage 时保持隐藏', async () => {
+    const node = document.getElementById('context-usage')!;
+    workbench.selectSession('s1', '/tmp/a', 'A');
+    await vi.waitFor(() => expect(document.body.dataset.sessionId).toBe('s1'));
+    fake.request.mockImplementation(async (method: string) => {
+      if (method === 'worker.list') return [{ sessionId: 's1', cwd: '/fixture' }];
+      if (method === 'session.state') return { sessionId: 's1', isStreaming: false };
+      if (method === 'session.thinking_levels') return ['off', 'high'];
+      if (method === 'session.stats') return { totalMessages: 1 };
+      return undefined;
+    });
+    emit('agent_settled');
+    await vi.waitFor(() => expect(node.hidden).toBe(true));
+  });
+});
+
+// stubHost 构造顶栏面板需要的最小宿主，用来直接验证预设切换策略，
+// 不依赖 DOM 运行状态（假定时器下状态会被 reconcile 反复刷写）。
+function stubHost(overrides: { busy?: boolean } = {}) {
+  const state = { stopCalls: [] as unknown[], startCalls: [] as unknown[], notices: [] as string[], presetBySession: new Map<string, string>() };
+  const host = {
+    stopCalls: state.stopCalls,
+    startCalls: state.startCalls,
+    notices: state.notices,
+    presetBySession: () => state.presetBySession,
+    sessionId: () => 's1',
+    cwd: () => '/tmp/a',
+    busy: () => overrides.busy ?? false,
+    modelLabel: () => 'deepseek-flash · CPA-Responses',
+    contextWindow: () => 65536,
+    setContextWindow: () => {},
+    thinking: () => '',
+    preset: () => (document.getElementById('tool-preset-select') as HTMLSelectElement).value,
+    setPreset: (value: string) => { for (const id of ['tool-preset-select', 'tool-preset-quick']) { const node = document.getElementById(id) as HTMLSelectElement | null; if (node) node.value = value; } },
+    presetKey: () => 's1',
+    request: async (method: string, params?: unknown) => {
+      if (method === 'session.stop') { state.stopCalls.push(params); return {}; }
+      if (method === 'session.start') { state.startCalls.push(params); return { sessionId: 's1', cwd: '/tmp/a' }; }
+      return {};
+    },
+    notify: (message: string) => state.notices.push(message),
+    fail: (error: unknown) => state.notices.push(String(error)),
+    refreshState: async () => {},
+  };
+  return host;
+}
+
+// startCalls 收集 session.start 的参数，避免被 cwd 回写之类的细节绑死。
+function startCalls(): Record<string, unknown>[] {
+  return fake.request.mock.calls
+    .filter(([method]) => method === 'session.start')
+    .map(([, , params]) => (params ?? {}) as Record<string, unknown>);
+}
+
+describe('工具预设切换需要重启 worker', () => {
+  it('空闲时直接停止并按新预设重启', async () => {
+    workbench.selectSession('s1', '/tmp/a', 'A');
+    await vi.waitFor(() => expect(document.body.dataset.sessionId).toBe('s1'));
+    const select = document.getElementById('tool-preset-select') as HTMLSelectElement;
+    select.value = 'read-only';
+    select.dispatchEvent(new Event('change', { bubbles: true }));
+    await vi.waitFor(() => expect(startCalls().some((params) => params.toolPreset === 'read-only')).toBe(true));
+    expect((document.getElementById('tool-preset-quick') as HTMLSelectElement).value).toBe('read-only');
+  });
+
+  it('运行中切换必须先确认，取消则回滚', async () => {
+    const topbar = await import('../../src/modules/topbar');
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false);
+    const host = stubHost({ busy: true });
+    (document.getElementById('tool-preset-select') as HTMLSelectElement).value = 'chat-only';
+    await topbar.changeToolPreset(host);
+    expect(confirm).toHaveBeenCalledTimes(1);
+    expect(confirm.mock.calls[0]?.[0]).toContain('重启');
+    expect(host.stopCalls).toHaveLength(0);
+    expect(host.startCalls).toHaveLength(0);
+    // 取消后两个入口都必须回到上一个值，不能停在用户刚点的那个。
+    expect((document.getElementById('tool-preset-select') as HTMLSelectElement).value).toBe('default');
+    expect((document.getElementById('tool-preset-quick') as HTMLSelectElement).value).toBe('default');
+    confirm.mockRestore();
+  });
+
+  it('运行中确认后会停掉并按新预设重启', async () => {
+    const topbar = await import('../../src/modules/topbar');
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true);
+    const host = stubHost({ busy: true });
+    (document.getElementById('tool-preset-select') as HTMLSelectElement).value = 'full';
+    await topbar.changeToolPreset(host);
+    expect(host.stopCalls).toEqual([{ force: false }]);
+    expect(host.startCalls).toEqual([{ cwd: '/tmp/a', toolPreset: 'full' }]);
+    expect(host.presetBySession().get('s1')).toBe('full');
+    confirm.mockRestore();
+  });
+
+  it('预设按会话隔离', async () => {
+    workbench.selectSession('s1', '/tmp/a', 'A');
+    await vi.waitFor(() => expect(document.body.dataset.sessionId).toBe('s1'));
+    const select = document.getElementById('tool-preset-select') as HTMLSelectElement;
+    select.value = 'full';
+    select.dispatchEvent(new Event('change', { bubbles: true }));
+    await vi.waitFor(() => expect(startCalls().some((params) => params.toolPreset === 'full')).toBe(true));
+    workbench.selectSession('s2', '/tmp/b', 'B');
+    await vi.waitFor(() => expect(document.body.dataset.sessionId).toBe('s2'));
+    expect(select.value).toBe('default');
+    workbench.selectSession('s1', '/tmp/a', 'A');
+    await vi.waitFor(() => expect(document.body.dataset.sessionId).toBe('s1'));
+    expect(select.value).toBe('full');
+  });
+});
+
+describe('顶栏功能面板', () => {
+  it('同一时间只打开一个面板', async () => {
+    const title = document.getElementById('panel-title')!;
+    const system = document.getElementById('panel-system')!;
+    const tools = document.getElementById('panel-tools')!;
+    document.querySelector('[data-action="panel-title"]')!.dispatchEvent(new Event('click', { bubbles: true }));
+    await vi.waitFor(() => expect(title.hidden).toBe(false));
+    document.querySelector('[data-action="panel-tools"]')!.dispatchEvent(new Event('click', { bubbles: true }));
+    await vi.waitFor(() => expect(tools.hidden).toBe(false));
+    expect(title.hidden).toBe(true);
+    expect(system.hidden).toBe(true);
+    // 关闭按钮只关自己那一个。
+    document.querySelector('[data-action="panel-tools-close"]')!.dispatchEvent(new Event('click', { bubbles: true }));
+    await vi.waitFor(() => expect(tools.hidden).toBe(true));
+  });
+
+  it('工具面板说明 full 会禁用扩展工具', async () => {
+    const note = document.getElementById('tool-preset-note')!;
+    document.querySelector('[data-action="panel-tools"]')!.dispatchEvent(new Event('click', { bubbles: true }));
+    await vi.waitFor(() => expect(document.getElementById('panel-tools')!.hidden).toBe(false));
+    expect(note.textContent).toContain('read/bash/edit/write');
+    const select = document.getElementById('tool-preset-select') as HTMLSelectElement;
+    select.value = 'full';
+    select.dispatchEvent(new Event('change', { bubbles: true }));
+    await vi.waitFor(() => expect(note.textContent).toContain('禁用扩展工具'));
+  });
+
+  it('系统面板展示真实可得的事实，不编系统提示词', async () => {
+    workbench.selectSession('s1', '/tmp/a', 'A');
+    await vi.waitFor(() => expect(document.body.dataset.sessionId).toBe('s1'));
+    fake.request.mockImplementation(async (method: string) => {
+      if (method === 'worker.list') return [{ sessionId: 's1', cwd: '/fixture' }];
+      if (method === 'session.state') return { sessionId: 's1', isStreaming: false };
+      if (method === 'session.thinking_levels') return ['off', 'high'];
+      if (method === 'session.stats') return { contextUsage: { tokens: 1024, contextWindow: 65536, percent: 1.6 } };
+      return undefined;
+    });
+    emit('agent_settled');
+    await vi.waitFor(() => expect(document.getElementById('context-usage')!.hidden).toBe(false));
+    document.querySelector('[data-action="panel-system"]')!.dispatchEvent(new Event('click', { bubbles: true }));
+    await vi.waitFor(() => expect(document.getElementById('panel-system')!.hidden).toBe(false));
+    const facts = document.getElementById('system-facts')!.textContent ?? '';
+    expect(facts).toContain('65,536');
+    expect(facts).toContain('s1');
+    expect(facts).not.toContain('系统提示词');
   });
 });

@@ -4,6 +4,7 @@ import { closeMobileSidebar, readDraft, saveDraft } from './layout';
 import { addFiles, toWire, formatSize, WIRE_BUDGET } from './attachments';
 import type { Attachment } from './attachments';
 import type { Capabilities, EventMessage, Message, Method, WorkerInfo } from '@/types/protocol';
+import type { TopbarHost } from './topbar';
 import { closeDialog, el, openDialog } from './dom';
 import { SessionScope } from './scope';
 import type { Scope } from './scope';
@@ -50,6 +51,13 @@ export class Workbench {
    * 不是 Pi 的实时状态——界面必须这样说，不能让未勾选看起来像「已确认关闭」。
    */
   private autoRetryBySession = new Map<string, boolean>();
+  /**
+   * thinkingBySession 按会话记住思考强度选择；空字符串表示「自动」——
+   * 不向 Pi 发送 set_thinking，由 Pi 自己按 settings 与模型能力决定。
+   */
+  private thinkingBySession = new Map<string, string>();
+  /** toolPresetBySession 记住每个会话的工具预设，跨启动沿用。 */
+  private toolPresetBySession = new Map<string, string>();
   private queueChoiceBySession = new Map<string, 'steering' | 'followUp'>();
   private statuses = new Map<string, string>();
   private widgets = new Map<string, { lines: string[]; placement: string }>();
@@ -68,6 +76,8 @@ export class Workbench {
   private historicalModel: { provider: string; id: string } | undefined;
   private modelIntent: { provider: string; id: string } | undefined;
   private modelUnavailable = false;
+  /** contextWindow 记录当前模型的上下文窗口，供「系统」面板显示。 */
+  private contextWindow = 0;
 
   constructor(private readonly bottom: () => void) {}
   start(): void {
@@ -143,7 +153,26 @@ export class Workbench {
       this.autoRetryBySession.set(this.scope.current || '', enabled);
       void this.command('session.set_auto_retry', { enabled }).then(() => this.notify(enabled ? '已开启自动重试。' : '已关闭自动重试。')).catch((err) => { this.fail(err); el<HTMLInputElement>('auto-retry').checked = !enabled; });
     }, { signal });
-    el('thinking-select').addEventListener('change', () => { const level = el<HTMLSelectElement>('thinking-select').value; void this.command('session.set_thinking', { level }).catch((err) => this.fail(err)); }, { signal });
+    el('thinking-select').addEventListener('change', () => {
+      const level = el<HTMLSelectElement>('thinking-select').value;
+      this.thinkingBySession.set(this.sessionId, level);
+      // 「自动」= 不覆盖：不发命令，只记住本地偏好。Pi 没有对应的读回字段，
+      // 因此不能用一次假 set 把状态「确认」下来。
+      if (!level) { this.notify('思考强度已设为自动：由模型与 Pi 配置决定。'); return; }
+      void this.command('session.set_thinking', { level }).catch((err) => this.fail(err));
+    }, { signal });
+    // 两个预设入口共用同一处理：先把快捷选择的值同步到面板，再走切换。
+    for (const id of ['tool-preset-select', 'tool-preset-quick']) {
+      el(id).addEventListener('change', () => {
+        if (id === 'tool-preset-quick') el<HTMLSelectElement>('tool-preset-select').value = el<HTMLSelectElement>('tool-preset-quick').value;
+        void this.topbar().then((m) => m.changeToolPreset(this.host)).catch((err) => this.fail(err));
+      }, { signal });
+    }
+    el('title-form').addEventListener('submit', (event) => { event.preventDefault(); void this.topbar().then((m) => m.saveLocalTitle(this.host)).catch((err) => this.fail(err)); }, { signal });
+    for (const action of ['panel-title', 'panel-system', 'panel-tools']) {
+      document.querySelector(`[data-action="${action}"]`)?.addEventListener('click', () => this.toggleTopPanel(action), { signal });
+      document.querySelector(`[data-action="${action}-close"]`)?.addEventListener('click', () => this.toggleTopPanel(action, false), { signal });
+    }
     for (const option of document.querySelectorAll<HTMLInputElement>('input[name="queue-kind"]')) {
       option.addEventListener('change', () => {
         if (!option.checked) return;
@@ -256,7 +285,9 @@ export class Workbench {
   private async ensureWorker(scope: Scope = this.scope.current$()): Promise<Scope> {
     const oldId = this.sessionId;
     if (!oldId && !this.cwd) { await this.newSession(); throw new Error('请先选择工作目录，再发送消息。'); }
-    const info = await this.request<WorkerInfo>('session.start', { cwd: this.cwd }, oldId);
+    // 工具预设只在拉起进程时生效，因此每次启动都带上该会话上次的选择。
+    const preset = this.toolPresetBySession.get(this.queueChoiceKey()) ?? '';
+    const info = await this.request<WorkerInfo>('session.start', { cwd: this.cwd, ...(preset ? { toolPreset: preset } : {}) }, oldId);
     if (!scope.alive()) throw new Error('会话已切换，本条消息未发送；内容已保留，请手动重发。');
     let activeScope = scope;
     if (!oldId) {
@@ -267,13 +298,22 @@ export class Workbench {
       activeScope = this.scope.current$();
       this.sessionId = info.sessionId; this.cwd = info.cwd;
       if (queueChoice) this.queueChoiceBySession.set(info.sessionId, queueChoice);
+      if (preset) this.toolPresetBySession.set(info.sessionId, preset);
       document.body.dataset.sessionId = this.sessionId;
       history.replaceState(null, '', `/?session=${encodeURIComponent(info.sessionId)}`);
     }
     this.cwd = info.cwd; el('session-cwd').textContent = this.cwd;
     await this.subscribe();
     await this.refreshState(activeScope);
+    // 启动后立刻取一次统计：上下文用量只有 worker 持有模型时才非空，
+    // 等到第一轮 settled 才显示会让用户以为没有这个指标。
+    void this.refreshUsage(activeScope);
     return activeScope;
+  }
+  /** refreshUsage 拉取会话统计，填充底栏用量与顶栏上下文占比。 */
+  private refreshUsage(scope: Scope): void {
+    if (!scope.alive()) return;
+    void this.topbar().then((m) => m.renderUsage(this.host, scope.sessionId)).catch(() => {});
   }
   /**
    * command 把目标会话固定为发起时那一个。
@@ -360,6 +400,12 @@ export class Workbench {
     this.clearAttachments();
     // 自动重试是本地偏好：切换会话时套用该会话上次的选择，默认关闭。
     el<HTMLInputElement>('auto-retry').checked = this.autoRetryBySession.get(id) ?? false;
+    // 思考强度同样按会话记住；没有记录时显示「自动」。
+    const rememberedThinking = this.thinkingBySession.get(id);
+    const thinkingSelect = el<HTMLSelectElement>('thinking-select');
+    thinkingSelect.value = rememberedThinking && Array.from(thinkingSelect.options).some((option) => option.value === rememberedThinking) ? rememberedThinking : '';
+    // 工具预设在 worker 启动时生效；这里只回显该会话上次的选择。
+    for (const node of ['tool-preset-select', 'tool-preset-quick']) { const select = document.getElementById(node) as HTMLSelectElement | null; if (select) select.value = this.toolPresetBySession.get(id) ?? 'default'; }
     if (!this.sending) el<HTMLTextAreaElement>('prompt').value = readDraft(this.draftKey());
     document.body.dataset.sessionId = id; this.setRun('idle'); this.notice(''); closeMobileSidebar();
     if (push) history.pushState(null, '', id ? `/?session=${encodeURIComponent(id)}` : '/');
@@ -398,6 +444,12 @@ export class Workbench {
           this.selectModel(selectedModel.provider, selectedModel.id);
         } else if (this.modelUnavailable) {
           throw new Error('当前会话没有可用模型。请配置模型或从列表中选一个可用模型后重试；消息仍保留在输入框。');
+        }
+        // 「自动」不发送 set_thinking：那是「不覆盖」的语义，不是某个具体等级。
+        const level = this.thinkingChoice();
+        if (level) {
+          await this.request('session.set_thinking', { level }, activeScope.sessionId).catch(() => {});
+          if (!activeScope.alive()) throw new Error('会话已切换，本条消息未发送；内容已保留，请手动重发。');
         }
         this.live.begin(message); this.setRun('running'); el('welcome').hidden = true;
       }
@@ -451,9 +503,7 @@ export class Workbench {
     if (id !== this.sessionId) return;
     if (el('turns').querySelector('[data-turn-id]')) this.live.clear();
     this.refreshSessions();
-    const stats = record(await this.request('session.stats').catch(() => ({})));
-    if (id !== this.sessionId) return;
-    el('usage').textContent = [typeof stats.totalMessages === 'number' ? `${stats.totalMessages} 条消息` : '', typeof stats.cost === 'number' ? `$${stats.cost.toFixed(4)}` : ''].filter(Boolean).join(' · ');
+    await this.refreshUsage(this.scope.current$());
   }
   // gotoLeaf 查看指定分支。leafId 为空表示回到磁盘上可恢复的当前分支。
   // 这只是查看，不改 Pi 的状态；要真正确认一个分支仍然走「从此处分支」。
@@ -526,8 +576,41 @@ export class Workbench {
     const levels = await this.request<string[]>('session.thinking_levels');
     if (id !== this.sessionId) return;
     const select = el<HTMLSelectElement>('thinking-select');
-    const current = selected ?? select.value; select.replaceChildren(...levels.map((level) => new Option(level, level)));
-    if (levels.includes(current)) select.value = current; select.disabled = this.run !== 'idle' || !levels.length;
+    // “自动”不是 Pi 的等级，而是“不覆盖”的 UI 语义：不发送 set_thinking，
+    // 由 Pi 按 settings 的 defaultThinkingLevel 与模型自身能力决定。
+    const remembered = this.thinkingBySession.get(id);
+    const current = selected ?? remembered ?? select.value;
+    select.replaceChildren(new Option('自动', ''), ...levels.map((level) => new Option(level, level)));
+    select.value = levels.includes(current) ? current : '';
+    select.disabled = this.run !== 'idle' || !levels.length;
+  }
+  // 思考强度按会话记住上次选择：Pi 不提供“未设置”的读回字段，
+  // 界面只能用本机会话级偏好表达“自动”，不能假装知道 Pi 的实时值。
+  private thinkingChoice(): string { return el<HTMLSelectElement>('thinking-select').value; }
+  // 顶栏面板按需加载：首屏不承担这段代码，点击/提交时才 import。
+  private topbar(): Promise<typeof import('./topbar')> { return import('./topbar'); }
+  private toggleTopPanel(target: string, force?: boolean): void {
+    void this.topbar().then((m) => m.toggle(this.host, target, force)).catch((err) => this.fail(err));
+  }
+  // topbarHost 把顶栏面板需要的最小能力交给独立模块，避免把面板逻辑留在首屏包内。
+  private get host(): TopbarHost {
+    return {
+      sessionId: () => this.sessionId,
+      cwd: () => this.cwd,
+      busy: () => this.run !== 'idle',
+      modelLabel: () => this.currentModel ? `${this.currentModel.id} · ${this.currentModel.provider}` : (this.modelUnavailable ? '当前不可用' : '未选择'),
+      contextWindow: () => this.contextWindow,
+      setContextWindow: (value) => { this.contextWindow = value; },
+      thinking: () => el<HTMLSelectElement>('thinking-select').value,
+      preset: () => el<HTMLSelectElement>('tool-preset-select').value,
+      setPreset: (value) => { for (const id of ['tool-preset-select', 'tool-preset-quick']) { const node = document.getElementById(id) as HTMLSelectElement | null; if (node) node.value = value; } },
+      presetKey: () => this.queueChoiceKey(),
+      presetBySession: () => this.toolPresetBySession,
+      request: (method, params, session) => this.request(method, params, session),
+      notify: (message, kind) => this.notify(message, kind),
+      fail: (error) => this.fail(error),
+      refreshState: () => this.refreshState(),
+    };
   }
   private selectedModel(): { provider: string; id: string } | undefined {
     const option = el<HTMLSelectElement>('model-select').selectedOptions[0];
@@ -537,6 +620,9 @@ export class Workbench {
     if (!('model' in state)) return;
     this.currentModel = knownModel(state.model) ? { ...state.model, name: state.model.name || state.model.id } : undefined;
     this.modelUnavailable = !this.currentModel;
+    // 上下文窗口来自模型元数据，与用量统计是否可用无关：统计失败时也要能显示它。
+    const window = (state.model as { contextWindow?: number } | undefined)?.contextWindow;
+    if (typeof window === 'number' && window > 0) this.contextWindow = window;
     this.renderModel();
   }
   private renderModel(): void {

@@ -22,11 +22,46 @@
   <main class="conversation" id="main">
     <header class="topbar">
       <button class="icon-btn" data-action="sidebar" aria-label="切换侧栏" aria-controls="sidebar" aria-expanded="true">☰</button>
+      <nav class="topbar-tools" aria-label="功能区">
+        <button class="btn btn-quiet" type="button" data-action="panel-title" aria-controls="panel-title" aria-expanded="false">生成标题</button>
+        <button class="btn btn-quiet" type="button" data-action="panel-system" aria-controls="panel-system" aria-expanded="false">系统</button>
+        <button class="btn btn-quiet" type="button" data-action="panel-tools" aria-controls="panel-tools" aria-expanded="false">工具</button>
+      </nav>
       <div class="session-heading"><h1 id="session-title">新会话</h1><span id="session-cwd" class="muted">选择工作目录，开始对话</span></div>
+      <span id="context-usage" class="state context-usage" role="status" hidden></span>
       <span id="session-state" class="state" role="status">就绪</span>
       <button class="icon-btn" data-action="session-menu" aria-label="会话操作">···</button>
       <button class="icon-btn" data-action="workspace" aria-label="打开工作区面板" aria-controls="workspace-panel" aria-expanded="false">▤</button>
     </header>
+    <section id="panel-title" class="top-panel" hidden>
+      <header><strong>生成标题</strong><button class="icon-btn" type="button" data-action="panel-title-close" aria-label="关闭生成标题">×</button></header>
+      <p class="muted">Pi Web 用一次独立的模型调用生成会话标题；<code>pi --mode rpc</code> 没有暴露同类命令，桥不会替你花 token。</p>
+      <p class="muted">下面的标题由本会话第一条用户消息本地截取得到，不调用模型，可自行编辑后保存。</p>
+      <form id="title-form" class="panel-form">
+        <label for="local-title">本地摘要标题</label>
+        <input id="local-title" type="text" maxlength="80" autocomplete="off">
+        <button class="btn btn-primary" type="submit">保存名称</button>
+      </form>
+    </section>
+    <section id="panel-system" class="top-panel" hidden>
+      <header><strong>系统</strong><button class="icon-btn" type="button" data-action="panel-system-close" aria-label="关闭系统面板">×</button></header>
+      <p class="muted">系统提示词与工具定义只在 Pi 进程内可见，RPC 的 <code>get_state</code> 不返回它们，因此这里不展示猜测值。</p>
+      <dl id="system-facts" class="facts"></dl>
+    </section>
+    <section id="panel-tools" class="top-panel" hidden>
+      <header><strong>工具</strong><button class="icon-btn" type="button" data-action="panel-tools-close" aria-label="关闭工具面板">×</button></header>
+      <p class="muted">RPC 不返回工具定义清单；下面是可控的工具预设，只在启动工作进程时生效。</p>
+      <form id="tool-preset-form" class="panel-form">
+        <label for="tool-preset-select">工具预设</label>
+        <select id="tool-preset-select">
+          <option value="chat-only">仅聊天（不启用任何工具）</option>
+          <option value="read-only">只读（read/grep/find/ls）</option>
+          <option value="default" selected>默认（read/bash/edit/write）</option>
+          <option value="full">完整（内置 7 项全部启用）</option>
+        </select>
+        <p class="muted" id="tool-preset-note"></p>
+      </form>
+    </section>
     <div id="connection-notice" class="notice" role="status" hidden></div>
     <div id="history-scope" class="history-scope" hidden><span>仅显示所选位置以前的历史；发送仍沿会话当前分支继续。</span><button class="btn-quiet" type="button" data-action="branch-current">返回最新</button></div>
     <div id="unsaved-branch" class="notice" role="status" hidden>会话尚未写盘；首条回复前关闭工作进程会丢失这个临时分支。</div>
@@ -55,8 +90,9 @@
           <button class="icon-btn" type="button" data-action="attach" aria-label="添加图片附件" title="添加图片附件">＋</button><input id="attach-input" type="file" accept="image/png,image/jpeg,image/gif,image/webp" multiple hidden>
           <label class="select-label model-control"><span class="sr-only">模型</span><select id="model-select" name="model" aria-label="模型" hx-get="/ui/models" hx-trigger="models-refresh from:body"><option value="">Pi 默认模型</option></select></label>
           <div class="spacer"></div>
-          <label class="select-label"><span class="sr-only">思考强度</span><select id="thinking-select" aria-label="思考强度" disabled><option value="">默认思考</option></select></label>
+          <label class="select-label"><span class="sr-only">思考强度</span><select id="thinking-select" aria-label="思考强度" disabled><option value="">自动</option></select></label>
           <button class="icon-btn" type="button" data-action="commands" aria-label="查看斜杠命令" title="查看斜杠命令">/</button>
+          <label class="select-label" title="工具预设：启动工作进程时生效"><span class="sr-only">工具预设</span><select id="tool-preset-quick" aria-label="工具预设"><option value="chat-only">仅聊天</option><option value="read-only">只读</option><option value="default" selected>默认</option><option value="full">完整</option></select></label>
           <button id="abort-button" type="button" class="btn" data-action="abort" hidden>■ 中止</button>
         </div>
       </form>
