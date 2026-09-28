@@ -55,13 +55,16 @@ kbd { font-size:10px; color:var(--text-dim); margin-left:auto; }
 /* ==== 对话区：顶栏与状态 ============================================================== */
 .conversation { display:flex; flex-direction:column; min-height:0; min-width:0; position:relative; overflow:hidden; --topbar-h:40px; }
 .topbar { display:flex; align-items:stretch; min-height:40px; padding:0 8px 0 0; border-bottom:1px solid var(--border); background:var(--bg-panel); }
-.topbar > .icon-btn { align-self:center; margin:0 2px; }
+.topbar .icon-btn { align-self:center; margin:0 2px; }
+/* 右侧成组后由容器承担右对齐：不要把 align 锤挂在可能 hidden 的元素上
+   （#context-usage 无数据时是 display:none，它的 auto 外边距会失效）。 */
+.topbar-right { display:flex; align-items:stretch; margin-left:auto; }
 .topbar-tools { display:contents; }
 .topbar-btn { display:flex; align-items:center; justify-content:center; gap:6px; height:100%; padding:0 12px; border:0; border-top:2px solid transparent; border-right:1px solid var(--border); background:none; color:var(--text-muted); font-size:11px; white-space:nowrap; cursor:pointer; transition:color .1s,background .1s; }
 .topbar-btn svg { flex-shrink:0; }
 .topbar-btn:hover:not(:disabled) { color:var(--text); background:var(--bg-hover); }
 .topbar-btn[aria-expanded=true] { color:var(--text); background:var(--bg-selected); border-top-color:var(--accent); }
-.topbar-info { margin-left:auto; font-variant-numeric:tabular-nums; padding:0 10px; }
+.topbar-info { font-variant-numeric:tabular-nums; padding:0 10px; }
 .topbar-state { align-self:center; }
 /* 顶栏功能区面板：贴顶栏下沿的下拉浮层。
    Pi Web 用 position:fixed + topBarRect 定位，效果是「覆盖对话区」而不是

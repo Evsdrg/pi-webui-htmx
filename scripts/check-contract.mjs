@@ -21,6 +21,28 @@ for(const [name,relative] of Object.entries(manifest.templates??{})){
  if(name==='extDialog'&&(!body.includes('data-dialog-id')||!body.includes('data-extension-form')))fail('扩展对话缺少回执表单标记');
  ok(`模板 ${name}`);
 }
+// 顶栏的右对齐必须由容器承担。踩过的坑：`margin-left:auto` 挂在 #context-usage
+// 上，而它在没有上下文数据时是 `hidden`（`[hidden]{display:none}`）——
+// 那时 auto 外边距完全失效，「就绪」与右侧按钮就跟着工具栏跑到栏中间了。
+// 规律：对齐锤不能挂在「可能被 hidden、且后面还有依赖该对齐的兄弟节点」的元素上。
+{
+ const shell=readFileSync(resolve(root,'src/templates/shell.html'),'utf8');
+ const css=readFileSync(resolve(root,'src/styles/app.css'),'utf8').replace(/\/\*[\s\S]*?\*\//g,'');
+ const topbar=/<header class="topbar">([\s\S]*?)<\/header>/.exec(shell)?.[1];
+ if(!topbar)fail('shell.html 里找不到顶栏');
+ else{
+  if(!/<div class="topbar-right">/.test(topbar))fail('顶栏缺少 .topbar-right 容器（右对齐需要一个不隐藏的锚点）');
+  else ok('顶栏右对齐由 .topbar-right 容器承担');
+  // 顶栏内带 hidden 的元素不得靠 margin-left:auto 定位。
+  const anchored=[...css.matchAll(/([^{}]*)\{([^}]*margin-left\s*:\s*auto[^}]*)\}/g)].map(match=>match[1]).join(',');
+  for(const tag of topbar.matchAll(/<(\w+)([^>]*\bhidden\b[^>]*)>/g)){
+   const cls=(/class="([^"]*)"/.exec(tag[2])?.[1]??'').split(/\s+/).filter(Boolean);
+   for(const name of cls){
+    if(new RegExp(`\\.${name.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')}(?![\\w-])`).test(anchored))fail(`顶栏里带 hidden 的 .${name} 同时靠 margin-left:auto 定位，隐藏时对齐会失效`);
+   }
+  }
+ }
+}
 // 会话详情的三组列模板是对齐 Pi Web 的关键，而它们只比特异性、不比意图：
 // 曾经有一条 `.stats-grid > .stats-section > .stats-rows`（3 个类）压过
 // `.stats-token .stats-rows`（2 个类），Token 段的值列因此从「贴内容」
