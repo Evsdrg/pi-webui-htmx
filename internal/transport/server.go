@@ -851,54 +851,24 @@ func (c *connection) dropTerminal(id string) {
 	}
 }
 
-// send 把消息放入发送队列；单条或队列总量超限即判定该连接异常并关闭，
-// 绝不因为某个慢客户端拖住 Pi 输出或让队列无界增长。
-// sendRaw 发送已序列化的帧，用于补发。
-func (c *connection) sendRaw(b []byte) bool {
-	if len(b) == 0 || len(b) > 512<<10 {
-		c.cancel()
-		return false
-	}
-	if c.queued.Add(int64(len(b))) > 1<<20 {
-		c.queued.Add(-int64(len(b)))
-		c.cancel()
-		return false
-	}
-	select {
-	case c.out <- b:
-		return true
-	case <-c.ctx.Done():
-		c.queued.Add(-int64(len(b)))
-		return false
-	default:
-		c.queued.Add(-int64(len(b)))
-		c.cancel()
-		return false
-	}
+// sendRaw 按补发的整批截止时间有界排队；单帧大小与队列预算不能被突破。
+func (c *connection) sendRaw(ctx context.Context, b []byte) bool {
+	return enqueueBounded(ctx, c.out, &c.queued, b)
 }
 
 func (c *connection) send(m protocol.Message) bool {
 	b, err := json.Marshal(m)
-	if err != nil || len(b) > 512<<10 {
+	if err != nil || len(b) > outboundFrameLimit {
 		c.cancel()
 		return false
 	}
-	if c.queued.Add(int64(len(b))) > 1<<20 {
-		c.queued.Add(-int64(len(b)))
+	ctx, cancel := context.WithTimeout(c.ctx, outboundWait)
+	defer cancel()
+	if !enqueueBounded(ctx, c.out, &c.queued, b) {
 		c.cancel()
 		return false
 	}
-	select {
-	case c.out <- b:
-		return true
-	case <-c.ctx.Done():
-		c.queued.Add(-int64(len(b)))
-		return false
-	default:
-		c.queued.Add(-int64(len(b)))
-		c.cancel()
-		return false
-	}
+	return true
 }
 
 // writer 是连接内唯一的写协程，保证 WebSocket 写入串行化。
@@ -1032,7 +1002,7 @@ func (s *Server) recordReceipt(req protocol.Request, err error) {
 type connSink interface {
 	connContext() context.Context
 	send(m protocol.Message) bool
-	sendRaw(b []byte) bool
+	sendRaw(ctx context.Context, b []byte) bool
 	trackTerminal(id string, sub *terminal.Subscription)
 	dropTerminal(id string)
 	trackSubscription(id string, sub *run.Subscription)
@@ -1776,10 +1746,17 @@ func (s *Server) subscribeWithReplay(c connSink, r protocol.Request) (any, error
 		prev.Close()
 	}
 	c.trackSubscription(r.SessionID, sub)
-	// 先发补发内容，再发订阅确认，最后才允许推送协程投递实时事件。
+	// 补发使用整批截止时间，不能因每帧重新计时拖住操作配额。
+	replayCtx, cancel := context.WithTimeout(c.connContext(), outboundWait)
+	defer cancel()
 	for _, item := range items {
-		if !c.sendRaw(item.Payload) {
-			return nil, protocol.E("conflict", "连接已关闭")
+		if !c.sendRaw(replayCtx, item.Payload) {
+			sub.Close()
+			if c.connContext().Err() != nil {
+				return nil, protocol.E("conflict", "连接已关闭")
+			}
+			s.metrics.ReplayMiss()
+			return nil, protocol.E("resync_required", "事件补发超时，请重新读取持久历史后再订阅")
 		}
 	}
 	c.send(protocol.Reply(r.RequestID, map[string]any{"subscribed": true, "epoch": info.Epoch, "seq": info.Seq, "replay": true}, nil))
@@ -1891,7 +1868,7 @@ func (s *Server) serveExport(w http.ResponseWriter, r *http.Request) {
 	_, _ = presentation.Compress(w, body, encoding)
 }
 
-// serveLazy 处理 /ui/sessions/{id}/lazy?entryId=..&kind=thinking|tool-image&blockIndex=N。
+// serveLazy 处理 /ui/sessions/{id}/lazy?entryId=..&kind=thinking|tool-image|user-image&blockIndex=N。
 //
 // kind 决定取文本还是图片字节。两者都从磁盘上的 JSONL 现读，
 // 桥不做任何缓存：内容可能被后续 fork/compact 改变，缓存只会提供陈旧数据。
@@ -1921,8 +1898,14 @@ func (s *Server) serveLazy(w http.ResponseWriter, r *http.Request, path string) 
 			return
 		}
 		writeJSON(w, encoding, 200, map[string]string{"thinking": text})
-	case "tool-image":
-		body, mime, err := s.store.ToolImage(r.Context(), id, entryID, blockIndex)
+	case "tool-image", "user-image":
+		var body []byte
+		var mime string
+		if r.URL.Query().Get("kind") == "user-image" {
+			body, mime, err = s.store.UserImage(r.Context(), id, entryID, blockIndex)
+		} else {
+			body, mime, err = s.store.ToolImage(r.Context(), id, entryID, blockIndex)
+		}
 		if err != nil {
 			writeError(w, encoding, 400, err)
 			return
@@ -1935,7 +1918,7 @@ func (s *Server) serveLazy(w http.ResponseWriter, r *http.Request, path string) 
 		w.WriteHeader(200)
 		_, _ = w.Write(body)
 	default:
-		writeError(w, encoding, 400, protocol.E("invalid_params", "kind 必须是 thinking 或 tool-image"))
+		writeError(w, encoding, 400, protocol.E("invalid_params", "kind 必须是 thinking、tool-image 或 user-image"))
 	}
 }
 

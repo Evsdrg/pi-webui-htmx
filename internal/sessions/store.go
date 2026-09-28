@@ -65,6 +65,7 @@ type Entry struct {
 	ID     string          `json:"id"`
 	Kind   EntryKind       `json:"kind"`
 	Text   string          `json:"text"`
+	Error  string          `json:"error,omitempty"`
 	Detail json.RawMessage `json:"detail,omitempty"`
 	// Lazy 列出可延后加载的内容块（思考、工具图片）。
 	// 只带索引不带内容：历史页因此能渲染占位符，而不把大块数据传出去。
@@ -94,6 +95,7 @@ func ProjectEntries(raw []json.RawMessage) []Entry {
 				e.Kind, e.Text = KindUser, text
 			case "assistant":
 				e.Kind, e.Text = KindAssistant, text
+				e.Error = assistantError(item.Message)
 			case "toolResult":
 				e.Kind, e.Text = KindTool, text
 			default:

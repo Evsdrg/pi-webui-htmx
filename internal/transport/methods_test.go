@@ -245,7 +245,7 @@ func (b *blockingSink) send(m protocol.Message) bool {
 }
 func (b *blockingSink) trackTerminal(string, *terminal.Subscription)      {}
 func (b *blockingSink) dropTerminal(string)                               {}
-func (b *blockingSink) sendRaw([]byte) bool                               { return true }
+func (b *blockingSink) sendRaw(context.Context, []byte) bool              { return true }
 func (b *blockingSink) trackSubscription(string, *runtime.Subscription)   {}
 func (b *blockingSink) existingSubscription(string) *runtime.Subscription { return nil }
 func (b *blockingSink) dispatch(context.Context, protocol.Request) (any, error) {

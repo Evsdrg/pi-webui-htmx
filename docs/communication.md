@@ -76,7 +76,7 @@ worker 短锁内：验证 epoch/afterSeq → replay 截止 fence → 注册 live
 ```
 
 - 确认携带当前身份代次；UI 只信当前连接/订阅对应确认，不从任意事件猜 epoch。当前 Workbench.subscribe 未消费确认的身份数据，需在客户端建立确认状态后才派发该订阅的业务事件；只改服务器发送顺序不能替代这个调用方修改。
-- replay + live 积压共用容量预算。窗口不足、事件省略、队列溢出、身份变化必须发 resync 或关闭需重连的订阅，不能静默遗漏。
+- replay + live 积压共用容量预算。窗口不足、事件省略、队列溢出、身份变化必须发 resync 或关闭需重连的订阅，不能静默遗漏。连接出站队列瞬时满时按独立预算短暂等待；worker 的订阅配额依旧独立，高速流仍可能把慢订阅者摘除。
 - UI 在 omitted/resync 时立即重读持久历史，清除“不完整 live 已恢复”的假象；正在生成的部分标记缺口，等 message_end。
 - 退订销毁底层订阅任务，Close 销毁全部 attachment。发送失败的虚拟连接必须注销；同 clientId 重连使用新对象，旧 Close 不得删新对象。
 
@@ -88,6 +88,7 @@ worker 短锁内：验证 epoch/afterSeq → replay 截止 fence → 注册 live
 |---|---:|---|
 | bridge↔Pi JSONL 单帧 | 8 MiB | 超限会关闭 bridge 的 RPC client；大树失败不能直接归咎 Pi |
 | 浏览器 WS 请求/响应 | 1 MiB / 512 KiB | base64 图片、文件和完整输出可超过可传输上限 |
+| 连接出站待发队列 | WS 32 帧、tunnel 64 帧；总计 1 MiB；replay 整批最多等 5 秒 | 缓冲暂满时等待消费者，不因此直接关闭连接；慢消费者超时需重新同步 |
 | 单事件 | 256 KiB | 过大 dialog 尚有永久等待风险 |
 | 订阅队列 | 32 条 / 1 MiB | tunnel 退订/并发访问尚有缺陷 |
 | 重放环 | 256 条 / 1 MiB | 注册与重放快照尚未原子化 |

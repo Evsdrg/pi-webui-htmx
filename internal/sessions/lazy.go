@@ -60,7 +60,7 @@ func scanLazyBlocks(message json.RawMessage) []LazyBlock {
 		switch {
 		case msg.Role == "assistant" && b.Type == "thinking":
 			out = append(out, LazyBlock{BlockIndex: i, Kind: "thinking"})
-		case msg.Role == "toolResult" && b.Type == "image":
+		case (msg.Role == "toolResult" || msg.Role == "user") && b.Type == "image":
 			out = append(out, LazyBlock{BlockIndex: i, Kind: "image"})
 		}
 	}
@@ -106,6 +106,15 @@ func (s *Store) Thinking(ctx context.Context, id, entryID string, blockIndex int
 
 // ToolImage 取某条 toolResult 消息里指定下标的图片，返回字节与 MIME。
 func (s *Store) ToolImage(ctx context.Context, id, entryID string, blockIndex int) ([]byte, string, error) {
+	return s.entryImage(ctx, id, entryID, blockIndex, "toolResult")
+}
+
+// UserImage 取用户附带的图片，不通过工具结果入口跨角色读取。
+func (s *Store) UserImage(ctx context.Context, id, entryID string, blockIndex int) ([]byte, string, error) {
+	return s.entryImage(ctx, id, entryID, blockIndex, "user")
+}
+
+func (s *Store) entryImage(ctx context.Context, id, entryID string, blockIndex int, expectedRole string) ([]byte, string, error) {
 	if blockIndex < 0 || blockIndex > 4096 {
 		return nil, "", protocol.E("invalid_params", "blockIndex 超出范围")
 	}
@@ -113,8 +122,8 @@ func (s *Store) ToolImage(ctx context.Context, id, entryID string, blockIndex in
 	if err != nil {
 		return nil, "", err
 	}
-	if role != "toolResult" {
-		return nil, "", protocol.E("not_found", "条目不是工具结果")
+	if role != expectedRole {
+		return nil, "", protocol.E("not_found", "条目角色与图片类型不符")
 	}
 	var msg struct {
 		Content []struct {

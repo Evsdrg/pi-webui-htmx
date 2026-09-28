@@ -43,7 +43,8 @@ func TestScanLazyBlocks只认配对角色(t *testing.T) {
 		"assistant 的 image 不算":     {"assistant", []map[string]any{{"type": "image", "data": "x"}}, 0},
 		"toolResult 的 image":       {"toolResult", []map[string]any{{"type": "image", "data": "x"}, {"type": "text", "text": "出"}}, 1},
 		"toolResult 的 thinking 不算": {"toolResult", []map[string]any{{"type": "thinking", "thinking": "x"}}, 0},
-		"user 什么都不算":               {"user", []map[string]any{{"type": "thinking"}, {"type": "image"}}, 0},
+		"user 的 image":             {"user", []map[string]any{{"type": "thinking"}, {"type": "image"}}, 1},
+		"user 的 thinking 不算":       {"user", []map[string]any{{"type": "thinking"}}, 0},
 	}
 	for name, c := range cases {
 		raw, err := json.Marshal(map[string]any{"role": c.role, "content": c.content})

@@ -95,6 +95,8 @@ Pi 原事件通过 `pi.event` 传递并绑定基线版本；不是跨 agent 通�
 6. omitted/resync 立即重读持久历史并标记 live 缺口；不伪造丢失 delta。
 7. 已受理任务独立于连接寿命；未知结果客户端只对账，不自动重发 prompt/bash 等变更命令。
 
+**当前传输边界：** WS 出站缓冲 32 帧、tunnel 虚拟连接 64 帧，均额外限制待发送字节为 1 MiB、单帧 512 KiB。连接发送者短暂拥塞时有界等待；同一批 replay 共用 5 秒截止时间，超时返回 `resync_required` 并释放订阅，而不是仅因队列瞬时满就断连接。worker 自身的订阅队列仍有独立条数/字节预算，高速事件可能触发 `bridge.subscription_closed`；UI 应核对 `session.state` 与磁盘历史，不得把断开的实时片段冒充完整。订阅确认的身份数据仍待客户端显式消费，不承诺无损跨连接恢复。
+
 ## 5. 历史与资源
 
 ```json
@@ -119,9 +121,10 @@ Pi 原事件通过 `pi.event` 传递并绑定基线版本；不是跨 agent 通�
 ```text
 GET /ui/sessions/{id}/lazy?kind=thinking&entryId=ENTRY&blockIndex=0
 GET /ui/sessions/{id}/lazy?kind=tool-image&entryId=ENTRY&blockIndex=1
+GET /ui/sessions/{id}/lazy?kind=user-image&entryId=USER_ENTRY&blockIndex=1
 ```
 
-thinking 返回 JSON，tool-image 返回图片字节；索引/格式/字节均校验，SVG 不作为受支持的图片。定位必须保留每个真实 entryId，不能拿整轮最后 assistant 代替（B11）。目标使用同一已验证文件索引读取正文，不缓存整份内容（B38）。
+thinking 返回 JSON；tool-image 与 user-image 分别只允许 toolResult/user 角色并返回图片字节。索引/格式/字节均校验，SVG 不作为受支持的图片。用户附件只在历史 HTML 中生成定位按钮，不内嵌 base64，点击时才取原图；定位必须保留每个真实 entryId，不能拿整轮最后 assistant 代替（B11）。Pi 的 `stopReason:"error"` 可能以空内容 assistant 写盘而不让 prompt RPC 抛错，历史与实时预览必须显示失败；只投影已知的安全类别（如 HTTP 402 余额不足、429 限流），不回显上游错误正文或 request_id。目标使用同一已验证文件索引读取正文，不缓存整份内容（B38）。
 
 ### 工作区文件
 

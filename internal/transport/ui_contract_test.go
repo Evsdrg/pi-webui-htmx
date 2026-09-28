@@ -49,12 +49,14 @@ func TestUI方法契约(t *testing.T) {
 		t.Errorf("桥方法未在 UI 类型声明：%s", method)
 	}
 	page := sessions.Page{Entries: []json.RawMessage{
-		json.RawMessage(`{"type":"message","id":"u1","parentId":null,"message":{"role":"user","content":"提问"}}`),
+		json.RawMessage(`{"type":"message","id":"u1","parentId":null,"message":{"role":"user","content":[{"type":"text","text":"提问"},{"type":"image","data":"aGVsbG8=","mimeType":"image/png"}]}}`),
 		json.RawMessage(`{"type":"message","id":"a1","parentId":"u1","message":{"role":"assistant","content":[{"type":"text","text":"回答"}]}}`),
+		json.RawMessage(`{"type":"message","id":"u2","parentId":"a1","message":{"role":"user","content":"图片问题"}}`),
+		json.RawMessage(`{"type":"message","id":"a2","parentId":"u2","message":{"role":"assistant","content":[],"stopReason":"error","errorMessage":"402 {\"error\":{\"message\":\"insufficient balance (1008)\"},\"request_id\":\"private-request-id\"}"}}`),
 	}}
 	html, err := renderer.RenderHistory("test-session", page)
-	if err != nil || !strings.Contains(html, `data-search-entry-id="a1"`) {
-		t.Fatalf("历史模板未保留搜索命中的助手条目 ID: err=%v html=%q", err, html)
+	if err != nil || !strings.Contains(html, `data-search-entry-id="a1"`) || !strings.Contains(html, `data-lazy="user-image" data-entry-id="u1" data-block-index="1"`) || !strings.Contains(html, "供应商余额不足") || strings.Contains(html, "private-request-id") || strings.Contains(html, "aGVsbG8=") {
+		t.Fatalf("历史模板丢失搜索条目/用户图片/安全错误，或泄漏原文: err=%v html=%q", err, html)
 	}
 }
 

@@ -469,7 +469,9 @@ type Turn struct {
 	ID            string
 	EntryIDs      []string
 	UserText      string
+	UserImages    []ImageBlock
 	AssistantText string
+	Error         string
 	Steps         []Step
 	HasProcess    bool
 	// Thinking 是思考占位符列表，每项自带 entry ID 与块下标。
@@ -477,6 +479,12 @@ type Turn struct {
 	// 多个 assistant 条目时，较早条目承载的块会按最后一个条目的 ID 去取，
 	// 既取不回原文，又可能重复出现同一段（B11）。占位符必须自己知道归属。
 	Thinking []ThinkingBlock
+}
+
+// ImageBlock 指向用户条目中的图片块，历史片段不包含 base64 正文。
+type ImageBlock struct {
+	EntryID    string
+	BlockIndex int
 }
 
 // ThinkingBlock 是一个思考占位符：定位到具体条目的具体块。
@@ -526,17 +534,26 @@ func GroupTurns(entries []sessions.Entry) []Turn {
 	for _, e := range entries {
 		switch e.Kind {
 		case sessions.KindUser:
-			turns = append(turns, Turn{ID: e.ID, EntryIDs: []string{e.ID}, UserText: e.Text})
+			images := make([]ImageBlock, 0, len(e.Lazy))
+			for _, index := range lazyIndexes(e.Lazy, "image") {
+				images = append(images, ImageBlock{EntryID: e.ID, BlockIndex: index})
+			}
+			turns = append(turns, Turn{ID: e.ID, EntryIDs: []string{e.ID}, UserText: e.Text, UserImages: images})
 			current = len(turns) - 1
 		case sessions.KindAssistant:
 			// 每个块都带上自己的 entry ID，绝不合并到回合级的单一 ID 上。
 			thinking := thinkingBlocks(e.ID, e.Lazy)
 			if current < 0 {
-				turns = append(turns, Turn{ID: e.ID, EntryIDs: []string{e.ID}, AssistantText: e.Text, Thinking: thinking})
+				turns = append(turns, Turn{ID: e.ID, EntryIDs: []string{e.ID}, AssistantText: e.Text, Error: e.Error, Thinking: thinking})
 				continue
 			}
 			turns[current].EntryIDs = append(turns[current].EntryIDs, e.ID)
 			turns[current].Thinking = append(turns[current].Thinking, thinking...)
+			if e.Error != "" {
+				turns[current].Error = e.Error
+			} else if e.Text != "" {
+				turns[current].Error = ""
+			}
 			if turns[current].AssistantText != "" && e.Text != "" {
 				turns[current].AssistantText += "\n\n"
 			}

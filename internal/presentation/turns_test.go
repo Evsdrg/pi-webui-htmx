@@ -72,6 +72,24 @@ func Test孤儿assistant的思考归属(t *testing.T) {
 	}
 }
 
+func Test失败回合保留用户图片和安全错误(t *testing.T) {
+	turns := GroupTurns([]sessions.Entry{
+		{ID: "u1", Kind: sessions.KindUser, Text: "颜色？", Lazy: []sessions.LazyBlock{{Kind: "image", BlockIndex: 1}}},
+		{ID: "a1", Kind: sessions.KindAssistant, Error: "模型请求失败：供应商余额不足"},
+	})
+	if len(turns) != 1 || len(turns[0].UserImages) != 1 || turns[0].UserImages[0] != (ImageBlock{EntryID: "u1", BlockIndex: 1}) || turns[0].Error == "" {
+		t.Fatalf("失败回合缺少图片或错误提示: %+v", turns)
+	}
+	turns = GroupTurns([]sessions.Entry{
+		{ID: "u1", Kind: sessions.KindUser, Text: "颜色？"},
+		{ID: "a1", Kind: sessions.KindAssistant, Error: "模型请求失败"},
+		{ID: "a2", Kind: sessions.KindAssistant, Text: "红蓝"},
+	})
+	if len(turns) != 1 || turns[0].Error != "" || turns[0].AssistantText != "红蓝" {
+		t.Fatalf("自动恢复成功后不应继续显示上一次失败: %+v", turns)
+	}
+}
+
 // Test没有思考块时不产生占位符 覆盖反向边界。
 func Test没有思考块时不产生占位符(t *testing.T) {
 	entries := []sessions.Entry{

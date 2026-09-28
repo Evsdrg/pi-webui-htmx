@@ -358,39 +358,22 @@ func (c *virtualConn) dropSubscription(sessionID string) {
 // send 实现 connSink。
 func (c *virtualConn) send(m protocol.Message) bool {
 	b, err := json.Marshal(m)
-	if err != nil || len(b) > 512<<10 {
+	if err != nil || len(b) > outboundFrameLimit {
 		c.cancel()
 		return false
 	}
-	return c.enqueue(b)
+	ctx, cancel := context.WithTimeout(c.ctx, outboundWait)
+	defer cancel()
+	if !enqueueBounded(ctx, c.out, &c.queued, b) {
+		c.cancel()
+		return false
+	}
+	return true
 }
 
-// sendRaw 发送已序列化的帧，用于补发。
-func (c *virtualConn) sendRaw(b []byte) bool {
-	if len(b) == 0 || len(b) > 512<<10 {
-		c.cancel()
-		return false
-	}
-	return c.enqueue(b)
-}
-
-func (c *virtualConn) enqueue(b []byte) bool {
-	if c.queued.Add(int64(len(b))) > 1<<20 {
-		c.queued.Add(-int64(len(b)))
-		c.cancel()
-		return false
-	}
-	select {
-	case c.out <- b:
-		return true
-	case <-c.ctx.Done():
-		c.queued.Add(-int64(len(b)))
-		return false
-	default:
-		c.queued.Add(-int64(len(b)))
-		c.cancel()
-		return false
-	}
+// sendRaw 发送已序列化的补发帧，按整批截止时间等待队列排空。
+func (c *virtualConn) sendRaw(ctx context.Context, b []byte) bool {
+	return enqueueBounded(ctx, c.out, &c.queued, b)
 }
 
 func (c *virtualConn) reply(m protocol.Message) { c.send(m) }
