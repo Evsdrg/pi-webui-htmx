@@ -145,7 +145,18 @@ func main() {
 				{"name": "demo", "description": "演示", "source": "extension"},
 			}}})
 		case "get_tree":
-			emit(frame{Type: "response", ID: cmd.ID, Success: true, Data: map[string]any{"tree": []any{}, "leafId": "a"}})
+			// 给一棵两层的真实形状：一个分叉点 + 两个叶子。
+			// 空树会让「分支片段到底渲染成什么」无法在端到端路径上验证。
+			emit(frame{Type: "response", ID: cmd.ID, Success: true, Data: map[string]any{
+				"leafId": "a1",
+				"tree": []map[string]any{{
+					"entry": map[string]any{"type": "message", "id": "u1", "message": map[string]any{"role": "user", "content": "第一个问题"}},
+					"children": []map[string]any{
+						{"entry": map[string]any{"type": "message", "id": "a1", "label": "回答一"}, "children": []map[string]any{}},
+						{"entry": map[string]any{"type": "message", "id": "a1b", "label": "分支回答"}, "children": []map[string]any{}},
+					},
+				}},
+			}})
 		case "get_entries":
 			emit(frame{Type: "response", ID: cmd.ID, Success: true, Data: map[string]any{"entries": []any{}, "leafId": "a"}})
 		case "get_fork_messages":

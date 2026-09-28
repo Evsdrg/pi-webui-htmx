@@ -1,0 +1,163 @@
+package presentation
+
+import (
+	"os"
+	"strings"
+	"testing"
+)
+
+// uiDir 是相邻检出的 UI 包。从本包目录往上三层才是工作区根，
+// 写两层会指向 pi-bridge-go/pi-webui-htmx，永远命中不了（旧测试就是这样静默跳过的）。
+const uiDir = "../../../pi-webui-htmx"
+
+// testRenderer 从真实 UI 包加载模板：模板缺失时这些断言就没有意义，
+// 所以检出不存在时跳过，存在但加载失败时直接失败。
+func testRenderer(t *testing.T) *Renderer {
+	t.Helper()
+	if _, err := os.Stat(uiDir); err != nil {
+		t.Skip("需要 pi-webui-htmx 检出")
+	}
+	r, err := LoadFromDir(uiDir)
+	if err != nil {
+		t.Fatalf("加载 UI 包失败：%v", err)
+	}
+	return r
+}
+
+// Git 变更列表改由桥渲染后，截断语义必须在这里守住：
+// 列表被截断时不能宣称「工作区干净」，否则用户会以为没有未提交改动。
+func TestGit截断时不宣称工作区干净(t *testing.T) {
+	renderer := testRenderer(t)
+	html, err := renderer.RenderGitStatus(map[string]any{
+		"branch": "main", "clean": true, "truncated": true,
+		"files": []map[string]string{{"status": "M", "path": "a.go"}},
+	})
+	if err != nil {
+		t.Fatalf("渲染失败：%v", err)
+	}
+	if !strings.Contains(html, "列表已截断") {
+		t.Fatalf("截断必须说明列表被截断，实际：%s", html)
+	}
+	if strings.Contains(html, "工作区干净") {
+		t.Fatalf("截断状态不得宣称工作区干净：%s", html)
+	}
+}
+
+// 未截断且无变更时才显示「工作区干净」。
+func TestGit干净状态(t *testing.T) {
+	renderer := testRenderer(t)
+	html, err := renderer.RenderGitStatus(map[string]any{"branch": "main", "clean": true, "files": []any{}})
+	if err != nil {
+		t.Fatalf("渲染失败：%v", err)
+	}
+	if !strings.Contains(html, "工作区干净") {
+		t.Fatalf("干净工作区应明确说明，实际：%s", html)
+	}
+}
+
+// 搜索结果以前在前端用 createElement 拼装；现在由桥渲染，
+// 标题与目录必须进 HTML，否则点开后又退化成会话 ID（旧缺陷）。
+func Test搜索片段包含标题与目录(t *testing.T) {
+	renderer := testRenderer(t)
+	html, err := renderer.RenderSearch("问题", []map[string]any{
+		{"sessionId": "s1", "entryId": "e9", "title": "示例会话", "cwd": "/repo", "snippet": "命中的这句话"},
+	})
+	if err != nil {
+		t.Fatalf("渲染失败：%v", err)
+	}
+	for _, want := range []string{"示例会话", "/repo", "命中的这句话", `data-entry-id="e9"`, `data-session="s1"`} {
+		if !strings.Contains(html, want) {
+			t.Fatalf("搜索结果缺少 %q：%s", want, html)
+		}
+	}
+}
+
+// 空结果要有可读提示，而不是一片空白。
+func Test搜索空结果有提示(t *testing.T) {
+	renderer := testRenderer(t)
+	html, err := renderer.RenderSearch("找不到", nil)
+	if err != nil {
+		t.Fatalf("渲染失败：%v", err)
+	}
+	if !strings.Contains(html, "没有匹配") {
+		t.Fatalf("空结果应给出提示：%s", html)
+	}
+}
+
+// 分支树以前在前端摊平 + 拼 DOM，深度只受堆限制（U08 修过一次栈溢出）。
+// 改成 Go 之后同样必须用显式栈：20 万层线性链不能让测试进程崩掉。
+func Test分支树深线性链不爆栈(t *testing.T) {
+	var node map[string]any
+	node = map[string]any{"entry": map[string]any{"type": "message", "id": "leaf"}, "children": []any{}}
+	const depth = 200_000
+	for i := 0; i < depth; i++ {
+		node = map[string]any{
+			"entry":    map[string]any{"type": "message", "id": "n"},
+			"children": []any{node},
+		}
+	}
+	rows, _ := BranchRows(map[string]any{"tree": []any{node}, "leafId": "leaf"}, nil, "leaf")
+	if len(rows) != depth+1 {
+		t.Fatalf("摊平结果应为 %d 行，实际 %d", depth+1, len(rows))
+	}
+	if rows[0].Level != 1 {
+		t.Fatalf("根层级应为 1，实际 %d", rows[0].Level)
+	}
+	// 缩进在 branchMaxLevel 封顶，否则长会话会被一层层内边距挤出屏幕。
+	if rows[depth].Level != branchMaxLevel {
+		t.Fatalf("末行层级应封顶在 %d，实际 %d", branchMaxLevel, rows[depth].Level)
+	}
+	if rows[5].Level != 6 {
+		t.Fatalf("封顶前层级应逐层递增，第 6 行应为 6，实际 %d", rows[5].Level)
+	}
+}
+
+// 分叉点要标出子节点数量，当前叶子要标出来。
+func Test分支树标注分叉与当前叶子(t *testing.T) {
+	tree := map[string]any{"tree": []any{map[string]any{
+		"entry": map[string]any{"type": "message", "id": "u1", "message": map[string]any{"role": "user", "content": "第一个问题"}},
+		"children": []any{
+			map[string]any{"entry": map[string]any{"type": "message", "id": "a1"}, "children": []any{}},
+			map[string]any{"entry": map[string]any{"type": "message", "id": "a1b"}, "children": []any{}},
+		},
+	}}, "leafId": "a1"}
+	rows, _ := BranchRows(tree, nil, "a1")
+	if len(rows) != 3 {
+		t.Fatalf("应为 3 行，实际 %d", len(rows))
+	}
+	if !strings.Contains(rows[0].Kind, "⑂2") {
+		t.Fatalf("分叉点应标注子节点数，实际 %q", rows[0].Kind)
+	}
+	if !rows[1].Current || rows[2].Current {
+		t.Fatalf("只有叶子 a1 应标为当前：%+v", rows)
+	}
+}
+
+// fork_messages 的形状随桥版本不同（裸数组 / {messages:[]}），
+// 两种都要接受，否则分支列表会空白。
+func Test分支接受两种fork形状(t *testing.T) {
+	wrapped := map[string]any{"messages": []any{map[string]any{"entryId": "u1", "text": "第一个问题"}}}
+	if _, forks := BranchRows(map[string]any{}, wrapped, ""); len(forks) != 1 || forks[0].EntryID != "u1" {
+		t.Fatalf("包装形状解析失败：%+v", forks)
+	}
+	// 没有 messages 字段时退化为空列表，而不是把对象当消息渲染。
+	if _, forks := BranchRows(map[string]any{}, map[string]any{"other": 1}, ""); len(forks) != 0 {
+		t.Fatalf("无 messages 字段时不应产生分支行：%+v", forks)
+	}
+	// entryId 缺失时用正文兜底，按钮仍可用（前端按 entryId 判禁用）。
+	if _, forks := BranchRows(map[string]any{}, map[string]any{"messages": []any{map[string]any{"text": "只有正文"}}}, ""); len(forks) != 1 || forks[0].Text != "只有正文" {
+		t.Fatalf("缺 entryId 时应用正文兜底：%+v", forks)
+	}
+}
+
+// 空树与空 fork 都要有可读提示。
+func Test分支空状态有提示(t *testing.T) {
+	renderer := testRenderer(t)
+	html, err := renderer.RenderBranch(nil, nil)
+	if err != nil {
+		t.Fatalf("渲染失败：%v", err)
+	}
+	if !strings.Contains(html, "还没有分支结构") || !strings.Contains(html, "没有可分支的用户消息") {
+		t.Fatalf("空状态应给出提示：%s", html)
+	}
+}

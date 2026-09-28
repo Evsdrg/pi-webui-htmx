@@ -137,6 +137,30 @@ GET /ui/sessions/{id}/lazy?kind=user-image&entryId=USER_ENTRY&blockIndex=1
 
 thinking 返回 JSON；tool-image 与 user-image 分别只允许 toolResult/user 角色并返回图片字节。索引/格式/字节均校验，SVG 不作为受支持的图片。用户附件只在历史 HTML 中生成定位按钮，不内嵌 base64，点击时才取原图；定位必须保留每个真实 entryId，不能拿整轮最后 assistant 代替（B11）。Pi 的 `stopReason:"error"` 可能以空内容 assistant 写盘而不让 prompt RPC 抛错，历史与实时预览必须显示失败；只投影已知的安全类别（如 HTTP 402 余额不足、429 限流），不回显上游错误正文或 request_id。目标使用同一已验证文件索引读取正文，不缓存整份内容（B38）。
 
+### 服务端渲染片段
+
+「已有数据 → HTML」一律由桥渲染，前端只用 `hx-*` 属性与自定义事件触发刷新，不再用 JS 拼列表：
+
+```text
+GET /ui/sessions                        会话侧栏
+GET /ui/search?q=KEY                    搜索结果（含 title/cwd/entryId）
+GET /ui/sessions/{id}/history           历史回合
+GET /ui/files?path=DIR                  文件浏览
+GET /ui/git-status?path=DIR             Git 变更列表
+GET /ui/diff?path=DIR                   差异
+GET /ui/branch?sessionId=ID&leafId=…    分支树 + 可分支消息
+GET /ui/models、/ui/packages、/ui/extensions/*
+```
+
+约定：
+
+- 参数由模板里的隐藏输入提供，前端只写值并触发事件（`files-refresh`、`git-status-refresh`、`diff-refresh`、`search-refresh`、`branch-refresh`、`dialogs-refresh`、`sessions-refresh`、`models-refresh`、`packages-refresh`），不拼 URL。
+- 迟到响应的归属判定放在 `htmx:beforeSwap`（交换之前），按响应 URL 里的参数与当前状态比对，不靠调用时的闭包快照。
+- 片段不得含 `<script>`、不得含完整文档结构、不得含动态内联 `style`（受 CSP 约束）。层级缩进用 `aria-level` + 静态 CSS。
+- `/ui/branch` 需要活动 worker：`get_tree` 是 Pi 进程内命令，没有纯磁盘等价物；未启动时返回 `409 worker_not_running`，不静默返回空树。
+
+留浏览器侧的只有「转瞬即逝的交互状态」：按键补全与斜杠菜单、滚动锚定、WS 流式增量、textarea 自适应高度、xterm、未上传的本地附件缩略图、以及 markdown/高亮/KaTeX/ANSI 渲染管线。判据是「这份数据在服务端有没有权威版本」。
+
 ### 工作区文件
 
 - `files.index` 无 query 返回 `{files:[...],truncated}`，有 query 返回 `{matches:[{path,isDir}],truncated}`；这是同方法的两种显式模式。

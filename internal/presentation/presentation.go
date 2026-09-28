@@ -8,6 +8,7 @@
 package presentation
 
 import (
+	"fmt"
 	"html/template"
 	"os"
 	"path/filepath"
@@ -691,6 +692,104 @@ func (r *Renderer) RenderFiles(root string, entries []map[string]any, truncated 
 	return r.execute("files.html", FilesData{Root: root, Entries: rows, Truncated: truncated})
 }
 
+// GitFileRow 是「变更」列表的一行。
+type GitFileRow struct {
+	Status string
+	Path   string
+}
+
+// GitStatusData 驱动 Git 变更列表。
+//
+// 这些内容以前在浏览器里用 createElement 拼装，但「状态数据 → HTML」
+// 本来就该由服务端渲染：前端只负责触发刷新，不再掌握列表结构。
+type GitStatusData struct {
+	Branch    string
+	Clean     bool
+	Truncated bool
+	Shown     int
+	Files     []GitFileRow
+}
+
+// RenderGitStatus 渲染 Git 变更片段。
+func (r *Renderer) RenderGitStatus(status map[string]any) (string, error) {
+	rows := make([]GitFileRow, 0)
+	for _, item := range anyList(status["files"]) {
+		entry := recordOf(item)
+		rows = append(rows, GitFileRow{Status: stringField(entry, "status"), Path: stringField(entry, "path")})
+	}
+	return r.execute("git-status.html", GitStatusData{
+		Branch:    stringField(status, "branch"),
+		Clean:     boolField(status, "clean"),
+		Truncated: boolField(status, "truncated"),
+		Shown:     len(rows),
+		Files:     rows,
+	})
+}
+
+// SearchHit 是一次全文搜索命中。
+type SearchHit struct {
+	SessionID string
+	EntryID   string
+	Title     string
+	Cwd       string
+	Snippet   string
+}
+
+// SearchData 驱动搜索结果列表。
+type SearchData struct {
+	Query   string
+	Results []SearchHit
+}
+
+// RenderSearch 渲染搜索结果。命中片段本身就是数据到标记的映射，
+// 放在前端拼 DOM 既重复又不安全。
+func (r *Renderer) RenderSearch(query string, hits []map[string]any) (string, error) {
+	rows := make([]SearchHit, 0, len(hits))
+	for _, hit := range hits {
+		rows = append(rows, SearchHit{
+			SessionID: stringField(hit, "sessionId"),
+			EntryID:   stringField(hit, "entryId"),
+			Title:     stringField(hit, "title"),
+			Cwd:       stringField(hit, "cwd"),
+			Snippet:   stringField(hit, "snippet"),
+		})
+	}
+	return r.execute("search.html", SearchData{Query: query, Results: rows})
+}
+
+// BranchRow 是分支树的一行。
+//
+// Level 是 1 起算的层级，同时用于 aria-level 与视觉缩进。
+// 缩进在 branchMaxLevel 之后封顶：长会话可能是上万层的线性链，
+// 每层都加内边距会把内容挤出屏幕，而且缩进本身也失去辨别意义。
+type BranchRow struct {
+	Kind    string
+	Summary string
+	EntryID string
+	Level   int
+	Current bool
+}
+
+// branchMaxLevel 是视觉缩进的上限（含）。层级本身仍如实上报给辅助技术。
+const branchMaxLevel = 11
+
+// BranchFork 是可分支的用户消息。
+type BranchFork struct {
+	EntryID string
+	Text    string
+}
+
+// BranchData 驱动分支导航片段。
+type BranchData struct {
+	Rows  []BranchRow
+	Forks []BranchFork
+}
+
+// RenderBranch 渲染分支树与可分支消息列表。
+func (r *Renderer) RenderBranch(rows []BranchRow, forks []BranchFork) (string, error) {
+	return r.execute("branch.html", BranchData{Rows: rows, Forks: forks})
+}
+
 // DiffLine 是 diff 的一行。
 type DiffLine struct {
 	Kind  string
@@ -741,6 +840,39 @@ func stringField(m map[string]any, key string) string {
 	return ""
 }
 
+// recordOf 把任意值当只读对象看待；取不到就给空对象，调用方无需逐层断言。
+func recordOf(value any) map[string]any {
+	if m, ok := value.(map[string]any); ok {
+		return m
+	}
+	return map[string]any{}
+}
+
+// anyList 把 []any 与 []map[string]any 统一成可遍历的切片。
+func anyList(value any) []any {
+	switch list := value.(type) {
+	case []any:
+		return list
+	case []map[string]string:
+		out := make([]any, 0, len(list))
+		for _, item := range list {
+			m := map[string]any{}
+			for k, v := range item {
+				m[k] = v
+			}
+			out = append(out, m)
+		}
+		return out
+	case []map[string]any:
+		out := make([]any, 0, len(list))
+		for _, item := range list {
+			out = append(out, item)
+		}
+		return out
+	}
+	return nil
+}
+
 func boolField(m map[string]any, key string) bool {
 	v, _ := m[key].(bool)
 	return v
@@ -772,3 +904,96 @@ func formatSize(n int) string {
 
 // Now 供测试替换时间来源。
 var Now = time.Now
+
+// BranchRows 把 Pi 的会话树与可分支消息转成渲染行。
+//
+// 摊平必须用显式栈而不是递归：长会话的分支树可能是上万层的线性链，
+// 递归会直接栈溢出（U08）。这里与前端原先的实现保持同样的前序顺序。
+func BranchRows(tree, forks map[string]any, leafId string) ([]BranchRow, []BranchFork) {
+	type frame struct {
+		node  map[string]any
+		depth int
+	}
+	roots := anyList(tree["tree"])
+	stack := make([]frame, 0, len(roots))
+	for i := len(roots) - 1; i >= 0; i-- {
+		stack = append(stack, frame{node: recordOf(roots[i])})
+	}
+	rows := make([]BranchRow, 0, len(roots))
+	for len(stack) > 0 {
+		item := stack[len(stack)-1]
+		stack = stack[:len(stack)-1]
+		entry := recordOf(item.node["entry"])
+		id := stringField(entry, "id")
+		kind := stringField(entry, "type")
+		if kind == "" {
+			kind = "entry"
+		}
+		children := anyList(item.node["children"])
+		if len(children) > 1 {
+			kind = fmt.Sprintf("%s ⑂%d", kind, len(children))
+		}
+		summary := stringField(item.node, "label")
+		if summary == "" {
+			summary = stringField(entry, "summary")
+		}
+		if summary == "" {
+			summary = stringField(entry, "text")
+		}
+		if summary == "" {
+			summary = stringField(entry, "name")
+		}
+		if summary == "" {
+			if role := stringField(recordOf(entry["message"]), "role"); role != "" {
+				summary = role + " 消息"
+			}
+		}
+		if summary != "" && id != "" {
+			summary = shortID(id) + " · " + summary
+		} else if summary == "" {
+			summary = shortID(id)
+		}
+		level := item.depth + 1
+		if level > branchMaxLevel {
+			level = branchMaxLevel
+		}
+		rows = append(rows, BranchRow{
+			Kind:    kind,
+			Summary: summary,
+			EntryID: id,
+			Level:   level,
+			Current: id != "" && id == leafId,
+		})
+		for i := len(children) - 1; i >= 0; i-- {
+			stack = append(stack, frame{node: recordOf(children[i]), depth: item.depth + 1})
+		}
+	}
+
+	// fork_messages 的形态随桥版本不同：这里同时接受裸数组与 {messages:[...]}。
+	messages := anyList(forks["messages"])
+	if messages == nil {
+		messages = anyList(forks)
+	}
+	forkRows := make([]BranchFork, 0, len(messages))
+	for _, item := range messages {
+		if len(forkRows) >= 200 {
+			break
+		}
+		entry := recordOf(item)
+		id := stringField(entry, "entryId")
+		body := stringField(entry, "text")
+		if body == "" {
+			body = id
+		}
+		forkRows = append(forkRows, BranchFork{EntryID: id, Text: body})
+	}
+	return rows, forkRows
+}
+
+// shortID 把条目 ID 截成前 8 位，界面上只用于区分节点。
+func shortID(id string) string {
+	if len(id) > 8 {
+		return id[:8]
+	}
+	return id
+}

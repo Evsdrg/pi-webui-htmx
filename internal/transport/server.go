@@ -435,6 +435,65 @@ func (s *Server) serveUI(w http.ResponseWriter, r *http.Request) bool {
 		writeHTML(w, encoding, html)
 		return true
 
+	case path == "/ui/git-status":
+		status, gerr := s.files.GitStatus(r.Context(), r.URL.Query().Get("path"))
+		if gerr != nil {
+			writeError(w, encoding, 400, gerr)
+			return true
+		}
+		html, rerr := s.ui.RenderGitStatus(status)
+		if rerr != nil {
+			writeError(w, encoding, 500, rerr)
+			return true
+		}
+		writeHTML(w, encoding, html)
+		return true
+
+	case path == "/ui/search":
+		query := r.URL.Query().Get("q")
+		var hits []map[string]any
+		if query != "" {
+			result, serr := s.store.Search(r.Context(), query, sessions.DefaultSearchLimits())
+			if serr != nil {
+				writeError(w, encoding, 400, serr)
+				return true
+			}
+			hits = toAnyMaps(result.Matches)
+		}
+		html, rerr := s.ui.RenderSearch(query, hits)
+		if rerr != nil {
+			writeError(w, encoding, 500, rerr)
+			return true
+		}
+		writeHTML(w, encoding, html)
+		return true
+
+	case path == "/ui/branch":
+		// 分支树需要活动 worker：get_tree 是 Pi 进程内的命令，
+		// 没有纯磁盘等价物。未启动时给可读提示，不静默返回空树。
+		worker, werr := s.manager.Get(r.URL.Query().Get("sessionId"))
+		if werr != nil {
+			writeError(w, encoding, 409, werr)
+			return true
+		}
+		tree, terr := worker.Tree(r.Context())
+		if terr != nil {
+			writeError(w, encoding, 400, terr)
+			return true
+		}
+		forks, ferr := worker.ForkMessages(r.Context())
+		if ferr != nil {
+			forks = map[string]any{}
+		}
+		rows, forkRows := presentation.BranchRows(tree, forks, r.URL.Query().Get("leafId"))
+		html, rerr := s.ui.RenderBranch(rows, forkRows)
+		if rerr != nil {
+			writeError(w, encoding, 500, rerr)
+			return true
+		}
+		writeHTML(w, encoding, html)
+		return true
+
 	case path == "/ui/extensions/status":
 		html, rerr := s.ui.RenderExtensionStatus(s.extensionStatuses())
 		if rerr != nil {

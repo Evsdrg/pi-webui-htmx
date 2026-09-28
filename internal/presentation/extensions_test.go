@@ -87,7 +87,7 @@ func TestDialogFromPi拒绝坏JSON(t *testing.T) {
 }
 
 func TestRenderExtensionStatus去重排序(t *testing.T) {
-	r, err := LoadFromDir("../../pi-webui-htmx")
+	r, err := LoadFromDir("../../../pi-webui-htmx")
 	if err != nil {
 		t.Skip("需要 pi-webui-htmx 检出")
 	}
