@@ -28,7 +28,11 @@ type Renderer struct {
 	assets    map[string]asset
 	entryJS   []string
 	entryCSS  []string
-	mu        sync.RWMutex
+	// entryPreload 是入口的静态分块（如拆出去的 htmx）。它们不在
+	// 入口请求里，如果不预加载，浏览器要解析完 app.js 才发现它们，
+	// 多一个往返才能拿到 window.htmx。
+	entryPreload []string
+	mu           sync.RWMutex
 	// compressed 缓存静态资源的预压缩变体。键是 "name|enc"。
 	// 文件名带内容哈希，内容不会变，因此缓存永不失效；上限只为防止
 	// 有人把 --ui-dir 指向巨型目录时无界增长。
@@ -368,10 +372,10 @@ func (r *Renderer) CompressedStats() map[string]any {
 
 // EntryAssets 返回入口的 JS 与 CSS 真实文件名。
 // shell 模板用它注入带内容哈希的路径，从而支持长期不可变缓存。
-func (r *Renderer) EntryAssets() (js, css []string) {
+func (r *Renderer) EntryAssets() (js, css, preload []string) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	return append([]string(nil), r.entryJS...), append([]string(nil), r.entryCSS...)
+	return append([]string(nil), r.entryJS...), append([]string(nil), r.entryCSS...), append([]string(nil), r.entryPreload...)
 }
 
 // execute 渲染指定模板；失败视为内部错误，不回退部分输出。
@@ -720,12 +724,14 @@ type ShellData struct {
 	SessionID string
 	JS        []string
 	CSS       []string
+	// Preload 是入口静态依赖的分块，用 modulepreload 与入口并行拉取。
+	Preload []string
 }
 
 // RenderShell 渲染应用外壳，注入带内容哈希的资源路径。
 func (r *Renderer) RenderShell(sessionID string) (string, error) {
-	js, css := r.EntryAssets()
-	return r.execute("shell.html", ShellData{SessionID: sessionID, JS: js, CSS: css})
+	js, css, preload := r.EntryAssets()
+	return r.execute("shell.html", ShellData{SessionID: sessionID, JS: js, CSS: css, Preload: preload})
 }
 
 func stringField(m map[string]any, key string) string {

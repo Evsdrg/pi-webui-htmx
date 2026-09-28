@@ -97,6 +97,14 @@ func (r *Renderer) loadManifest(dir string, supported []string) error {
 		if _, err := assetName(item.File); err != nil {
 			return err
 		}
+		// 入口自己的文件已在 r.entryJS；其余静态依赖走 modulepreload。
+		if key != ui.Build.Entry {
+			name, err := assetName(item.File)
+			if err != nil {
+				return err
+			}
+			r.entryPreload = append(r.entryPreload, name)
+		}
 		for _, dependency := range item.Imports {
 			if err := visit(dependency); err != nil {
 				return err
