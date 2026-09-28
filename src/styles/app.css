@@ -338,3 +338,10 @@ input,select,textarea { background:var(--bg); border:1px solid var(--border); bo
 .stats-section .facts { margin:0; }
 .stats-section .facts dd { overflow-wrap:anywhere; }
 .top-panel .empty-note { margin:8px 0; }
+
+/* 回合操作：默认弱化，鼠标悬停或键盘聚焦到该回合时显形。
+   与 Pi Web 一致地「悬停才出现」，但用 :focus-within 保住键盘可达性——
+   只靠 :hover 的菜单键盘用户永远够不到。 */
+.turn-actions { opacity:.35; transition:opacity .12s; }
+.turn:hover .turn-actions, .turn:focus-within .turn-actions { opacity:1; }
+@media (hover:none) { .turn-actions { opacity:1; } }

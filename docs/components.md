@@ -96,6 +96,25 @@ xterm 终端、未上传的本地附件缩略图、markdown/高亮/KaTeX/ANSI �
 一处刻意的例外：`/ui/file-text` 用 `fetch` 而不是 `hx-get`——它返回的是文件**内容**
 （可能很大），直接交给渲染管线（高亮/ANSI）而不是交换进 DOM。
 
+## 3.2 htmx 用法审查（2026-09-28）
+
+对着 htmx 2.0.11 的源码逐条核对当前用法，结论与两处修正：
+
+**核对通过的**：
+
+- `hx-include="#hidden-input"` + `hx-trigger="<事件> from:body"`：自定义事件由 JS 触发，参数走隐藏输入。`findAttributeTargets` 解析选择器后逐个 `processInputValue`，对 `<input>` 直接取值。
+- `hx-target="this" hx-swap="outerHTML"`（「加载更多会话」按钮）：分页替换自身的标准写法。
+- `hx-target="#turns" hx-swap="afterbegin"` + `hx-swap-oob="innerHTML"`（「加载更早的消息」）：主片段前插、`#older-slot` 带外替换，两者在同一次响应里。
+- `hx-sync="this:drop"`（「加载更早的消息」）：同元素在途时丢弃新请求，正是防重复提交该用的机制。
+- GET 请求不会带上所属表单的值——`getInputValues` 里 `if (verb !== 'get')` 才 `processInputValue(..., getRelatedForm(elt))`。因此输入框里的草稿不会被拼进 `/ui/models` 的查询串。
+
+**修正的两处**：
+
+1. `#branch-body` 上曾写 `hx-disabled-elt="this"`。该属性给元素加 `disabled`，而 `div` 不响应 `disabled`，等于空转；已改为 `hx-sync="this:drop"`（同一元素在途时丢弃新请求），这才是它想表达的意思。
+2. 片段端点的状态码：htmx 默认**不交换** 4xx/5xx。原先「worker 未启动」返回 409，界面会停在旧内容上且没有解释（真机复现）。已改为 200 + 服务端渲染的说明片段。见「片段端点的状态机约定」。
+
+**载入提示不用 JS**：未指定 `hx-indicator` 时，`addRequestIndicatorClasses` 会把 `htmx-request` 加到发起请求的元素上（`indicators == null` 分支）。因此三个慢面板（system/tools/stats，都要先让 Pi 导出一份快照）只用 CSS 就能显示「正在读取…」并隐藏旧内容。刷新很快的片段不加，避免闪烁。
+
 ## 4. 安全与 CSP
 
 当前入口关闭 htmx eval/script 标签执行和 history cache；Go 模板转义、DOMPurify 净化另行负责。构建器看到 htmx 内部 eval 的警告不等于应用已走该路径，也不能因此取消内容净化。
