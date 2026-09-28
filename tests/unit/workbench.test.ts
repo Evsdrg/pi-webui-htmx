@@ -32,7 +32,8 @@ function mount() {
  <button data-action=abort-retry>中止重试</button>
  <fieldset class=queue-modes><label class=switch><input type=radio name=queue-kind value=steering checked><span>插入指令</span></label><label class=switch><input type=radio name=queue-kind value=followUp><span>完成后追加</span></label></fieldset></dialog>
  <div class=queue-hint id=queue-hint hidden></div>
- <header class=topbar><nav class=topbar-tools aria-label=功能区><button data-action=panel-title aria-controls=panel-title aria-expanded=false>生成标题</button><button data-action=panel-system aria-controls=panel-system aria-expanded=false>系统</button><button data-action=panel-tools aria-controls=panel-tools aria-expanded=false>工具</button></nav><span id=context-usage hidden></span></header>
+ <header class=topbar><nav class=topbar-tools aria-label=功能区><button data-action=full-history>完整历史</button><button data-action=panel-title aria-controls=panel-title aria-expanded=false>生成标题</button><button data-action=panel-system aria-controls=panel-system aria-expanded=false>系统</button><button data-action=panel-tools aria-controls=panel-tools aria-expanded=false>工具</button></nav><button id=context-usage data-action=panel-info aria-controls=panel-info aria-expanded=false hidden></button><span id=session-state class=state>就绪</span></header>
+ <section id=panel-info hidden><button data-action=panel-info-close></button><dl id=session-facts></dl></section>
  <section id=panel-title hidden><button data-action=panel-title-close></button><form id=title-form><input id=local-title></form></section><section id=panel-system hidden><button data-action=panel-system-close></button><dl id=system-facts></dl></section><section id=panel-tools hidden><button data-action=panel-tools-close></button><form id=tool-preset-form><select id=tool-preset-select><option value=chat-only>仅聊天</option><option value=read-only>只读</option><option value=default selected>默认</option><option value=full>完整</option></select><p id=tool-preset-note></p></form></section>
  <dialog id=models-dialog><p id=models-status></p><textarea id=models-editor></textarea><input id=discover-url><input id=discover-api><input id=discover-key><textarea id=discover-headers></textarea><div id=discover-result></div><button data-action=models-edit>编辑</button><button data-action=models-reload>重读</button><button data-action=models-save>保存</button><button data-action=models-discover>发现</button><button data-action=models-test>测试</button></dialog>`;
  for(const id of ['live','conn-state','connection-notice','session-state','session-title','session-cwd','session-list','session-count','turns','older-slot','chat-scroll','welcome','command-menu','ext-status-slot','ext-widgets-before','ext-widgets-after','ext-dialog-slot','usage','toast-root']) {const node=document.createElement('div');node.id=id;document.body.append(node);}
@@ -1018,6 +1019,42 @@ describe('顶栏功能面板', () => {
     select.value = 'full';
     select.dispatchEvent(new Event('change', { bubbles: true }));
     await vi.waitFor(() => expect(note.textContent).toContain('禁用扩展工具'));
+  });
+
+  it('会话信息面板承载会话名称与工作目录', async () => {
+    fake.request.mockImplementation(async (method: string) => {
+      if (method === 'worker.list') return [{ sessionId: 's1', cwd: '/tmp/a' }];
+      if (method === 'session.state') return { sessionId: 's1', isStreaming: false };
+      if (method === 'session.thinking_levels') return ['off', 'high'];
+      return {};
+    });
+    workbench.selectSession('s1', '/tmp/a', 'A');
+    await vi.waitFor(() => expect(document.body.dataset.sessionId).toBe('s1'));
+    document.querySelector('[data-action="panel-info"]')!.dispatchEvent(new Event('click', { bubbles: true }));
+    await vi.waitFor(() => expect(document.getElementById('panel-info')!.hidden).toBe(false));
+    const facts = document.getElementById('session-facts')!.textContent ?? '';
+    expect(facts).toContain('/tmp/a');
+    expect(facts).toContain('s1');
+    // 顶栏本身不再显示会话标题：标题只在侧栏与信息面板里。
+    expect(document.querySelector('.topbar #session-title')).toBeNull();
+    expect(document.querySelector('.session-heading')).toBeNull();
+  });
+
+  it('完整历史在新标签页打开导出的 HTML', async () => {
+    const open = vi.spyOn(window, 'open').mockReturnValue(null);
+    fake.request.mockImplementation(async (method: string) => {
+      if (method === 'worker.list') return [{ sessionId: 's1', cwd: '/fixture' }];
+      if (method === 'session.state') return { sessionId: 's1', isStreaming: false };
+      if (method === 'session.thinking_levels') return ['off', 'high'];
+      if (method === 'session.export_html') return { path: '/exports/session-abc.html' };
+      return {};
+    });
+    workbench.selectSession('s1', '/tmp/a', 'A');
+    await vi.waitFor(() => expect(document.body.dataset.sessionId).toBe('s1'));
+    document.querySelector('[data-action="full-history"]')!.dispatchEvent(new Event('click', { bubbles: true }));
+    await vi.waitFor(() => expect(open).toHaveBeenCalled());
+    expect(open.mock.calls[0]?.[0]).toBe('/ui/exports/session-abc.html?inline=1');
+    open.mockRestore();
   });
 
   it('系统面板展示真实可得的事实，不编系统提示词', async () => {

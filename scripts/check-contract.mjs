@@ -41,16 +41,30 @@ else {
   for(const dependency of chunk.imports??[])visit(dependency);
  }
  visit(entry);
- let bytes=0;
+ let bytes=0;let ownBytes=0;let vendorBytes=0;
+ // 供应商分块由 vite.config.ts 的 manualChunks 显式命名（htmx），
+ // 也可能来自 manifest 的 src 字段。分开统计的目的：预算里有一块
+ // 是「换不掉的第三方库」，把它和自己的代码混在一起，等于每次改 UI
+ // 都在和别人的体积抢额度。
+ const vendorNames=manifest.build.vendorChunks??[];
+ const isVendor=(relative,chunk)=>Boolean(chunk&&((chunk.src??'').startsWith('node_modules/')||vendorNames.some((name)=>relative.includes(`/${name}-`)||relative.endsWith(`/${name}.js`))));
+ const chunkOf=new Map();
+ for(const [,chunk] of Object.entries(chunks)){if(chunk.file)chunkOf.set(chunk.file,chunk);for(const css of chunk.css??[])chunkOf.set(css,chunk);}
  for(const relative of files){
   const file=resolve(output,relative);
   if(!file.startsWith(output+sep)||!existsSync(file)){fail(`产物路径无效: ${relative}`);continue;}
-  const data=readFileSync(file);bytes+=gzipSync(data,{level:9}).length;
+  const data=readFileSync(file);const size=gzipSync(data,{level:9}).length;bytes+=size;
+  if(isVendor(relative,chunkOf.get(relative)))vendorBytes+=size;else ownBytes+=size;
   if(/(?:katex|mermaid|cytoscape|xterm)/i.test(relative))fail(`重库进入首屏静态依赖: ${relative}`);
  }
  const budget=manifest.build.firstLoadBudgetGzipKB;
- if(!Number.isFinite(budget)||bytes>budget*1024)fail(`首屏 gzip ${(bytes/1024).toFixed(2)} KiB 超出预算 ${budget} KiB`);
+ if(!Number.isFinite(budget)||bytes>budget*1024)fail(`首屏 gzip ${(bytes/1024).toFixed(2)} KiB 超出总预算 ${budget} KiB（自有 ${(ownBytes/1024).toFixed(2)} + 供应商 ${(vendorBytes/1024).toFixed(2)}）`);
  else ok(`首屏 ${files.size} 个 JS/CSS 文件，gzip ${(bytes/1024).toFixed(2)} KiB / ${budget} KiB`);
+ // 自有代码单独设限：这一块才是我们每次改动真正该盯住的数字。
+ const ownBudget=manifest.build.firstLoadOwnBudgetGzipKB;
+ if(!Number.isFinite(ownBudget))fail('manifest 缺少 build.firstLoadOwnBudgetGzipKB');
+ else if(ownBytes>ownBudget*1024)fail(`首屏自有代码 gzip ${(ownBytes/1024).toFixed(2)} KiB 超出预算 ${ownBudget} KiB`);
+ else ok(`首屏自有代码 gzip ${(ownBytes/1024).toFixed(2)} KiB / ${ownBudget} KiB（供应商 ${(vendorBytes/1024).toFixed(2)} KiB）`);
  // 所有动态分块也必须能在部署包中找到，不能靠裸包名绕过 Vite。
  for(const [key,chunk] of Object.entries(chunks)){
   for(const dependency of [...(chunk.imports??[]),...(chunk.dynamicImports??[])])if(!chunks[dependency])fail(`${key} 引用不存在的分块 ${dependency}`);

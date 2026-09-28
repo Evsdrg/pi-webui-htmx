@@ -6,6 +6,8 @@
 <meta name="color-scheme" content="light dark">
 <title>Pi · 工作台</title>
 {{range .CSS}}<link rel="stylesheet" href="/assets/{{.}}">{{end}}
+{{/* 拆出去的供应商分块（htmx）与入口并行拉取，避免多一个往返。 */}}
+{{range .Preload}}<link rel="modulepreload" href="/assets/{{.}}">{{end}}
 </head>
 <body data-session-id="{{.SessionID}}" hx-history="false">
 <a class="skip-link" href="#prompt">跳到消息输入框</a>
@@ -23,16 +25,21 @@
     <header class="topbar">
       <button class="icon-btn" data-action="sidebar" aria-label="切换侧栏" aria-controls="sidebar" aria-expanded="true">☰</button>
       <nav class="topbar-tools" aria-label="功能区">
-        <button class="btn btn-quiet" type="button" data-action="panel-title" aria-controls="panel-title" aria-expanded="false">生成标题</button>
-        <button class="btn btn-quiet" type="button" data-action="panel-system" aria-controls="panel-system" aria-expanded="false">系统</button>
-        <button class="btn btn-quiet" type="button" data-action="panel-tools" aria-controls="panel-tools" aria-expanded="false">工具</button>
+        <button class="topbar-btn" type="button" data-action="full-history" aria-controls="panel-title" aria-expanded="false">完整历史</button>
+        <button class="topbar-btn" type="button" data-action="panel-title" aria-controls="panel-title" aria-expanded="false">生成标题</button>
+        <button class="topbar-btn" type="button" data-action="panel-system" aria-controls="panel-system" aria-expanded="false">系统</button>
+        <button class="topbar-btn" type="button" data-action="panel-tools" aria-controls="panel-tools" aria-expanded="false">工具</button>
       </nav>
-      <div class="session-heading"><h1 id="session-title">新会话</h1><span id="session-cwd" class="muted">选择工作目录，开始对话</span></div>
-      <span id="context-usage" class="state context-usage" role="status" hidden></span>
-      <span id="session-state" class="state" role="status">就绪</span>
+      <button class="topbar-btn topbar-info" type="button" id="context-usage" data-action="panel-info" aria-controls="panel-info" aria-expanded="false" hidden></button>
+      <span id="session-state" class="state topbar-state" role="status">就绪</span>
       <button class="icon-btn" data-action="session-menu" aria-label="会话操作">···</button>
       <button class="icon-btn" data-action="workspace" aria-label="打开工作区面板" aria-controls="workspace-panel" aria-expanded="false">▤</button>
     </header>
+    <section id="panel-info" class="top-panel" hidden>
+      <header><strong>会话信息</strong><button class="icon-btn" type="button" data-action="panel-info-close" aria-label="关闭会话信息">×</button></header>
+      <p class="panel-heading"><strong id="session-title">新会话</strong><span id="session-cwd" class="muted">选择工作目录，开始对话</span></p>
+      <dl id="session-facts" class="facts"></dl>
+    </section>
     <section id="panel-title" class="top-panel" hidden>
       <header><strong>生成标题</strong><button class="icon-btn" type="button" data-action="panel-title-close" aria-label="关闭生成标题">×</button></header>
       <p class="muted">Pi Web 用一次独立的模型调用生成会话标题；<code>pi --mode rpc</code> 没有暴露同类命令，桥不会替你花 token。</p>
@@ -45,7 +52,7 @@
     </section>
     <section id="panel-system" class="top-panel" hidden>
       <header><strong>系统</strong><button class="icon-btn" type="button" data-action="panel-system-close" aria-label="关闭系统面板">×</button></header>
-      <p class="muted">系统提示词与工具定义只在 Pi 进程内可见，RPC 的 <code>get_state</code> 不返回它们，因此这里不展示猜测值。</p>
+      <p class="muted">系统提示词与工具定义只在 Pi 进程内可见，RPC 的 <code>get_state</code> 不返回它们，因此这里不展示猜测值。下面是确实会进入提示词的真实输入。</p>
       <dl id="system-facts" class="facts"></dl>
     </section>
     <section id="panel-tools" class="top-panel" hidden>

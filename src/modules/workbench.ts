@@ -169,10 +169,14 @@ export class Workbench {
       }, { signal });
     }
     el('title-form').addEventListener('submit', (event) => { event.preventDefault(); void this.topbar().then((m) => m.saveLocalTitle(this.host)).catch((err) => this.fail(err)); }, { signal });
-    for (const action of ['panel-title', 'panel-system', 'panel-tools']) {
+    for (const action of ['panel-info', 'panel-title', 'panel-system', 'panel-tools']) {
       document.querySelector(`[data-action="${action}"]`)?.addEventListener('click', () => this.toggleTopPanel(action), { signal });
       document.querySelector(`[data-action="${action}-close"]`)?.addEventListener('click', () => this.toggleTopPanel(action, false), { signal });
     }
+    // 「完整历史」与 Pi Web 同义：新标签页阅读导出的 HTML。
+    document.querySelector('[data-action="full-history"]')?.addEventListener('click', () => {
+      void this.topbar().then((m) => m.openFullHistory(this.host)).catch((err) => this.fail(err));
+    }, { signal });
     for (const option of document.querySelectorAll<HTMLInputElement>('input[name="queue-kind"]')) {
       option.addEventListener('change', () => {
         if (!option.checked) return;

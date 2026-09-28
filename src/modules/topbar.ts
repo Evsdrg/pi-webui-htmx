@@ -22,7 +22,7 @@ export interface TopbarHost {
   refreshState(): Promise<void>;
 }
 
-const PANELS = ['panel-title', 'panel-system', 'panel-tools'];
+const PANELS = ['panel-info', 'panel-title', 'panel-system', 'panel-tools'];
 
 // formatCompact 把 token 数压成短标签，供顶栏上下文用量使用。
 function formatCompact(value: number): string {
@@ -41,9 +41,40 @@ export function toggle(host: TopbarHost, target: string, force?: boolean): void 
     document.querySelector(`[aria-controls="${id}"]`)?.setAttribute('aria-expanded', String(id === target && open));
   }
   if (!open) return;
+  if (target === 'panel-info') renderSessionFacts(host);
   if (target === 'panel-title') prefillLocalTitle();
   if (target === 'panel-system') renderSystemFacts(host);
   if (target === 'panel-tools') renderToolPresetNote(host);
+}
+
+// renderSessionFacts 是「会话信息」面板：顶栏不再显示会话标题，
+// 名称与工作目录搬到这里，与 Pi Web 的 session 弹层一致。
+function renderSessionFacts(host: TopbarHost): void {
+  const rows: [string, string][] = [
+    ['模型', host.modelLabel()],
+    ['上下文窗口', host.contextWindow() > 0 ? `${host.contextWindow().toLocaleString()} tokens` : '未知'],
+    ['工作目录', host.cwd() || '未选择'],
+    ['会话 ID', host.sessionId() || '尚未分配'],
+    ['思考强度', host.thinking() || '自动'],
+    ['工具预设', host.preset()],
+  ];
+  const list = el('session-facts');
+  list.replaceChildren(...rows.flatMap(([label, value]) => {
+    const term = document.createElement('dt'); term.textContent = label;
+    const desc = document.createElement('dd'); desc.textContent = value;
+    return [term, desc];
+  }));
+}
+
+// openFullHistory 与 Pi Web 的「完整历史」一致：在新标签页里直接阅读
+// 导出的 HTML，不走下载。桥的 /ui/exports 支持 ?inline=1。
+export async function openFullHistory(host: TopbarHost): Promise<void> {
+  if (!host.sessionId()) { host.notify('会话尚未分配，发送第一条消息后再查看完整历史', 'warning'); return; }
+  const result = await host.request<{ path: string }>('session.export_html', { fileName: `session-${host.sessionId().slice(0, 64)}.html` }, host.sessionId());
+  const file = (result.path ?? '').split('/').pop();
+  if (!file) { host.notify('Pi 没有返回导出文件', 'warning'); return; }
+  window.open(`/ui/exports/${encodeURIComponent(file)}?inline=1`, '_blank', 'noopener,noreferrer');
+  host.notify('已在新标签页打开完整历史。');
 }
 
 function renderSystemFacts(host: TopbarHost): void {

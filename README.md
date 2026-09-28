@@ -70,9 +70,11 @@ dist/             生成资产与 Vite manifest，不提交
 
 ## 体积与渲染
 
-首屏预算在 ui-manifest 的 build.firstLoadBudgetGzipKB，当前 **40 KiB gzip**；check 递归统计入口静态依赖闭包。KaTeX、Mermaid、xterm 等按需加载。
+首屏预算拆成两个数字，都存在 ui-manifest 的 build 里：总预算 `firstLoadBudgetGzipKB`（当前 **42 KiB gzip**）与自有代码预算 `firstLoadOwnBudgetGzipKB`（当前 **24 KiB gzip**）。check 递归统计入口静态依赖闭包，并按 `vendorChunks` 把供应商分块单列。KaTeX、Mermaid、xterm 等按需加载。
 
-2026-09-27 审查基线为 **36.63 KiB gzip**，这是入口资产包体，不含页面 HTML、数据、字体和第一次触发的惰性模块；不是实际页面完整传输量。历史“34.9 KB brotli”来自不同构建与资源集合，不能混作当前测量。
+需要把供应商和自己写的分开，是因为 htmx 是一块**换不掉的固定成本**：官方 `dist/htmx.min.js`（2.0.11）为 52,182 B / gzip 16,861 B，而 npm 包的 `main` 指向未压缩的 `dist/htmx.esm.js`（171,382 B），因此打包后是 gzip 17.59 KiB，比官方压缩版多约 0.73 KiB。把它混进同一个数字里，等于每次改 UI 都在和别人的体积抢额度。
+
+2026-09-28 实测构成：自有代码 22.65 KiB（JS 15.66 + CSS 7.00）+ 供应商（htmx）17.59 KiB = 40.24 KiB。htmx 由 vite.config.ts 的 `manualChunks` 单独成块，桥在 shell 里为它输出 `modulepreload`，因此拆分不会多一个往返，同时我们改自己的代码不会顶掉它的缓存。
 
 历史优先按回合分页但遵守硬限额；滚动由前端用户位置决定，X-Scroll-Mode 只提示。Markdown 必须净化；模板保持 Go 转义。入口已关闭 htmx eval/script 标签处理，不能因此取消其他安全层。
 

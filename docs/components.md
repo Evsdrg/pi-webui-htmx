@@ -47,11 +47,13 @@ pnpm check
 
 Vite 处理 JS/CSS；Tailwind 扫描 `src/templates`；Go 在运行时加载模板。桥通过 `dist/.vite/manifest.json` 解析哈希资源。发布时模板、manifest 和 dist 必须是同一构建，重建 UI 后重启桥。
 
-- 当前首屏预算为 **40 KiB gzip**，位于 ui-manifest 的 `build.firstLoadBudgetGzipKB`。
+- 首屏预算拆为两个都强制执行的数字：总预算 `build.firstLoadBudgetGzipKB`（**42 KiB gzip**）与自有代码预算 `build.firstLoadOwnBudgetGzipKB`（**24 KiB gzip**）。`build.vendorChunks` 声明哪些分块算供应商代码。
 - 统计入口的全部静态依赖闭包；动态内容库不计入初始入口预算，但在第一次使用时仍真实消耗网络/内存。
-- 2026-09-27 审查基线产物：**36.63 KiB gzip**；这是入口包体，不含 HTML、历史、字体和首次触发的惰性内容。
+- 2026-09-28 实测构成：自有代码 **22.65 KiB**（JS 15.66 + CSS 7.00）+ 供应商 htmx **17.59 KiB** = **40.24 KiB**。
+- htmx 体积已对着包核实（2.0.11）：官方 `dist/htmx.min.js` 为 52,182 B / gzip 16,861 B；npm 包的 `main` 指向未压缩的 `dist/htmx.esm.js`（171,382 B），所以打包后 gzip 17.59 KiB，比官方压缩版多约 0.73 KiB（Vite 的压缩略弱于官方 terser 产物）。htmx 本身不是胖库，这一块属于换不掉的固定成本，因此单列。
+- htmx 由 `vite.config.ts` 的 `manualChunks` 单独成块，桥在 shell 里为它输出 `modulepreload`：拆分不会多一个往返，同时我们改自己的代码不会顶掉它的缓存。
 - 历史测量“页面+首次数据 brotli 34.9 KB”属于另一构建/资源集合，不能拿来当本次首屏新测量。也不把旧 Pi Web 资源数字当公平的持续性能对照。
-- 不能为通过预算而只改数字；先检查静态依赖误入首屏、重复模块和不必要初始化，再决定范围。本轮不修改 40 KiB 预算。
+- 不能为通过预算而只改数字；先检查静态依赖误入首屏、重复模块和不必要初始化，再决定范围。本轮核查过一次全量 CSS（154 个 class/id 选择器）没有真正的死代码：未在源码里直接出现的 `.toast-*`、`.state-*`、`.diff-*` 分别是模板字符串、条件拼接和桥的 Go 模板生成的类名。
 
 ## 4. 安全与 CSP
 

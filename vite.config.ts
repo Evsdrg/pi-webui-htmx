@@ -32,6 +32,15 @@ export default defineConfig({
         entryFileNames: "assets/[name]-[hash].js",
         chunkFileNames: "assets/[name]-[hash].js",
         assetFileNames: "assets/[name]-[hash][extname]",
+        // 把 htmx 单独切出来：它占首屏 gzip 约 18 KiB 且几乎不变，
+        // 独立成块后我们改自己的代码不会顶掉它的缓存；预算也才能把
+        // 「供应商代码」与「自己写的代码」分开度量（见 check-contract.mjs）。
+        // 注意：rolldown 的 ManualChunks 只接受函数形式，对象写法会直接被类型拒绝。
+        manualChunks(id) {
+          // 只把 htmx 单独切出来；其余供应商库保持默认分块，避免打散树共享。
+          if (id.includes("node_modules/htmx.org")) return "htmx";
+          return null;
+        },
       },
     },
   },

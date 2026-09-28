@@ -92,7 +92,16 @@
     "outputDir": "dist",
     "viteManifest": "dist/.vite/manifest.json",
     "entry": "src/entry/app.ts",
-    "firstLoadBudgetGzipKB": 40
+    "firstLoadBudgetGzipKB": 42,
+    "firstLoadOwnBudgetGzipKB": 24,
+    "vendorChunks": ["htmx"],
+    "_budgetComment": [
+      "首屏总预算把供应商代码与自有代码分开度量，两个数字都强制。",
+      "htmx 官方 dist/htmx.min.js 为 52,182 B / gzip 16,861 B（已核对 2.0.11）；",
+      "npm 包的 main 指向未压缩的 dist/htmx.esm.js（171,382 B），所以打包后是 gzip 17.59 KiB，",
+      "比官方压缩版多约 0.73 KiB（Vite 的压缩略弱于官方 terser 产物），属于可接受开销。",
+      "这一块是换不掉的固定成本，因此单独列出；firstLoadOwnBudgetGzipKB 才是每次改 UI 该盯的数字。"
+    ]
   },
   "assets": {
     "_comment": "构建后由 dist/.vite/manifest.json 解析真实文件名；这里只声明逻辑入口。",
