@@ -65,6 +65,13 @@ htmx 侧重 HTML 与后端，因此边界按「数据 → HTML 归桥，瞬时�
 刷新一律走「隐藏输入带参数 + `hx-trigger` 自定义事件 + `hx-include`」，
 前端不再拼 URL、不再用 `createElement` 搭列表。
 
+**已迁完**：`/ui/git-status`、`/ui/search`、`/ui/branch`（2026-09-28）。`branch.ts` 从 7.1 KB / 11 处 DOM 降到 3.4 KB / 1 处。
+
+**同一条判据下还剩这些候选**（尚未迁）：`topbar.ts` 的「会话信息 / 系统」事实表（来自 `session.state` 与 `session.stats`）、
+`models.ts` 的「发现模型」结果列表（来自 `config.models.discover`）、`workbench.ts` 的思考等级下拉与工作目录 datalist、
+`workspace.ts` 的文件预览容器。`workbench.ts` 里的扩展 widget 与附件缩略图**不迁**——前者是 WS 推送的活跃状态，
+后者是尚未上传的本地 `File`，服务端没有权威版本。
+
 **留浏览器**——只有转瞬即逝的交互状态，没有服务端等价物：
 按键驱动的补全与斜杠菜单、滚动锚定、WS 流式增量、textarea 自适应高度、
 xterm 终端、未上传的本地附件缩略图、markdown/高亮/KaTeX/ANSI 渲染管线、toast 通知。
