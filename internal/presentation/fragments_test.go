@@ -201,3 +201,27 @@ func Test详情统计失败仍显示事实(t *testing.T) {
 		t.Fatalf("统计缺失时仍应显示会话事实：%s", html)
 	}
 }
+
+// 数字格式对齐 Pi Web：千位分隔、上下文窗口用紧凑后缀（小写 k）、百分比一位小数。
+// 这些是「同一份数据两边看起来要一样」的直接体现，写死在测试里避免漂移。
+func Test详情数字格式对齐(t *testing.T) {
+	renderer := testRenderer(t)
+	html, err := renderer.RenderStats(StatsMeta{ID: "abc123"},
+		map[string]any{
+			"userMessages": 1234.0, "totalMessages": 1234567.0,
+			"cost":         0.0031,
+			"tokens":       map[string]any{"input": 0.0, "output": 0.0, "total": 0.0},
+			"contextUsage": map[string]any{"percent": 1.9, "contextWindow": 65536.0},
+		}, nil)
+	if err != nil {
+		t.Fatalf("渲染失败：%v", err)
+	}
+	for _, want := range []string{"1,234", "1,234,567", "$0.0031", "1.9% / 66k"} {
+		if !strings.Contains(html, want) {
+			t.Fatalf("缺少 %q：%s", want, html)
+		}
+	}
+	if strings.Contains(html, "66K") {
+		t.Fatalf("千位后缀应为小写 k（与 Pi Web 的 formatCompact 一致）：%s", html)
+	}
+}
