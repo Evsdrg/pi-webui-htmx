@@ -2,6 +2,7 @@ package presentation
 
 import (
 	"encoding/json"
+	"html/template"
 	"os"
 	"strings"
 	"testing"
@@ -286,4 +287,31 @@ func turnBlock(t *testing.T, html, id string) string {
 		return rest[:end]
 	}
 	return rest
+}
+
+// 模板里用到的 printf 必须是 Go 内置语义。
+//
+// 曾经这里覆盖过内置 printf，只认 %s 与 %/：前者的代价是 %d 会原样输出、
+// 非字符串的 %s 静默变空——写错了不报错，只显示错。模板实际只用到
+// `printf "%s/%s" .Provider .ID`（两个字符串），内置实现完全够用，
+// 因此覆盖已删除。这条测试钉住「不要把它加回来」。
+func Test模板printf用内置语义(t *testing.T) {
+	fm := funcMap()
+	if _, overridden := fm["printf"]; overridden {
+		t.Fatal("printf 不应被覆盖：内置语义支持各类型占位符，覆盖只会让格式化静默出错")
+	}
+	tpl, err := template.New("probe").Funcs(fm).Parse(
+		`{{printf "num=%d" 7}} {{printf "any=%v" true}} {{printf "%s/%s" "a" "b"}}`)
+	if err != nil {
+		t.Fatalf("解析失败：%v", err)
+	}
+	var buf strings.Builder
+	if err := tpl.Execute(&buf, nil); err != nil {
+		t.Fatalf("执行失败：%v", err)
+	}
+	got := buf.String()
+	want := "num=7 any=true a/b"
+	if got != want {
+		t.Fatalf("printf 语义不符：\n得到 %q\n期望 %q", got, want)
+	}
 }

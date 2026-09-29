@@ -189,33 +189,14 @@ func mimeFor(name string) string {
 	return "application/octet-stream"
 }
 
+// funcMap 是模板可用的自定义函数。
+//
+// 这里**不再覆盖内置 printf**：项目历史上覆盖过一个只认 %s 与 %/ 的版本，
+// 结果是 %d 原样输出、非字符串的 %s 静默变空——模板写错了不报错，只显示错。
+// 模板实际只用到 `printf "%s/%s" .Provider .ID`（两个字符串），
+// 内置语义完全覆盖，且支持 %d/%v/任意类型。回归见 fragments_test.go。
 func funcMap() template.FuncMap {
-	return template.FuncMap{
-		"printf": func(format string, args ...any) string {
-			var b strings.Builder
-			for i := 0; i < len(format); i++ {
-				if format[i] == '%' && i+1 < len(format) {
-					switch format[i+1] {
-					case 's':
-						if len(args) > 0 {
-							if s, ok := args[0].(string); ok {
-								b.WriteString(s)
-								args = args[1:]
-							}
-						}
-						i++
-						continue
-					case '/':
-						b.WriteByte('/')
-						i++
-						continue
-					}
-				}
-				b.WriteByte(format[i])
-			}
-			return b.String()
-		},
-	}
+	return template.FuncMap{}
 }
 
 // Encodings 是桥支持的响应编码，按客户端偏好从高到低排列。
