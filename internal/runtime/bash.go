@@ -87,11 +87,20 @@ func (w *Worker) ReadBashOutput(ctx context.Context, path string, maxBytes int) 
 			return "", false, protocol.E("pi_error", "无法定位文件尾部")
 		}
 	}
-	buf := make([]byte, maxBytes)
+	// 只分配真正会读到的字节数。以前不论文件多大都先 make(maxBytes)
+	// （上限 8 MiB），读一个几 KB 的日志就白占 8 MiB——而这个接口正是
+	// 「输出被截断了，把完整版读回来」，调用点在看到截断提示之后。
+	want := int64(maxBytes)
+	if st.Size() < want {
+		want = st.Size()
+	}
+	buf := make([]byte, want)
 	n, err := f.Read(buf)
 	if err != nil && n == 0 {
 		return "", false, protocol.E("pi_error", "读取失败")
 	}
+	// string(buf[:n]) 是一次无法避免的拷贝：返回值是可变的 string，
+	// 不能与 buf 共享底层数组（调用方会把它交给 JSON 编码器）。
 	return string(buf[:n]), truncated, nil
 }
 

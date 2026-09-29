@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime"
+	"strings"
 	"testing"
 	"time"
 )
@@ -410,4 +412,63 @@ func Test重绑定后退出仍会清理注册表(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 	}
 	t.Fatalf("重绑定后退出仍在注册表留下 worker: %+v", m.List())
+}
+
+// ReadBashOutput 的分配必须随文件大小走，而不是随请求上限走。
+//
+// 这个接口的调用点很具体：用户看到「输出已截断」，点一下把完整输出读回来。
+// 旧实现不论文件多大都先 make(maxBytes)（上限 8 MiB），读一个小日志就
+// 白占 8 MiB。这里用 Allocation 观测实际分配量——不断言具体数字，
+// 只断言它远小于请求上限，否则「分配随文件走」这条约束随时会被改回去。
+func Test读取Bash输出按实际大小分配(t *testing.T) {
+	m, cwd := newTestManager(t)
+	w, err := m.Start(context.Background(), "", cwd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := os.TempDir()
+	path := filepath.Join(dir, "pi-bash-alloc.log")
+	if err := os.WriteFile(path, []byte("小输出"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Remove(path) })
+	const limit = 8 << 20
+
+	var before, after runtime.MemStats
+	runtime.GC()
+	runtime.ReadMemStats(&before)
+	text, truncated, err := w.ReadBashOutput(context.Background(), path, limit)
+	runtime.ReadMemStats(&after)
+	if err != nil {
+		t.Fatalf("读取失败: %v", err)
+	}
+	if text != "小输出" || truncated {
+		t.Fatalf("内容或截断标记异常: %q %v", text, truncated)
+	}
+	// 读一个 9 字节的文件，不该出现接近上限的分配。
+	if grew := after.TotalAlloc - before.TotalAlloc; grew > 1<<20 {
+		t.Fatalf("小文件读取分配了 %d 字节（请求上限 %d），分配量应随文件大小走", grew, limit)
+	}
+}
+
+// 截断路径仍然只读尾部，并且报告的 truncated 与内容长度一致。
+func Test读取Bash输出截断只取尾部(t *testing.T) {
+	m, cwd := newTestManager(t)
+	w, err := m.Start(context.Background(), "", cwd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(os.TempDir(), "pi-bash-trunc.log")
+	body := strings.Repeat("a", 100) + "TAIL"
+	if err := os.WriteFile(path, []byte(body), 0644); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Remove(path) })
+	text, truncated, rerr := w.ReadBashOutput(context.Background(), path, 4)
+	if rerr != nil {
+		t.Fatal(rerr)
+	}
+	if !truncated || text != "TAIL" {
+		t.Fatalf("应只返回尾部 4 字节并标记截断: %q %v", text, truncated)
+	}
 }
