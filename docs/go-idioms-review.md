@@ -1,10 +1,12 @@
 # Go 惯用写法复核
 
-复核日期：2026-09-30。基线：桥 `863041d`（工作树干净）。**本文是源码复核记录，不是修复声明；标出的问题都还没改。**
+复核日期：2026-09-30。基线：桥 `863041d` 与 `9592d4e`（工作树干净）。**本文是源码复核记录，不是修复声明；标出的问题都还没改。**
 
 对象：`internal/` 下 18 个包与 `cmd/`，约 16,700 行非测试代码（另有 83 个测试文件、13,571 行）。`go.mod` 为 go 1.27.1，直接依赖 3 个（brotli、coder/websocket、creack/pty）。
 
-结论：代码在**并发安全与安全边界**上明显高于平均水平（无 `panic`/`goto`/`reflect`/`ioutil`，安全路径全部走 `crypto/rand` 与 `subtle.ConstantTimeCompare`，`context` 一律是首参与不入结构体，`http.Server` 有完整超时，测试没有在 goroutine 里调 `t.Fatal`）。不那么 Go 的地方集中在三块：**错误链几乎不存在**、**类型表达靠字符串与匿名容器**、**少数函数与构造器体量失控**。
+本文分两轮：第一轮（G01–G19）看**语言惯用性**；第二轮（G20–G30）用基准与 pprof 看**内存分配、嵌套深度与重复**。
+
+结论：代码在**并发安全与安全边界**上明显高于平均水平（无 `panic`/`goto`/`reflect`/`ioutil`，安全路径全部走 `crypto/rand` 与 `subtle.ConstantTimeCompare`，`context` 一律是首参与不入结构体，`http.Server` 有完整超时，测试没有在 goroutine 里调 `t.Fatal`）。不那么 Go 的地方集中在四块：**错误链几乎不存在**、**类型表达靠字符串与匿名容器**、**少数函数与构造器体量失控**、**几处把「能跑」当成「够快」的分配习惯**（第二轮量化）。
 
 ## 1. 复核基准
 
@@ -26,7 +28,7 @@
 - 脚本化取证，避免凭印象：花括号配对测量函数体长度；剥离字符串与注释后配对 `go func` 字面量，检查 `t.Fatal` 是否落在 goroutine 内；逐包扫描包注释；统计 `%w`、`errors.Is/As`、`any`、`map[string]…` 返回、`encoding string` 参数的出现量。
 - 计数都在 `863041d` 上采集，命令可复现。
 
-没做的：本机未安装 staticcheck/golangci-lint，因此下文 G18 只给建议未给基线；未做性能基准；未逐条比对 B/U 台账（落修前应先查重，见第 7 节）。
+没做的：本机未安装 staticcheck/golangci-lint，因此下文 G18 只给建议未给基线；未做性能基准以外的长时间内存观测；未逐条比对 B/U 台账（落修前应先查重，见第 8 节）。
 
 ## 3. 结论摘要
 
@@ -53,6 +55,22 @@
 | G17 | 测试 | 低 | 全仓 | 417 个测试函数中 386 个名称含中文；`os.Setenv` 应换 `t.Setenv` |
 | G18 | 工程 | 中 | `.github/workflows/check.yml` | 只有 gofmt/vet/race；G13–G15 都能在这套检查下存活 |
 | G19 | 类型 | 低 | `internal/magiccontext` | sqlite3 命令行 + 代回 SQL；已在面板接入时说明，本轮只登记 |
+
+第二轮新增（内存 / 嵌套 / 重复，原始数据见第 5 节）：
+
+| 编号 | 类别 | 严重度 | 位置 | 一句话 |
+|---|---|---|---|---|
+| G20 | 内存 | 高 | `sessions/store.go:429` | 只为判断一个 kind，整条读盘并完整投影：首页基准里占 ~31KB/op |
+| G21 | 内存 | 中 | `sessions/lazy.go:55`、`sessions/search.go:213` | 用 `json.Unmarshal` 的失败路径判断 content 是串还是数组；渲染基准里 ~9KB/op 花在构造错误对象 |
+| G22 | 内存 | 中 | `sessions/store.go:343` | 每页 N 次 `make([]byte, node.size)`（96KB/op），可合并为一次；`selected`/`Entries` 未预分配 |
+| G23 | 内存 | 低 | `jsonl/reader.go:24` | 每条记录一次 append 分配；扫描、搜索、惰性加载、Pi 读循环都走它 |
+| G24 | 内存 | 中 | `transport/server.go:846` | `toAnyMaps` 为喂渲染层做 JSON 往返：500 项目录 590µs / 360KB / 7017 allocs |
+| G25 | 内存 | 低 | `runtime/bash.go:90` | 按请求上限先 `make`（≤ 8MiB），不看文件实际大小；随后 `string()` 再拷一次 |
+| G26 | 内存 | 低 | `transport/server.go:68` | WS 读上限常量意味着单连接最坏 ~97MiB 的读取缓冲（× 8 连接） |
+| G27 | 结构 | 低 | 全仓 | if 嵌套分布：≤2 层占 89.1%，最深 7 层两处；整体是好的 |
+| G28 | 优雅 | 中 | `presentation/presentation.go:192` | `funcMap` 覆盖内置 `printf`，只认 `%s`/`%/`：`%d` 输出字面量、非字符串 `%s` 静默变空 |
+| G29 | 优雅 | 中 | `transport/server.go:245` | `serveUI` 381 行里同一段「渲染→报错→写回→return true」样板重复 16 次 |
+| G30 | 优雅 | 低 | `sessions/index.go:19` | 三个无价值包装函数，没有任何测试替换它们 |
 
 ## 4. 逐项说明
 
@@ -245,7 +263,156 @@ CI（`.github/workflows/check.yml`）只跑 `gofmt -l`、`go vet ./...`、`go te
 
 `internal/magiccontext` 通过 `sqlite3` 命令行执行只读查询，参数经校验后代回 SQL 字符串（sqlite3 CLI 不支持绑定参数）。这与 Go 惯用的 `database/sql` 相反，但它是**为不加 SQLite 驱动而做的显式取舍**，且已配套沙箱与白名单校验。本轮只登记，不建议在本批改动。
 
-## 5. 明确不算问题（避免后续误改）
+## 5. 第二轮：内存、嵌套与重复
+
+### 5.1 怎么取的数
+
+- **if 嵌套**：先写了一版剥离字符串与注释的脚本，但它**在块注释里丢掉了换行**，导致行号整体偏移（同一处先报 7 层、换个写法报 2 层）。第二版改成**保长度、保换行**的剥离：被移除的字符一律换成空格，`\n` 原样保留，并加了一条自检——每个文件剥离后花括号收支必须为 0（仓库内全部非测试文件均通过）。下文行号都用第二版，可直接 `sed` 复核。
+- **分配**：`go test -bench ... -benchmem` 取每操作数据，`-memprofile` + `go tool pprof -top/-list -sample_index=alloc_space` 定位到行。为了让被测代码而不是夹具主导采样，采样时把迭代次数调到 3000，夹具的一次性开销因此可忽略。
+- **转换成本**：`toAnyMaps` 的 500 项数据用一个临时基准测得（`internal/transport/zz_tmp_bench_test.go`），**测完即删**，未进提交。
+- **printf 行为**：用临时 in-package 测试把同一模板分别用 `funcMap()` 与内置 `printf` 渲染，直接对比输出（同样测完即删）。
+
+### 5.2 关键数据
+
+首页（`BenchmarkHistory首页/100轮`，单页约 0.7MB 会话；3000 次采样）：
+
+| 指标 | 值 |
+|---|---|
+| 时间 / 分配 | ~306µs，139KB/op，133 allocs/op |
+| `make([]byte, node.size)`（`store.go:343`） | 287.53MB / 3000 ≈ **96KB/op**（占该函数 flat 分配的 96%） |
+| `alignToTurn`（`store.go:429`，cum） | 92.97MB / 3000 ≈ **31KB/op** |
+| 其中 `ProjectEntries`（cum，经 `entryKind`） | 72.86MB / 3000 ≈ 24KB/op |
+| `readEntry`（flat） | 20.11MB / 3000 ≈ 6.7KB/op |
+| `jsontext.(*Value).UnmarshalJSON` | 63.36MB / 3000 ≈ 21KB/op |
+| 与文件规模的无关性 | 100/500/2000 轮的首页耗时均 ~306–311µs、133–134 allocs/op，说明索引缓存在起作用 |
+
+渲染（`BenchmarkRenderHistory`，3000 次）：
+
+| 指标 | 值 |
+|---|---|
+| 时间 / 分配 | ~323µs，154KB/op，1664 allocs/op |
+| `strings.Builder.Write` | 135.47MB / 3000 ≈ 45KB/op（输出的 HTML 本身） |
+| `ProjectEntries`（cum） | 218.29MB / 3000 ≈ **73KB/op** |
+| 其中 `scanLazyBlocks` | 28.5MB flat、64.51MB cum ≈ 21KB/op |
+| 错误对象构造（`transformUnmarshalError` + `newUnmarshalErrorAfter`） | 27MB / 3000 ≈ **9KB/op**，全部来自「期望内失败」 |
+
+`toAnyMaps`（500 项）：**589,745 ns/op，359,921 B/op，7,017 allocs/op**。对照一次完整历史页渲染约 323µs / 154KB——列一次 500 项目录的转换成本约等于渲染两个历史页。
+
+嵌套分布（1,798 个 `if`）：
+
+| 深度 | 数量 | 占比 |
+|---|---|---|
+| 1 | 1035 | 57.6% |
+| 2 | 566 | 31.5% |
+| 3 | 148 | 8.2% |
+| 4 | 36 | 2.0% |
+| 5 | 9 | 0.5% |
+| 6 | 2 | 0.1% |
+| 7 | 2 | 0.1% |
+
+深度 ≥5 的全部 13 处：`sessions/metadata.go:67`、`:69`（titleForPage 的串/数组回落）、`presentation/presentation.go:200`、`:201`（funcMap 的 printf）、`runtime/manager.go:322`（reap 的指标判空）、`transport/server.go:366`、`:1630`、`management/config_values.go:96`、`:103`（密钥/占位符判定）、`management/discovery.go:145`（input 数组解析）、`management/packages.go:122`、`:128`、`:132`（并发查询结果归类）。
+
+### 5.3 逐项
+
+**G20 只为判断 kind 的整条读盘与投影（高）**
+
+`alignToTurn`（`store.go:429`）把本页最旧一条以及向前补取的每一条都交给 `readEntry` + `entryKind`；`entryKind` 又调 `ProjectEntries`（完整 `json.Unmarshal` 成 `Entry`）——而它只想知道「这条是不是 user」。同一信息，`scanFile` 扫描时**已经解析过行首**（`type`/`id`/`parentId` 的快路径，见 `sessions/scan.go:20`）。
+
+修法：扫描时把「是不是 user 锚点」存进 `node`，`alignToTurn` 直接查表，不再读盘也不反序列化。预期消掉 ≈31KB/op 与相应分配次数（139KB/op 的约 22%）。两个注意点：`node` 变大后 `maxCachedBytes`（16MB）的估算要重算；轮边界对齐有既有回归，改完必须复跑。
+
+**G21 用失败做类型判断（中）**
+
+```55:55:internal/sessions/lazy.go
+	if json.Unmarshal(msg.Content, &blocks) != nil {
+```
+
+`content` 是纯文本（字符串）时这次 unmarshal **必然失败**；`flattenContent`（`search.go:208`）则相反：对数组内容先试字符串、失败一次再试数组。两处都把「失败」当成类型判断，而 JSON 解码失败会构造带位置的错误对象——渲染基准里这类对象共 ~9KB/op。
+
+修法：看 `content` 的第一个非空白字节（`"` 是字符串、`[` 是数组），选好再解析。行为不变、收益确定、风险极低。
+
+**G22 每页 N 次分配与缺失的预分配（中）**
+
+`store.go:343` 每条条目一次 `make([]byte, node.size)`。这 96KB/op 的**字节数本身是必要的**（`Page.Entries` 要活到渲染完），可省的是**分配次数**：一次 `make` 出总长，用 `ReadAt` 逐条填进对应切片。同一函数里 `selected := []string{}`（`:321`）与 `Entries: []json.RawMessage{}`（`:340`）在长度可知（`len(selected)`）的情况下没有预分配，会按倍增重分配并拷贝。
+
+**G23 每条记录一次分配（低）**
+
+`jsonl.Read` 每次都 `append` 到 `nil` 切片，因此每条记录都新分配一块。它被扫描（`scan.go:21`）、搜索（`search.go:108`）、惰性加载（`lazy.go:198`）、元数据（`metadata.go:26`）与 Pi 读循环（`pi/client.go:321`）共用。
+
+可以加「调用方提供缓冲」的变体，但**返回切片不得跨调用保留**——需逐个调用点确认（扫描与 RPC 读循环都只当场解析后丢弃，理论上可行）。这条不要顺手改，属于「有收益但要小心」的一类。
+
+**G24 喂渲染层的 JSON 往返（中）**
+
+```846:846:internal/transport/server.go
+func toAnyMaps(v any) []map[string]any {
+```
+
+调用点在 `:423`（包清单）、`:444`（文件列表）、`:483`（搜索结果）。类型化切片 → `json.Marshal` → `json.Unmarshal` 成 `[]map[string]any` → 渲染层再用 `stringField(p, "name")` 之类的按键取值拼回**强类型行结构**（`FileRow`/`PackageRow`）。就是为了回到类型，先绕了一圈 JSON。
+
+模板用的是 `{{.Name}}`/`{{.Path}}` 这类**字段名**，不吃 JSON 键名，所以让渲染层直接收 `[]presentation.FileRow`（由 `transport` 从 `workspace.Entry` 逐字段转换）即可整段删掉往返。`RenderDirs` 已证明可行：它收 `[]map[string]string` 后第一件事就是转成 `[]DirRow`。
+
+与 G08 一起做：改的是 Go 内部签名，不动协议。改前先核对三个模板用到的字段名（`files.html`、`packages.html`、`search.html`）。
+
+**G25 bash 输出按上限预分配（低）**
+
+```90:90:internal/runtime/bash.go
+	buf := make([]byte, maxBytes)
+```
+
+`maxBytes` 由请求给出、上限 8MiB；文件只有几百字节时也分配这么多，随后 `string(buf[:n])` 再复制一次。改成 `want := min(maxBytes, st.Size())` 就够。
+
+**G26 WS 读上限隐含的内存上界（低）**
+
+`wsReadLimit = 8 × 12MiB + 1MiB ≈ 97MiB`（为容纳 8 张附件的 base64）。`coder/websocket` 会为整条消息分配缓冲，所以**单连接最坏约 97MiB**，连接槽上限 8 → 最坏约 776MiB。这是显式取舍（附件必须能过），但值得写进文档，避免以后有人以为是 KB 级。
+
+**G27 嵌套深度（低，结论偏正面）**
+
+≤2 层占 89.1%、≤3 层占 97.1%，且 `} else {` 全仓仅 22 处 / 16.7k 行——早返回风格是贯彻了的。真正值得动的只有两处 7 层：`funcMap` 的手写 printf（G28）与 `titleForPage` 的「先试字符串再试数组」（与 G21 同源，一起改最划算）。其余 5 层多为「并发任务归类」的合理结构，不建议为降层数而重构。
+
+**G28 被覆盖的内置 `printf`（中）**
+
+`funcMap()` 只注册了一个函数，恰好与 `text/template` 的**内置**函数同名——内置实现因此被换成一个只支持 `%s` 与 `%/` 的版本。实测（同一模板、同为 `html/template`）：
+
+| 模板 | 自定义 printf | 内置 printf |
+|---|---|---|
+| `printf "%d" 42` | `%d`（字面量） | `42` |
+| `printf "%s/%s" "prov" "model"` | `prov/model` | `prov/model` |
+| `printf "%s" 7` | 空字符串 | `%!s(int=7)` |
+| `printf "%%"` | `%%` | `%` |
+
+今天没有线上错误：全部模板里只有 `pi-webui-htmx/src/templates/models.html:2` 用了一处 `printf "%s/%s"`，两个参数都是字符串。风险是**静默**的——内置实现遇到类型不符会打出 `%!s(int=7)` 这种显眼标记，自定义版直接输出空。
+
+建议：要么改名成 `joinSlash`/`key` 这样诚实的名字（只服务那一个用途），要么遇到不认识的动词时回落 `fmt.Sprintf`。不要保留一个「看起来像 fmt」的半实现。
+
+**G29 serveUI 的重复样板（中）**
+
+`serveUI`（381 行）里 `s.fragmentIssue(w, encoding, …)` 出现 25 次、`writeHTML(w, encoding, html)` 16 次，同一段「渲染 → 失败渲染说明 → 写回 → `return true`」重复 16 次。抽一个 `serveFragment(w, encoding, func() (string, error)) bool` 就能消掉，同时把 `serveUI` 从 381 行降下来。与 G03 是同处代码的两个视角，一起做。
+
+**G30 无价值的包装函数（低）**
+
+```19:19:internal/sessions/index.go
+func jsonUnmarshal(b []byte, v any) error { return json.Unmarshal(b, v) }
+```
+
+同一文件还有 `newBufReader(f *os.File) *bufio.Reader { return bufio.NewReader(f) }` 与 `fnvNew64a() *fnv64a { return &fnv64a{} }`。三者都只有一处调用点、没有任何测试替换它们——像是为「将来可替换」预留的缝，但缝没接上东西。要么删掉，要么在注释里写清为何保留。
+
+### 5.4 第二轮的正向结论
+
+| 项 | 数据 |
+|---|---|
+| 接收者命名一致性 | 同一类型多个接收者名：**0 处** |
+| 早返回风格 | `} else {` 仅 22 处 / 16.7k 行；嵌套 ≤3 层占 97.1% |
+| 缓存有界 | `scanCache` 单文件 + 16MB 上界 + dev/ino 校验；`workspace.indexCache` 有 TTL 与条数上限 |
+| 队列有界 | Pi 客户端在途命令 64、通知队列独立有界、订阅 32 条/1MiB、事件环 256 条/1MiB、终端 4 个、对话 16 个 |
+| 并发原语克制 | `Mutex/WaitGroup/Pool` 共 27 处，无 `sync.Map`，包级可变状态只有 `presentation.Now`（已在 G14 登记） |
+| 缓存收益可测 | 2000 轮会话首页 306µs（与 100 轮同量级） |
+
+### 5.5 只说不做的候选
+
+- **G22 的一体化缓冲**与 **G23 的复用缓冲**都涉及「切片所有权」约定变更，建议各自单独提交，并配 `-race` 与首页/翻页基准对比。
+- **G20 的 node 扩字段**会让 `maxCachedBytes` 的字节估算偏乐观，改完应重测一次 2000 轮会话的常驻内存。
+- 本轮**没做**长时间稳定性观测（如 8 连接持续压力下的 RSS 曲线），也没在 CI 里加内存回归。若要锁住 G21/G22/G24 的收益，最省事的是把已有基准加一条 `-benchmem` 上限断言。
+
+## 6. 明确不算问题（避免后续误改）
 
 | 现象 | 为什么不改 |
 |---|---|
@@ -258,21 +425,23 @@ CI（`.github/workflows/check.yml`）只跑 `gofmt -l`、`go vet ./...`、`go te
 | `context` 首参、不入结构体；`http.Server` 超时齐全 | 符合 Code Review Comments |
 | 测试未在 goroutine 内 `t.Fatal` | 已用脚本核对，6 个疑似点均为误报 |
 
-## 6. 建议的修复顺序
+## 7. 建议的修复顺序
 
 按「风险低 → 风险高」排，前两步可以立刻做且几乎无回归风险：
 
-1. **零风险清理**（G13、G14、G15、G16、G17 的 `t.Setenv`）：删假引用与死代码、补包注释。一个提交。
+1. **零风险清理**（G13、G14、G15、G16、G17 的 `t.Setenv`、G30）：删假引用、死代码与无价值包装、补包注释。一个提交。
 2. **接入 staticcheck**（G18）：先看基线，再定规则。它可能再报出本文件没列到的同类问题。
 3. **错误链**（G04）：`Error` 加 cause 与 `Unwrap`、新增 `Wrap`；先只加能力不改调用点，再逐包迁移。需要回归的错误路径：`public_origin` 解析、`discovery` 出站、`magiccontext` 存储不可用。
 4. **回执可观测性**（G05、G06）：加降级计数/健康位，`Record` 语义收敛。
 5. **类型表达**（G07、G08）：`status`/`encoding` 具名类型、`stop(force, idleOnly)` 拆分、渲染边界结构体。面较大，建议按包分批。
 6. **结构性重构**（G01、G02、G03、G09、G12）：分发拆分、`transport.Config`、`serveUI` 拆表、nil 语义统一。这批动的是主干，建议单独排期，并在开始前先补齐「62 个方法逐一调用」的契约回归——现有 `ui_contract_test.go` 与 `methods_test.go` 是基础。
 7. **G10（并发配额通知）**：与 G01 同批或独立，改动前先跑补发环联测与 `-race`。
+8. **第二轮内存项**（G20→G24）：按收益/风险比排——先 G21（首字节判断，几乎无风险）与 G24（与 G08 同批做），再 G20（node 存 kind，需重估缓存上界），最后 G22/G23（涉切片所有权，各自单独提交）。
+9. **G25–G29**：G25 一行改；G28 要么改名要么回落 `fmt.Sprintf`；G29 与 G03 同批。
 
 每步的验收沿用仓库既有门槛：`test -z "$(gofmt -l .)"`、`go vet ./...`、`go test -race -count=1 ./...`，跨仓改动再跑 `scripts/verify-pair.sh`。
 
-## 7. 与既有台账的关系
+## 8. 与既有台账的关系
 
 `docs/code-audit.md` 维护 B01–B81 与 U01–U21 两组编号，内容偏**正确性与安全**；本文件用独立前缀 G，记录的是**语言惯用性与结构**，两者可能落在同一段代码上但视角不同，不重复立号。
 
