@@ -183,10 +183,18 @@ func Test断线后自动重连(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("首次连接失败")
 	}
+	// 必须在踢之前把重连信号抓下来。
+	//
+	// Ready() 返回的是「当前」等待通道，每次重连成功时会关闭旧的、
+	// 换一个新的。若 kick() 之后新调用 Ready()，而彼时重连已经完成，
+	// 拿到的就是那个新的（未关闭的）通道——于是要等第三次连接，
+	// 永远等不到。这条测试曾经以 15s 超时间歇失败，根因就在这里，
+	// 不是产品不重连。
+	reconnected := c.Ready()
 	// 主动踢掉隧道连接，客户端应自行重连。
 	kick()
 	select {
-	case <-c.Ready():
+	case <-reconnected:
 	case <-time.After(15 * time.Second):
 		t.Fatal("断线后未重连")
 	}
