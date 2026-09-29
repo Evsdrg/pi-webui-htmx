@@ -304,12 +304,18 @@ func (s *Server) handleUIResponse(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(204)
 }
 
-// serveUI 处理 UI 层请求：外壳、静态资源与 htmx 片段。
-// 返回 true 表示已处理，调用方应直接返回。
+// serveUI 处理 UI 层请求，按契约分成两类：
 //
-// 与 JSON API 的分工：
-//   - 这里返回 HTML 片段，htmx 直接换入 DOM
-//   - 流式对话不走这里，走 WS（见 wsHandler）
+//   - 外壳与静态资源（/、/assets/）：保留真实状态码，浏览器与缓存按它判断。
+//   - htmx 片段（/ui/*）：一律 200 + 可读 HTML，见 renderFragment。
+//
+// 两类曾经混在同一个 381 行函数里，而它们的错误约定正好相反——
+// 把「渲染失败要回 500」与「状态失败要回 200 + 说明」写在同一个 switch 中，
+// 改动时很容易把一条约定套到另一类端点上。因此按契约拆成两个函数。
+//
+// 流式对话不走这里，走 WS（见 wsHandler）。
+//
+// 返回 true 表示已处理，调用方应直接返回。
 func (s *Server) serveUI(w http.ResponseWriter, r *http.Request) bool {
 	encoding := presentation.PickEncoding(r.Header.Get("Accept-Encoding"))
 	// 文件全文是桥能力，不依赖 UI 包：大内容走 HTTP，
@@ -332,8 +338,19 @@ func (s *Server) serveUI(w http.ResponseWriter, r *http.Request) bool {
 		return false
 	}
 
-	path := r.URL.Path
-	switch {
+	if s.serveUIAssets(w, r, encoding) {
+		return true
+	}
+	return s.serveUIFragments(w, r, encoding)
+}
+
+// serveUIAssets 处理外壳与静态资源。
+//
+// 与片段的关键区别：这些响应带真实状态码与缓存语义，调用方是浏览器本身
+// 或缓存层，而不是 htmx 的交换逻辑。资源名含内容哈希，因此可长期不可变
+// 缓存；首页随 ?session= 变化，不做缓存。
+func (s *Server) serveUIAssets(w http.ResponseWriter, r *http.Request, encoding presentation.Encoding) bool {
+	switch path := r.URL.Path; {
 	case path == "/":
 		id := r.URL.Query().Get("session")
 		if id != "" && !sessions.ValidID(id) {
@@ -363,35 +380,46 @@ func (s *Server) serveUI(w http.ResponseWriter, r *http.Request) bool {
 		// 代理可能把 brotli 变体回给不支持它的客户端。
 		w.Header().Set("Vary", "Accept-Encoding")
 		if encoding != "" {
-			w.Header().Set("Content-Encoding", encoding)
+			w.Header().Set("Content-Encoding", encoding.Header())
 		}
 		w.WriteHeader(200)
 		_, _ = w.Write(body)
 		return true
+	}
+	return false
+}
 
+// serveUIFragments 处理 htmx 片段。
+//
+// 约定：**一律 200 + 一段可读 HTML**，包括「worker 未启动」这类前置状态。
+// 理由是 htmx 默认不交换 4xx/5xx，按错误码返回会让面板停在旧内容上、
+// 没有任何解释（真机复现过：未启动 worker 时点「会话信息」，请求发出但
+// 界面一直显示占位文字）。
+//
+// 下面三处例外是有意的：它们不是片段语义，而是给前端的**状态信号**，
+// 由 workbench.ts 的 `htmx:beforeSwap` 处理器读取。
+//   - /ui/sessions/{id}/history 的 204 + X-Session-Unsaved：分支尚未落盘
+//   - /ui/extensions/dialog/{id} 的 204：对话已被回答，移除占位
+//   - 明确非法参数（含越界路径）回 400：这类请求不可能来自本仓前端
+func (s *Server) serveUIFragments(w http.ResponseWriter, r *http.Request, encoding presentation.Encoding) bool {
+	path := r.URL.Path
+	switch {
 	case path == "/ui/sessions":
-		offset, err := number(r, "offset", 0)
-		if err != nil {
-			s.fragmentIssue(w, encoding, err)
-			return true
-		}
-		limit, err := number(r, "limit", 50)
-		if err != nil {
-			s.fragmentIssue(w, encoding, err)
-			return true
-		}
-		list, lerr := s.store.List(r.Context(), offset, limit)
-		if lerr != nil {
-			s.fragmentIssue(w, encoding, lerr)
-			return true
-		}
-		html, rerr := s.ui.RenderSessionsPage(list, r.URL.Query().Get("selected"), offset)
-		if rerr != nil {
-			s.fragmentIssue(w, encoding, rerr)
-			return true
-		}
-		writeHTML(w, encoding, html)
-		return true
+		return s.renderFragment(w, encoding, func() (string, error) {
+			offset, err := number(r, "offset", 0)
+			if err != nil {
+				return "", err
+			}
+			limit, err := number(r, "limit", 50)
+			if err != nil {
+				return "", err
+			}
+			list, err := s.store.List(r.Context(), offset, limit)
+			if err != nil {
+				return "", err
+			}
+			return s.ui.RenderSessionsPage(list, r.URL.Query().Get("selected"), offset)
+		})
 
 	// 惰性内容：思考文本与工具结果图片。
 	// 历史页只带占位符，base64 图片和大段思考等用户点了才取——
@@ -439,83 +467,69 @@ func (s *Server) serveUI(w http.ResponseWriter, r *http.Request) bool {
 					}
 				}
 			}
-			writeError(w, encoding, 400, perr)
+			// 其余失败（会话不存在、分支游标不在所选分支上）是**状态类**失败，
+			// 按片段约定当内容渲染。以前这里 writeError 400——而 htmx 不交换
+			// 4xx，于是「会话已被删除」在界面上表现为停留在旧历史上，
+			// 没有任何提示，比一句「会话不存在」更难受。
+			s.fragmentIssue(w, encoding, perr)
 			return true
 		}
 		html, herr := s.ui.RenderHistory(id, page)
 		if herr != nil {
-			writeError(w, encoding, 500, herr)
+			s.fragmentIssue(w, encoding, herr)
 			return true
 		}
 		writeHTML(w, encoding, html)
 		return true
 
 	case path == "/ui/models":
-		out, merr := s.piConfig.Models()
-		if merr != nil {
-			s.fragmentIssue(w, encoding, merr)
-			return true
-		}
-		models := presentation.ConfigModels(out)
-		html, rerr := s.ui.RenderModels(models, "")
-		if rerr != nil {
-			s.fragmentIssue(w, encoding, rerr)
-			return true
-		}
-		writeHTML(w, encoding, html)
-		return true
+		return s.renderFragment(w, encoding, func() (string, error) {
+			out, err := s.piConfig.Models()
+			if err != nil {
+				return "", err
+			}
+			return s.ui.RenderModels(presentation.ConfigModels(out), "")
+		})
 
 	case path == "/ui/diff":
-		diff, truncated, err := s.files.GitDiff(r.Context(), r.URL.Query().Get("path"), r.URL.Query().Get("staged") == "true", 512<<10)
-		if err != nil {
-			s.fragmentIssue(w, encoding, err)
-			return true
-		}
-		html, err := s.ui.RenderDiff("", presentation.ParseDiff(diff))
-		if err != nil {
-			s.fragmentIssue(w, encoding, err)
-			return true
-		}
-		if truncated {
-			html += "<p class=\"empty-note\">差异已达到预览上限。</p>"
-		}
-		writeHTML(w, encoding, html)
-		return true
+		return s.renderFragment(w, encoding, func() (string, error) {
+			diff, truncated, err := s.files.GitDiff(r.Context(), r.URL.Query().Get("path"), r.URL.Query().Get("staged") == "true", 512<<10)
+			if err != nil {
+				return "", err
+			}
+			html, err := s.ui.RenderDiff("", presentation.ParseDiff(diff))
+			if err != nil {
+				return "", err
+			}
+			if truncated {
+				html += "<p class=\"empty-note\">差异已达到预览上限。</p>"
+			}
+			return html, nil
+		})
 
 	case path == "/ui/packages":
-		pkgs, perr := s.piConfig.Packages(r.Context(), s.discovery)
-		if perr != nil {
-			s.fragmentIssue(w, encoding, perr)
-			return true
-		}
-		html, rerr := s.ui.RenderPackages(packageRows(pkgs))
-		if rerr != nil {
-			s.fragmentIssue(w, encoding, rerr)
-			return true
-		}
-		writeHTML(w, encoding, html)
-		return true
+		return s.renderFragment(w, encoding, func() (string, error) {
+			pkgs, err := s.piConfig.Packages(r.Context(), s.discovery)
+			if err != nil {
+				return "", err
+			}
+			return s.ui.RenderPackages(packageRows(pkgs))
+		})
 
 	case path == "/ui/files":
-		root := r.URL.Query().Get("path")
-		if root == "" {
-			roots := s.files.Roots()
-			if len(roots) > 0 {
-				root = roots[0]
+		return s.renderFragment(w, encoding, func() (string, error) {
+			root := r.URL.Query().Get("path")
+			if root == "" {
+				if roots := s.files.Roots(); len(roots) > 0 {
+					root = roots[0]
+				}
 			}
-		}
-		entries, truncated, ferr := s.files.List(root)
-		if ferr != nil {
-			s.fragmentIssue(w, encoding, ferr)
-			return true
-		}
-		html, rerr := s.ui.RenderFiles(root, fileRows(entries), truncated)
-		if rerr != nil {
-			s.fragmentIssue(w, encoding, rerr)
-			return true
-		}
-		writeHTML(w, encoding, html)
-		return true
+			entries, truncated, err := s.files.List(root)
+			if err != nil {
+				return "", err
+			}
+			return s.ui.RenderFiles(root, fileRows(entries), truncated)
+		})
 
 	case path == "/ui/dirs":
 		s.serveDirs(w, r, encoding)
@@ -526,109 +540,80 @@ func (s *Server) serveUI(w http.ResponseWriter, r *http.Request) bool {
 		return true
 
 	case path == "/ui/git-status":
-		status, gerr := s.files.GitStatus(r.Context(), r.URL.Query().Get("path"))
-		if gerr != nil {
-			s.fragmentIssue(w, encoding, gerr)
-			return true
-		}
-		html, rerr := s.ui.RenderGitStatus(gitStatus(status))
-		if rerr != nil {
-			s.fragmentIssue(w, encoding, rerr)
-			return true
-		}
-		writeHTML(w, encoding, html)
-		return true
+		return s.renderFragment(w, encoding, func() (string, error) {
+			status, err := s.files.GitStatus(r.Context(), r.URL.Query().Get("path"))
+			if err != nil {
+				return "", err
+			}
+			return s.ui.RenderGitStatus(gitStatus(status))
+		})
 
 	case path == "/ui/search":
-		query := r.URL.Query().Get("q")
-		var hits []presentation.SearchHit
-		if query != "" {
-			result, serr := s.store.Search(r.Context(), query, sessions.DefaultSearchLimits())
-			if serr != nil {
-				s.fragmentIssue(w, encoding, serr)
-				return true
+		return s.renderFragment(w, encoding, func() (string, error) {
+			query := r.URL.Query().Get("q")
+			var hits []presentation.SearchHit
+			if query != "" {
+				result, err := s.store.Search(r.Context(), query, sessions.DefaultSearchLimits())
+				if err != nil {
+					return "", err
+				}
+				hits = searchHits(result.Matches)
 			}
-			hits = searchHits(result.Matches)
-		}
-		html, rerr := s.ui.RenderSearch(query, hits)
-		if rerr != nil {
-			s.fragmentIssue(w, encoding, rerr)
-			return true
-		}
-		writeHTML(w, encoding, html)
-		return true
+			return s.ui.RenderSearch(query, hits)
+		})
 
 	case path == "/ui/branch":
-		// 分支树需要活动 worker：get_tree 是 Pi 进程内的命令，
-		// 没有纯磁盘等价物。未启动时给可读提示，不静默返回空树。
-		worker, werr := s.manager.Get(r.URL.Query().Get("sessionId"))
-		if werr != nil {
-			s.fragmentIssue(w, encoding, werr)
-			return true
-		}
-		tree, terr := worker.Tree(r.Context())
-		if terr != nil {
-			s.fragmentIssue(w, encoding, terr)
-			return true
-		}
-		forks, ferr := worker.ForkMessages(r.Context())
-		if ferr != nil {
-			forks = map[string]any{}
-		}
-		rows, forkRows := presentation.BranchRows(tree, forks, r.URL.Query().Get("leafId"))
-		html, rerr := s.ui.RenderBranch(rows, forkRows)
-		if rerr != nil {
-			s.fragmentIssue(w, encoding, rerr)
-			return true
-		}
-		writeHTML(w, encoding, html)
-		return true
+		return s.renderFragment(w, encoding, func() (string, error) {
+			// 分支树需要活动 worker：get_tree 是 Pi 进程内的命令，
+			// 没有纯磁盘等价物。未启动时给可读提示，不静默返回空树。
+			worker, err := s.manager.Get(r.URL.Query().Get("sessionId"))
+			if err != nil {
+				return "", err
+			}
+			tree, err := worker.Tree(r.Context())
+			if err != nil {
+				return "", err
+			}
+			// fork 信息取不到不算失败：分支树本身仍可导航。
+			forks, err := worker.ForkMessages(r.Context())
+			if err != nil {
+				forks = map[string]any{}
+			}
+			rows, forkRows := presentation.BranchRows(tree, forks, r.URL.Query().Get("leafId"))
+			return s.ui.RenderBranch(rows, forkRows)
+		})
 
 	case path == "/ui/system":
-		value, cerr := s.sessionContext(r.Context(), r.URL.Query().Get("sessionId"))
-		if cerr != nil {
-			s.fragmentIssue(w, encoding, cerr)
-			return true
-		}
-		html, rerr := s.ui.RenderSystem(value.SystemPrompt)
-		if rerr != nil {
-			s.fragmentIssue(w, encoding, rerr)
-			return true
-		}
-		writeHTML(w, encoding, html)
-		return true
+		return s.renderFragment(w, encoding, func() (string, error) {
+			value, err := s.sessionContext(r.Context(), r.URL.Query().Get("sessionId"))
+			if err != nil {
+				return "", err
+			}
+			return s.ui.RenderSystem(value.SystemPrompt)
+		})
 
 	case path == "/ui/tools":
-		value, cerr := s.sessionContext(r.Context(), r.URL.Query().Get("sessionId"))
-		if cerr != nil {
-			s.fragmentIssue(w, encoding, cerr)
-			return true
-		}
-		html, rerr := s.ui.RenderTools(value.Tools)
-		if rerr != nil {
-			s.fragmentIssue(w, encoding, rerr)
-			return true
-		}
-		writeHTML(w, encoding, html)
-		return true
+		return s.renderFragment(w, encoding, func() (string, error) {
+			value, err := s.sessionContext(r.Context(), r.URL.Query().Get("sessionId"))
+			if err != nil {
+				return "", err
+			}
+			return s.ui.RenderTools(value.Tools)
+		})
 
 	case path == "/ui/stats":
-		worker, werr := s.manager.Get(r.URL.Query().Get("sessionId"))
-		if werr != nil {
-			s.fragmentIssue(w, encoding, werr)
-			return true
-		}
-		meta := s.statsMeta(r.Context(), worker)
-		stats, serr := worker.Stats(r.Context())
-		// 统计失败仍要输出会话事实：失败回合会让 get_session_stats 整体报错，
-		// 那时面板至少还应告诉你「这是哪个会话」。
-		html, rerr := s.ui.RenderStats(meta, stats, serr)
-		if rerr != nil {
-			s.fragmentIssue(w, encoding, rerr)
-			return true
-		}
-		writeHTML(w, encoding, html)
-		return true
+		return s.renderFragment(w, encoding, func() (string, error) {
+			worker, err := s.manager.Get(r.URL.Query().Get("sessionId"))
+			if err != nil {
+				return "", err
+			}
+			meta := s.statsMeta(r.Context(), worker)
+			stats, statsErr := worker.Stats(r.Context())
+			// 统计失败仍要输出会话事实：失败回合会让 get_session_stats 整体报错，
+			// 那时面板至少还应告诉你「这是哪个会话」——所以这里不返回错误，
+			// 把 statsErr 交给模板渲染成说明。
+			return s.ui.RenderStats(meta, stats, statsErr)
+		})
 
 	case path == "/ui/extensions/status":
 		html, rerr := s.ui.RenderExtensionStatus(s.extensionStatuses())
@@ -964,7 +949,7 @@ func gitStatus(status workspace.GitStatus) presentation.GitStatus {
 // writeHTML 写一段 HTML 片段。encoding 由调用方现场协商后传入。
 // 曾经用内部 Header 键在 ServeHTTP 与写函数之间偷递，还要靠「读取后即删」
 // 才不外泄——数据流隐式化，纯属为了少改调用点签名。
-func writeHTML(w http.ResponseWriter, encoding, html string) {
+func writeHTML(w http.ResponseWriter, encoding presentation.Encoding, html string) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Vary", "Accept-Encoding")
 	body := []byte(html)
@@ -973,7 +958,7 @@ func writeHTML(w http.ResponseWriter, encoding, html string) {
 	// 浏览器表现为 fetch 直接 reject（"Failed to fetch"），任何小于 1 KB
 	// 的 HTML 片段——历史分页、扩展对话框、包清单——全都换不进去。
 	if presentation.ShouldCompress(body, encoding) {
-		w.Header().Set("Content-Encoding", encoding)
+		w.Header().Set("Content-Encoding", encoding.Header())
 	}
 	w.WriteHeader(200)
 	_, _ = presentation.Compress(w, body, encoding)
@@ -981,7 +966,7 @@ func writeHTML(w http.ResponseWriter, encoding, html string) {
 
 // writeText 输出纯文本文件内容。截断标记放在响应头里，
 // 让前端能区分「文件就这么长」和「桥做了预算截断」。
-func writeText(w http.ResponseWriter, encoding, text string, truncated bool) {
+func writeText(w http.ResponseWriter, encoding presentation.Encoding, text string, truncated bool) {
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.Header().Set("Vary", "Accept-Encoding")
 	if truncated {
@@ -989,13 +974,13 @@ func writeText(w http.ResponseWriter, encoding, text string, truncated bool) {
 	}
 	body := []byte(text)
 	if presentation.ShouldCompress(body, encoding) {
-		w.Header().Set("Content-Encoding", encoding)
+		w.Header().Set("Content-Encoding", encoding.Header())
 	}
 	w.WriteHeader(200)
 	_, _ = presentation.Compress(w, body, encoding)
 }
 
-func writeJSON(w http.ResponseWriter, encoding string, status int, v any) {
+func writeJSON(w http.ResponseWriter, encoding presentation.Encoding, status int, v any) {
 	body, err := json.Marshal(v)
 	if err != nil {
 		body = []byte(`{"error":"encode_failed"}`)
@@ -1004,19 +989,19 @@ func writeJSON(w http.ResponseWriter, encoding string, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Vary", "Accept-Encoding")
 	if presentation.ShouldCompress(body, encoding) {
-		w.Header().Set("Content-Encoding", encoding)
+		w.Header().Set("Content-Encoding", encoding.Header())
 	}
 	w.WriteHeader(status)
 	_, _ = presentation.Compress(w, body, encoding)
 }
 
 // writeError 把内部错误转成协议错误响应。
-func writeError(w http.ResponseWriter, encoding string, status int, err error) {
+func writeError(w http.ResponseWriter, encoding presentation.Encoding, status int, err error) {
 	writeJSON(w, encoding, status, protocol.Reply("", nil, err))
 }
 
 // respond 按错误码映射 HTTP 状态；未识别的错误一律按 500 处理。
-func respond(w http.ResponseWriter, encoding string, data any, err error) {
+func respond(w http.ResponseWriter, encoding presentation.Encoding, data any, err error) {
 	if err == nil {
 		writeJSON(w, encoding, 200, data)
 		return
@@ -2119,7 +2104,7 @@ func (s *Server) serveExport(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Vary", "Accept-Encoding")
 	if presentation.ShouldCompress(body, encoding) {
-		w.Header().Set("Content-Encoding", encoding)
+		w.Header().Set("Content-Encoding", encoding.Header())
 	}
 	w.WriteHeader(200)
 	_, _ = presentation.Compress(w, body, encoding)
@@ -2207,7 +2192,7 @@ func (s *Server) serveFileImage(w http.ResponseWriter, r *http.Request) {
 // 与 /ui/files 的区别：只列目录，且要给出「上一级」——但上一级不能越出
 // 已配置的工作区根。桥只允许在根内浏览，因此父目录等于根时就不再提供回退，
 // 由前端把按钮禁用掉。
-func (s *Server) serveDirs(w http.ResponseWriter, r *http.Request, encoding string) {
+func (s *Server) serveDirs(w http.ResponseWriter, r *http.Request, encoding presentation.Encoding) {
 	path := r.URL.Query().Get("path")
 	if path == "" {
 		roots := s.files.Roots()
@@ -2249,7 +2234,7 @@ func (s *Server) serveDirs(w http.ResponseWriter, r *http.Request, encoding stri
 //
 // 走片段端点约定：问题一律 200 + 可读 HTML，因为调用方是 htmx，
 // 它默认不交换 4xx/5xx，用户会看到一个永远停在占位符的面板。
-func (s *Server) serveMagicContext(w http.ResponseWriter, r *http.Request, encoding string) {
+func (s *Server) serveMagicContext(w http.ResponseWriter, r *http.Request, encoding presentation.Encoding) {
 	query := r.URL.Query()
 	kind := magiccontext.Kind(query.Get("kind"))
 	// 分区不在白名单里时回落默认分区，而不是报错：面板第一次打开

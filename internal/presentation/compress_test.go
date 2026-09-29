@@ -41,30 +41,30 @@ func newUI(t *testing.T, assets map[string]string) *Renderer {
 }
 
 func TestPickEncoding按客户端能力选择(t *testing.T) {
-	cases := map[string]string{
-		"":                     "",
-		"gzip":                 "gzip",
-		"gzip, deflate, br":    "br",
-		"br;q=1.0, gzip;q=0.8": "br",
-		"identity":             "",
-		"deflate, br;q=0.5":    "br",
-		"*":                    "br",   // 通配符覆盖未列出的编码
-		"*;q=0.5, gzip":        "gzip", // 显式项优先于通配符
-		"*;q=0":                "",     // 通配符禁用且无显式项
-		"br;q=0, gzip;q=1":     "gzip", // 明确禁用 br
-		"br;q=0":               "",     // br 被禁且未列出其他编码
-		"gzip;q=0":             "",     // 同上，不能违反客户端意愿
-		"br;q=0, br;q=1":       "",     // 同名重复取最严格项
-		"br;q=1, gzip;q=1":     "br",   // 同分取压缩率更高者
-		"br;q=abc":             "",     // 非法 q 视为禁用，退回 identity
-		"GZIP":                 "gzip",
-		"x-gzip, br":           "br",
-		"br;q=1.000":           "br", // 三位小数合法
-		"br;q=0.001":           "br", // 极低但仍合法可用
-		"br; q = 0.5":          "br", // 参数两侧空白可容忍
-		"br;charset=utf8":      "br", // 无法识别的参数不改变可用性
-		"deflate":              "",
-		"br, br, br":           "br",
+	cases := map[string]Encoding{
+		"":                     EncNone,
+		"gzip":                 EncGzip,
+		"gzip, deflate, br":    EncBrotli,
+		"br;q=1.0, gzip;q=0.8": EncBrotli,
+		"identity":             EncNone,
+		"deflate, br;q=0.5":    EncBrotli,
+		"*":                    EncBrotli, // 通配符覆盖未列出的编码
+		"*;q=0.5, gzip":        EncGzip,   // 显式项优先于通配符
+		"*;q=0":                EncNone,   // 通配符禁用且无显式项
+		"br;q=0, gzip;q=1":     EncGzip,   // 明确禁用 br
+		"br;q=0":               EncNone,   // br 被禁且未列出其他编码
+		"gzip;q=0":             EncNone,   // 同上，不能违反客户端意愿
+		"br;q=0, br;q=1":       EncNone,   // 同名重复取最严格项
+		"br;q=1, gzip;q=1":     EncBrotli, // 同分取压缩率更高者
+		"br;q=abc":             EncNone,   // 非法 q 视为禁用，退回 identity
+		"GZIP":                 EncGzip,
+		"x-gzip, br":           EncBrotli,
+		"br;q=1.000":           EncBrotli, // 三位小数合法
+		"br;q=0.001":           EncBrotli, // 极低但仍合法可用
+		"br; q = 0.5":          EncBrotli, // 参数两侧空白可容忍
+		"br;charset=utf8":      EncBrotli, // 无法识别的参数不改变可用性
+		"deflate":              EncNone,
+		"br, br, br":           EncBrotli,
 	}
 	for accept, want := range cases {
 		if got := PickEncoding(accept); got != want {
@@ -83,7 +83,7 @@ func Test静态资源双算法压缩且可缓存(t *testing.T) {
 		if !ok {
 			t.Fatalf("%s 原文缺失", name)
 		}
-		for _, encoding := range []string{"gzip", "br"} {
+		for _, encoding := range []Encoding{EncGzip, EncBrotli} {
 			body, _, ok := r.Asset(name, encoding)
 			if !ok {
 				t.Fatalf("%s/%s 压缩结果缺失", name, encoding)
@@ -191,7 +191,7 @@ func Test动态响应按阈值决定是否压缩(t *testing.T) {
 // 浏览器侧全部解不开，而单测只覆盖了 gzip 所以没抓到。
 func TestCompress按协商编码选压缩器(t *testing.T) {
 	payload := []byte(strings.Repeat("<div>会话历史</div>", 400))
-	for _, encoding := range []string{"gzip", "br"} {
+	for _, encoding := range []Encoding{EncGzip, EncBrotli} {
 		var out bytes.Buffer
 		if _, err := Compress(&out, payload, encoding); err != nil {
 			t.Fatal(err)
@@ -201,7 +201,7 @@ func TestCompress按协商编码选压缩器(t *testing.T) {
 		}
 		var got []byte
 		switch encoding {
-		case "gzip":
+		case EncGzip:
 			zr, err := gzip.NewReader(bytes.NewReader(out.Bytes()))
 			if err != nil {
 				t.Fatalf("%s 流无法解析: %v", encoding, err)
@@ -210,14 +210,14 @@ func TestCompress按协商编码选压缩器(t *testing.T) {
 			if err != nil {
 				t.Fatalf("%s 解压失败: %v", encoding, err)
 			}
-		case "br":
+		case EncBrotli:
 			got, _ = io.ReadAll(brotli.NewReader(bytes.NewReader(out.Bytes())))
 		}
 		if !bytes.Equal(got, payload) {
 			t.Fatalf("%s 解压结果与原文不一致", encoding)
 		}
 		// 用另一种编码解析必须失败，否则说明选错了压缩器。
-		if encoding == "br" {
+		if encoding == EncBrotli {
 			if _, err := gzip.NewReader(bytes.NewReader(out.Bytes())); err == nil {
 				t.Fatal("br 流被 gzip 解析成功，说明压缩器选择错误")
 			}
@@ -227,7 +227,7 @@ func TestCompress按协商编码选压缩器(t *testing.T) {
 
 func TestCompress并发安全且复用写入器(t *testing.T) {
 	payload := []byte(strings.Repeat("payload-", 4096))
-	for _, encoding := range []string{"gzip", "br"} {
+	for _, encoding := range []Encoding{EncGzip, EncBrotli} {
 		var wg sync.WaitGroup
 		results := make([]int, 16)
 		for i := 0; i < 16; i++ {

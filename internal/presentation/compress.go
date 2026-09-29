@@ -11,10 +11,10 @@ import (
 
 // compressBytes 一次性压缩整块内容，用于静态资源。
 // 静态资源文件名带内容哈希，压缩结果可永久缓存，因此用最高压缩比。
-func compressBytes(raw []byte, encoding string) ([]byte, error) {
+func compressBytes(raw []byte, encoding Encoding) ([]byte, error) {
 	var out bytes.Buffer
 	switch encoding {
-	case "gzip":
+	case EncGzip:
 		w, err := gzip.NewWriterLevel(&out, gzip.BestCompression)
 		if err != nil {
 			return nil, err
@@ -28,7 +28,7 @@ func compressBytes(raw []byte, encoding string) ([]byte, error) {
 			return nil, err
 		}
 		return out.Bytes(), nil
-	case "br":
+	case EncBrotli:
 		w := brotli.NewWriterLevel(&out, brotli.BestCompression)
 		if _, err := w.Write(raw); err != nil {
 			return nil, err
@@ -69,12 +69,12 @@ var (
 //
 // 调用方必须把 Content-Encoding 设成同一个 encoding：这里按 encoding
 // 选压缩器，写出去的字节能被该编码的客户端解开。
-func Compress(w io.Writer, body []byte, encoding string) (int, error) {
+func Compress(w io.Writer, body []byte, encoding Encoding) (int, error) {
 	if encoding == "" || len(body) < compressThreshold {
 		return w.Write(body)
 	}
 	switch encoding {
-	case "gzip":
+	case EncGzip:
 		pooled, _ := gzipPool.Get().(*gzip.Writer)
 		if pooled == nil {
 			return w.Write(body)
@@ -88,7 +88,7 @@ func Compress(w io.Writer, body []byte, encoding string) (int, error) {
 			return w.Write(body)
 		}
 		return len(body), nil
-	case "br":
+	case EncBrotli:
 		pooled, _ := brotliPool.Get().(*brotli.Writer)
 		if pooled == nil {
 			return w.Write(body)
@@ -108,6 +108,6 @@ func Compress(w io.Writer, body []byte, encoding string) (int, error) {
 }
 
 // ShouldCompress 判断响应是否值得压缩。
-func ShouldCompress(body []byte, encoding string) bool {
+func ShouldCompress(body []byte, encoding Encoding) bool {
 	return encoding != "" && len(body) >= compressThreshold
 }

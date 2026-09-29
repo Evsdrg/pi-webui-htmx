@@ -4,9 +4,33 @@ import (
 	"errors"
 	"html"
 	"net/http"
+	"pi-bridge-go/internal/presentation"
 
 	"pi-bridge-go/internal/protocol"
 )
+
+// renderFragment 执行一次片段渲染：取数与渲染放在同一个回调里，
+// 任何一步失败都渲染成可读提示，成功则写出 HTML——两种结果都是 200。
+//
+// 存在的理由有两个：
+//  1. serveUI 里「渲染 → 报错 → 写回 → return true」这段样板重复了十几次，
+//     每次改动都要在十几处同步修改，而它们本该永远一致。
+//  2. 片段的错误处理是「当内容渲染」而不是返回错误码。把两者封在一起，
+//     调用点就无法只做一半（例如渲染失败直接 writeError）。
+//
+// **只给 htmx 会交换的片段端点用。** 非片段端点的调用方是
+// `response.ok` 或浏览器导航（/ui/file-text、/ui/file-image、lazy、
+// /ui/exports/*、/ui/sessions/{id}/history 的 204 分支），
+// 它们必须保留真实状态码，否则前端的 `if (!response.ok)` 会静默失效。
+func (s *Server) renderFragment(w http.ResponseWriter, encoding presentation.Encoding, build func() (string, error)) bool {
+	html, err := build()
+	if err != nil {
+		s.fragmentIssue(w, encoding, err)
+		return true
+	}
+	writeHTML(w, encoding, html)
+	return true
+}
 
 // fragmentIssue 用于「htmx 会交换的片段端点」的前置状态。
 //
@@ -16,7 +40,7 @@ import (
 //
 // 因此片段端点把状态当作内容渲染（200 + 一段说明），错误原因仍原样带出。
 // 真正的程序性错误（库写入失败之类）仍走 500 JSON，那是故障不是状态。
-func (s *Server) fragmentIssue(w http.ResponseWriter, encoding string, err error) {
+func (s *Server) fragmentIssue(w http.ResponseWriter, encoding presentation.Encoding, err error) {
 	// 协议错误的 Error() 会带上机器码前缀（如 worker_not_running: …），
 	// 那对排查有用、对读者是噪音。片段是给人看的，只取可读消息。
 	message := err.Error()

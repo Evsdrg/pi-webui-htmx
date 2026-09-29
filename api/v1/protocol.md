@@ -193,7 +193,9 @@ htmx 换入的片段端点（`/ui/sessions`、`/ui/search`、`/ui/models`、`/ui
 
 - 理由是 htmx 默认不交换 4xx/5xx 响应。若按错误码返回，面板会停在旧内容上且没有任何解释——这是真机复现过的现象（未启动 worker 时点「会话信息」，请求确实发出，界面却一直显示占位文字）。
 - 与其在前端用 JS 强制交换错误响应，不如让端点把状态当作内容渲染（`internal/presentation` 的 `RenderNote`）：由服务端决定用户看到什么。
-- **不适用**于非 htmx 端点：`/ui/file-text`、`/ui/file-image`、`/ui/sessions/{id}/lazy` 由 JS 的 `response.ok` 判断，`/ui/exports/*` 是浏览器导航——它们保留真实状态码。
+- **不适用**于非 htmx 端点：`/ui/file-text`、`/ui/file-image`、`/ui/sessions/{id}/lazy` 由 JS 的 `response.ok` 判断，`/ui/exports/*` 是浏览器导航——它们保留真实状态码。外壳 `/` 与 `/assets/*` 同理：缓存层按状态码判断，且资源名含内容哈希、带 `immutable` 缓存语义。
+- **四处例外是状态信号，不是片段语义**（调用方在 `htmx:beforeSwap` 里读它们，见 `src/modules/workbench.ts`）：`/ui/sessions/{id}/history` 的 `204 + X-Session-Unsaved`（新分支尚未落盘）、`/ui/extensions/dialog/{id}` 的 `204`（对话已被回答，移除占位）、以及这两处「明确非法参数」回 `400`（本仓前端不可能发出这类请求）。
+- 反例：`/ui/sessions/{id}/history` 对「会话已不存在」这类**状态**失败曾回 `400`，于是 htmx 不交换、界面停在旧历史上且没有解释。现已按片段约定改为 `200 + 可读提示`。判断标准是：**失败原因是可向用户解释的状态，还是程序性故障**——前者当内容渲染，后者（例如模板缺失）保留 `500`，让日志里看得见。
 
 ### 会话详情
 

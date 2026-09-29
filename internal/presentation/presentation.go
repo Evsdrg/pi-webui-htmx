@@ -199,18 +199,36 @@ func funcMap() template.FuncMap {
 	return template.FuncMap{}
 }
 
+// Encoding 是响应的内容编码。
+//
+// 具名类型：取值只可能来自本包的内容协商结果，而以前它以裸 string 穿过
+// 十一个函数（含压缩、资产缓存与 HTTP 写回），任何一处拼错都不会被
+// 编译器发现，表现是「客户端解不开响应」或「悄悄不压缩」。
+type Encoding string
+
+const (
+	// EncNone 表示不压缩（客户端未声明支持，或内容太小不值得压）。
+	EncNone Encoding = ""
+	// EncBrotli 压缩率比 gzip 高约 11%，静态资产值得多这一个依赖。
+	EncBrotli Encoding = "br"
+	EncGzip   Encoding = "gzip"
+)
+
+// Header 返回 Content-Encoding 头的值；不压缩时为空串。
+// 导出是因为设置响应头的代码在 transport。
+func (e Encoding) Header() string { return string(e) }
+
 // Encodings 是桥支持的响应编码，按客户端偏好从高到低排列。
-// gzip 用标准库；brotli 压缩率再高约 11%，静态资产值得多这一个依赖。
-var Encodings = []string{"br", "gzip"}
+var Encodings = []Encoding{EncBrotli, EncGzip}
 
 // PickEncoding 按 Accept-Encoding 选编码；客户端不支持时返回空字符串。
 //
 // 解析 qvalue：`br;q=0, gzip;q=1` 表示客户端明确禁用 br，只能选 gzip。
 // 省略 q 视为 1；未列出且无 `*` 视为不可接受。同分时按 Encodings 顺序
 // （br 压缩率更高）取先者。
-func PickEncoding(accept string) string {
+func PickEncoding(accept string) Encoding {
 	if accept == "" {
-		return ""
+		return EncNone
 	}
 	// 头部来自客户端，限制长度避免异常输入下的无谓解析。
 	if len(accept) > 1024 {
@@ -228,14 +246,15 @@ func PickEncoding(accept string) string {
 			continue
 		}
 		// 同名重复出现时取最严格的（最小权重），避免用后面的项覆盖明确禁用。
-		if prev, exists := weights[name]; exists && prev <= q {
+		if prev, exists := weights[string(name)]; exists && prev <= q {
 			continue
 		}
-		weights[name] = q
+		weights[string(name)] = q
 	}
-	best, bestQ := "", 0.0
+	var best Encoding
+	bestQ := 0.0
 	for _, name := range Encodings {
-		q, explicit := weights[name]
+		q, explicit := weights[string(name)]
 		if !explicit {
 			if star < 0 {
 				continue
@@ -246,7 +265,7 @@ func PickEncoding(accept string) string {
 			continue
 		}
 		if q > bestQ {
-			best, bestQ = name, q
+			best, bestQ = Encoding(name), q
 		}
 	}
 	return best
@@ -308,7 +327,7 @@ func isTokenChar(ch rune) bool {
 
 // Asset 按真实文件名返回静态资源，并按 encoding 返回预压缩变体。
 // encoding 为空时返回原文。
-func (r *Renderer) Asset(name, encoding string) (body []byte, mime string, ok bool) {
+func (r *Renderer) Asset(name string, encoding Encoding) (body []byte, mime string, ok bool) {
 	r.mu.RLock()
 	a, exists := r.assets[name]
 	r.mu.RUnlock()
@@ -340,24 +359,27 @@ func (r *Renderer) Asset(name, encoding string) (body []byte, mime string, ok bo
 	return compressed, a.mime, true
 }
 
+// assetKey 是压缩缓存的键。编码是具名类型，取键时统一转换一次。
+func assetKey(name string, encoding Encoding) string { return name + "|" + string(encoding) }
+
 // cachedAsset 取预压缩变体。
-func (r *Renderer) cachedAsset(name, encoding string) ([]byte, bool) {
+func (r *Renderer) cachedAsset(name string, encoding Encoding) ([]byte, bool) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	b, ok := r.compressed[name+"|"+encoding]
+	b, ok := r.compressed[assetKey(name, encoding)]
 	return b, ok
 }
 
 // storeAsset 写入预压缩变体；超过上限时整体清空重来，
 // 而不是逐条淘汰——逐条淘汰需要 LRU 簿记，成本高于收益。
-func (r *Renderer) storeAsset(name, encoding string, body []byte) {
+func (r *Renderer) storeAsset(name string, encoding Encoding, body []byte) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.compressedAt+len(body) > maxCompressedBytes || len(r.compressed) >= maxCompressedEntries {
 		r.compressed = map[string][]byte{}
 		r.compressedAt = 0
 	}
-	r.compressed[name+"|"+encoding] = body
+	r.compressed[assetKey(name, encoding)] = body
 	r.compressedAt += len(body)
 }
 
