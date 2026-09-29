@@ -76,7 +76,7 @@
 
 ## 4. 逐项说明
 
-### G01 巨型分发函数（高）
+### G01 巨型分发函数（高） · 已在批次 K 修复（结构），响应类型化留待 K2
 
 `dispatchCommon` 696 行、60 个 `case`，函数体内 22 处 `return map[string]any{…}`、14 处 `return map[string]bool{…}`。
 
@@ -581,6 +581,7 @@ dialogs.go:29/76         再把 raw 读出来使用（:113 是重新登记）
 | H | `acf5ad0` | G28：删除对内置 `printf` 的覆盖 | 无 |
 | I | `a00615a` | G02 `transport.Options` + G07 具名状态与具名布尔 + G12 nil 约定统一 | 两个协议布尔保留原名 |
 | J | `fa6bc38` | G03 + G29：`Encoding` 具名类型、serveUI 按契约拆三个函数、11 处样板改 `renderFragment` | 顺带修 history 400 → 200 |
+| K | 本次 | G01：`dispatchCommon` 按域拆成 8 个 `dispatch*`（`dispatch.go`），60 个 case 纯搬移 | 响应仍用匿名 map，见下 |
 
 ### 批次 A
 
@@ -727,3 +728,24 @@ dialogs.go:29/76         再把 raw 读出来使用（:113 是重新登记）
 **顺带修掉一个真缺陷**：`/ui/sessions/{id}/history` 对「会话已不存在」回 400 —— 这是状态类失败，htmx 不交换，界面于是停在旧会话的历史上、没有任何提示。改为按片段约定渲染说明；模板缺失这类程序性故障仍回 500。浏览器实测：`#turns` 里出现「会话不存在」。
 
 **新增三层回归**（`status_contract_test.go`）：15 个片段端点的状态类失败必须 200 + HTML；非片段端点（资源 404、越界路径 400、非法会话 ID 400）保留真实状态码；扩展端点的 204/400 信号不动；外壳能渲染且 br 协商仍生效（具名类型最容易坏在这里）。
+
+### 批次 K（G01，结构部分）
+
+`dispatchCommon` 696 行 / 60 个 case → 131 行的路由 + `dispatch.go` 里 8 个域函数：
+
+| 域 | case 数 | 需要什么 |
+|---|---|---|
+| `dispatchRun` | 10 | ctx + worker（发送、排队、思考/压缩开关、中止与停止） |
+| `dispatchSession` | 18 | ctx + worker（状态读取与身份变更） |
+| `dispatchBash` | 3 | ctx + worker |
+| `dispatchDialogs` | 2 | ctx + worker |
+| `dispatchSessionOps` | 3 | ctx（磁盘会话：搜索/删除/导出） |
+| `dispatchConfig` | 9 | ctx |
+| `dispatchWorkspace` | 8 | ctx（files.* / git.*） |
+| `dispatchTerminal` | 5 | 连接（终端输出要回到发起它的连接） |
+
+**「未处理」用哨兵错误表达，而不是第三个返回值。** 理由是可验证性：域函数内那几十处 `return` 因此**一字未改**，这批拆分是纯搬移。搬移后我把 HEAD 里 60 个 case 的正文与新树逐条对比（去空行、`empty()`→`decodeEmpty(r.Params)` 归一），**差异 0 处**；method 集合也完全一致（67 个 `case`，无丢失无新增）。
+
+顺序有意保留：`worker.list` 与 `session.start` 仍在取 worker 之前处理——`start` 的任务正是创建那个进程。
+
+**事实来源仍然有三处**，这次没有增加也没有减少：`SupportedMethods`（能力清单）、`protocol.specs`（执行策略）、各域 switch（实际分发）。前两者由 `methods_test.go` 静态核对；第三者由 `Test能力清单与实际分发一致` 逐方法实际调用兜住（声明支持却未实现会红）。新增方法三处都要改，这一点写进了 `dispatch.go` 的包注释。
