@@ -168,7 +168,7 @@ func (r *Renderer) RenderFiles(root string, entries []map[string]any, truncated 
 
 建议方向：渲染层需要的行数据在 `presentation` 内定义包级结构体并由 `transport` 负责把 `workspace`/`sessions` 的类型映射过去；`Stats` 换成结构体。这两步都不改协议，只改 Go 内部边界。
 
-### G09 presentation 的导出面（中）
+### G09 presentation 的导出面（中） · 本批决定不做，理由见第 10 节
 
 `internal/presentation` 87 个导出符号、21 个 `Render*` 方法，全部由 `transport` 使用。Go 的惯例是**接口定义在使用方**：`transport` 定义它真正调用的那组方法的小接口，既方便测试替身，也让 presentation 不必为「谁在用我」而设计。
 
@@ -184,7 +184,7 @@ case <-time.After(2 * time.Millisecond):
 
 建议方向：发送协程归还配额时通过带缓冲 channel 通知，或直接用 `sync.Cond`／把配额与入队合并成一个受互斥保护的队列。这块是背压修复的核心，改动前需要先跑 `replay_ws_test.go`（穿过 fake Pi → 补发环 → WS 的联测）与 `-race`。
 
-### G11 双锁纪律未注释（低）
+### G11 双锁纪律未注释（低） · 已在批次 N3 修复，见第 10 节
 
 `Manager` 有 `mu` 与 `startMu`（`runtime/manager.go:91`），`Files` 有 `mu` 与 `indexMu`（`workspace/files.go:41`），`Renderer` 的 `mu` 同时保护 templates/assets/compressed/mc。当前 `-race` 全绿，属于可维护性问题：读代码的人无法判断「哪个字段受哪把锁保护」「能不能在持 A 时取 B」。
 
@@ -585,7 +585,9 @@ dialogs.go:29/76         再把 raw 读出来使用（:113 是重新登记）
 | K2 | `57bdf47` | G01 类型：36 处回执改具名类型（`responses.go` / `runtime/replies.go` / `management.ModelsReply`） | 用户文档与诊断 map 不动 |
 | L | `5b21aae` | G10：出站字节配额由 2ms 轮询改为归还时广播 | 见下（实测数据） |
 | N1 | `dbbb207` | G25：bash 输出缓冲按文件大小分配 | 无 |
-| N2 | 本次 | G17 决定不改名（见下）+ G19/G26 登记 + M/N 收尾 | 见下 |
+| M | — | G17 测试改名：**决定不做**（实测数据见 N2） | 见下 |
+| N3 | 本次 | G11：多锁结构与锁作用域写进注释；G09 决定不做（见下） | 见下 |
+| N2 | `cd8d9b0` | G19/G26 登记 + M/N 收尾 | 见下 |
 
 ### 批次 A
 
@@ -817,3 +819,28 @@ dialogs.go:29/76         再把 raw 读出来使用（:113 是重新登记）
 **G19（magic-context 的 SQL 构造）——登记，不改。** `internal/magiccontext` 走 `sqlite3` 命令行、参数校验后代回 SQL 字符串，与 `database/sql` 的惯用做法相反，但这是「不引入 CGO/驱动」的显式取舍，且已配套沙箱与白名单校验。
 
 **G26（WS 读上限的乘数效应）——登记，不改。** `wsReadLimit` 决定单连接最坏的读取缓冲（约 97 MiB × 8 连接）。它与 `pi.MaxImages × MaxImageDataLen`、附件预算、U05 的修复以及 `server_test.go` 的断言绑在一起，调整必须同步前端预检，属于**跨仓联动改动**，不该混在本次清理里顺手做。
+
+### 批次 N3（G11 注释 + G09 决策）
+
+**G11：把多锁结构与锁作用域写进注释。** 三处结构各补一段：
+
+- `runtime.Manager`：`mu` 保护 `workers`/`presets`/`closed` 且只做短临界区；`startMu` 串行化冷启动；**加锁顺序 `startMu → mu`**（启动路径先取 `startMu` 再取 `mu`，反之不成立）。
+- `workspace.Files`：`mu` 保护 `roots`，`indexMu` 保护 `indexCache`，两把锁**从不同时持有**（`indexFor` 在构建索引前已放开 `indexMu`），因此不存在顺序问题。
+- `presentation.Renderer`：`mu` 保护除 `templates` 外的全部可变字段（`assets`/`compressed`/`compressedAt`/`mc`），`templates` 在 `LoadFromDir` 之后不再写入。
+
+注释里的每条断言都对照代码核过：`startMu → mu` 的嵌套用脚本扫过全文件（不存在反向嵌套）；`indexMu`/`mu` 的独立性读的是 `indexFor` 的实际加锁范围——**我最初写的是「顺序固定为 `indexMu → mu`」，核对后发现两把锁根本不同时持有，已改成准确的表述**。这一批的价值全在准确性上，写错比不写更糟。
+
+**G09（presentation 的导出面）——决定不做。**
+
+提议是在使用方（`transport`）定义接口，好处是测试替身。实测下来不成立：
+
+| 事实 | 数据 |
+|---|---|
+| `transport` 用到的渲染方法 | **20 个**（`Asset`、`RenderHistory`、`RenderNote`、……） |
+| 不设 `PI_WEBUI_DIR` 时跳过的测试 | `internal/transport` 里 25 个（75 通过 / 25 跳过） |
+| 这些测试在测什么 | 模板真实渲染结果（「MC 面板渲染出记忆」「损坏历史不得被当作未落盘分支」） |
+| 跨仓验证的既有做法 | `scripts/verify-pair.sh`：**强制要求** `PI_WEBUI_DIR`，把两仓 revision 都打印出来 |
+
+20 个方法的接口是弱抽象（Go 自己的说法：接口越大，抽象越弱），而且会成为新的漂移点（每加一个 `Render*` 都要同步接口）。更关键的是方向：那些跳过的测试之所以有价值，正是因为它们渲染**真实模板**；换成替身只会变成「某个方法被调用了」，同时与 `verify-pair.sh` 的立场相矛盾——那个脚本的注释写得很清楚：**「独立桥仓的 CI 不冒充跨仓验收」**。用替身让它们在单仓 CI 里「通过」，恰好就是脚本拒绝做的事。
+
+因此不做，并在此登记。

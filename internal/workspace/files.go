@@ -38,9 +38,14 @@ type Files struct {
 	limits  Limits
 	gitPath string
 
+	// mu 保护 roots（已打开的根目录句柄）。打开句柄是慢操作，
+	// 因此临界区只覆盖查表与插入，不要在持锁期间遍历目录。
 	mu    sync.Mutex
 	roots map[string]*os.Root
 
+	// indexMu 保护 indexCache。它与 mu **从不同时持有**：索引构建会遍历
+	// 大量文件，构建期间已经放开 indexMu（见 indexFor），因此不存在
+	// 「先取哪把锁」的问题——两把锁各自独立。
 	indexMu    sync.Mutex
 	indexCache map[string]*indexEntry
 }

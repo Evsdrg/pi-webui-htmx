@@ -105,10 +105,16 @@ type Info struct {
 
 // Manager 维护受管工作进程表，并负责空闲回收与整体关闭。
 type Manager struct {
-	cfg     Config
-	ctx     context.Context
-	cancel  context.CancelFunc
-	mu      sync.Mutex
+	cfg    Config
+	ctx    context.Context
+	cancel context.CancelFunc
+	// mu 保护 workers、presets、closed 三个字段与它们的读写一致性。
+	// 只做短临界区（查表、增删、读标志），绝不在持锁期间启动进程或写盘——
+	// 拉起进程要几十到几百毫秒，持锁就等于挡住所有会话的查表。
+	mu sync.Mutex
+	// startMu 串行化「启动一个 worker」，与 mu 分开是为了让启动这种
+	// 慢操作不挡住其他会话的查表。加锁顺序固定为 startMu → mu：
+	// 启动路径先取 startMu，再在需要改表时取 mu；反之不成立。
 	startMu sync.Mutex
 	workers map[string]*Worker
 	// presets 记住每个会话最近一次启动使用的工具预设。空闲回收后再次

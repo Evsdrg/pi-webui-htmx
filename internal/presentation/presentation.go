@@ -34,7 +34,11 @@ type Renderer struct {
 	// 入口请求里，如果不预加载，浏览器要解析完 app.js 才发现它们，
 	// 多一个往返才能拿到 window.htmx。
 	entryPreload []string
-	mu           sync.RWMutex
+	// mu 保护本结构里除 templates 之外的全部可变字段：assets、
+	// compressed、compressedAt 与 magic-context 的 mc。
+	// 读路径（取资产、渲染）用 RLock，写入（加载包、缓存压缩变体）用 Lock。
+	// 不在持锁期间执行模板渲染本身，渲染只读取已解析的 *template.Template。
+	mu sync.RWMutex
 	// compressed 缓存静态资源的预压缩变体。键是 "name|enc"。
 	// 文件名带内容哈希，内容不会变，因此缓存永不失效；上限只为防止
 	// 有人把 --ui-dir 指向巨型目录时无界增长。
