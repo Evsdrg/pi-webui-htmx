@@ -31,8 +31,7 @@ type TunnelBridge struct {
 type virtualConn struct {
 	id      string
 	bridge  *TunnelBridge
-	out     chan []byte
-	queued  atomic.Int64
+	queue   *outboundQueue
 	ctx     context.Context
 	cancel  context.CancelFunc
 	lastUse time.Time
@@ -175,7 +174,7 @@ func (t *TunnelBridge) acquire(id string) *virtualConn {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	c := &virtualConn{
-		id: id, bridge: t, out: make(chan []byte, 64),
+		id: id, bridge: t, queue: newOutboundQueue(64),
 		ctx: ctx, cancel: cancel, lastUse: time.Now(),
 		subs: map[string]*runtime.Subscription{}, terms: map[string]*terminal.Subscription{},
 		seen: map[string]bool{},
@@ -201,8 +200,8 @@ func (c *virtualConn) pump() {
 		select {
 		case <-c.ctx.Done():
 			return
-		case b := <-c.out:
-			c.queued.Add(-int64(len(b)))
+		case b := <-c.queue.frames:
+			c.queue.release(int64(len(b)))
 			wrapped := relay.RouteTo(c.id, b)
 			if wrapped == nil {
 				continue
@@ -364,7 +363,7 @@ func (c *virtualConn) send(m protocol.Message) bool {
 	}
 	ctx, cancel := context.WithTimeout(c.ctx, outboundWait)
 	defer cancel()
-	if !enqueueBounded(ctx, c.out, &c.queued, b) {
+	if !c.queue.enqueue(ctx, b) {
 		c.cancel()
 		return false
 	}
@@ -373,7 +372,7 @@ func (c *virtualConn) send(m protocol.Message) bool {
 
 // sendRaw 发送已序列化的补发帧，按整批截止时间等待队列排空。
 func (c *virtualConn) sendRaw(ctx context.Context, b []byte) bool {
-	return enqueueBounded(ctx, c.out, &c.queued, b)
+	return c.queue.enqueue(ctx, b)
 }
 
 func (c *virtualConn) reply(m protocol.Message) { c.send(m) }

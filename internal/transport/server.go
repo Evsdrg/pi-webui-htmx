@@ -25,7 +25,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/coder/websocket"
@@ -1032,8 +1031,7 @@ type connection struct {
 	ws             *websocket.Conn
 	ctx            context.Context
 	cancel         context.CancelFunc
-	out            chan []byte
-	queued         atomic.Int64
+	queue          *outboundQueue
 	mu             sync.Mutex
 	subs           map[string]*run.Subscription
 	termSubs       map[string]*terminal.Subscription
@@ -1065,7 +1063,7 @@ func (c *connection) dropTerminal(id string) {
 
 // sendRaw 按补发的整批截止时间有界排队；单帧大小与队列预算不能被突破。
 func (c *connection) sendRaw(ctx context.Context, b []byte) bool {
-	return enqueueBounded(ctx, c.out, &c.queued, b)
+	return c.queue.enqueue(ctx, b)
 }
 
 func (c *connection) send(m protocol.Message) bool {
@@ -1076,7 +1074,7 @@ func (c *connection) send(m protocol.Message) bool {
 	}
 	ctx, cancel := context.WithTimeout(c.ctx, outboundWait)
 	defer cancel()
-	if !enqueueBounded(ctx, c.out, &c.queued, b) {
+	if !c.queue.enqueue(ctx, b) {
 		c.cancel()
 		return false
 	}
@@ -1090,8 +1088,8 @@ func (c *connection) writer() {
 		select {
 		case <-c.ctx.Done():
 			return
-		case b := <-c.out:
-			c.queued.Add(-int64(len(b)))
+		case b := <-c.queue.frames:
+			c.queue.release(int64(len(b)))
 			ctx, cancel := context.WithTimeout(c.ctx, 5*time.Second)
 			err := c.ws.Write(ctx, websocket.MessageText, b)
 			cancel()
@@ -1123,7 +1121,7 @@ func (s *Server) serveWS(w http.ResponseWriter, r *http.Request) {
 	ws.SetReadLimit(wsReadLimit)
 	ctx, cancel := context.WithCancel(s.manager.Context())
 	defer cancel()
-	c := &connection{server: s, ws: ws, ctx: ctx, cancel: cancel, out: make(chan []byte, 32), subs: map[string]*run.Subscription{}, termSubs: map[string]*terminal.Subscription{}, normal: make(chan struct{}, 8), urgent: make(chan struct{}, 2)}
+	c := &connection{server: s, ws: ws, ctx: ctx, cancel: cancel, queue: newOutboundQueue(32), subs: map[string]*run.Subscription{}, termSubs: map[string]*terminal.Subscription{}, normal: make(chan struct{}, 8), urgent: make(chan struct{}, 2)}
 	go c.writer()
 	defer func() {
 		c.mu.Lock()
