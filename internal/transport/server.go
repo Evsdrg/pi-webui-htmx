@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
+	"pi-bridge-go/internal/magiccontext"
 	"pi-bridge-go/internal/management"
 	"pi-bridge-go/internal/observe"
 	"pi-bridge-go/internal/pi"
@@ -99,7 +100,7 @@ type Server struct {
 // New 构造入口；token 至少 32 字符，host 为监听地址上的主机名。
 // publicOrigin 为空值时只接受 host 本身（本地用法不变）。
 func New(manager *run.Manager, store *sessions.Store, terminals *terminal.Manager, files *workspace.Files, piConfig *management.Config, discovery management.DiscoveryLimits, exportDir string, receipts *storage.Receipts, metrics *observe.Metrics, token, host string, publicOrigin PublicOrigin, ui *presentation.Renderer) *Server {
-	return &Server{
+	server := &Server{
 		manager:         manager,
 		store:           store,
 		terminals:       terminals,
@@ -119,6 +120,11 @@ func New(manager *run.Manager, store *sessions.Store, terminals *terminal.Manage
 		operations:      make(chan struct{}, 16),
 		claims:          newClaims(1024),
 	}
+	// magic-context 的只读视图挂在渲染器上：面板是服务端片段，
+	// 由 presentation 负责取数，传输层只管路由与鉴权。
+	// ui 为 nil 表示没配 UI 包目录，那时整个 /ui/* 都不该被请求到。
+	ui.SetMagicContext(magiccontext.NewStore())
+	return server
 }
 
 // SetTunnelBridge 注入隧道接入层，使云端帧能复用同一套命令分发。
@@ -445,6 +451,10 @@ func (s *Server) serveUI(w http.ResponseWriter, r *http.Request) bool {
 
 	case path == "/ui/dirs":
 		s.serveDirs(w, r, encoding)
+		return true
+
+	case path == "/ui/mc":
+		s.serveMagicContext(w, r, encoding)
 		return true
 
 	case path == "/ui/git-status":
@@ -2108,6 +2118,38 @@ func (s *Server) serveDirs(w http.ResponseWriter, r *http.Request, encoding stri
 	html, rerr := s.ui.RenderDirs(path, parent, dirs, truncated)
 	if rerr != nil {
 		s.fragmentIssue(w, encoding, rerr)
+		return
+	}
+	writeHTML(w, encoding, html)
+}
+
+// serveMagicContext 渲染 magic-context 只读面板。
+//
+// 走片段端点约定：问题一律 200 + 可读 HTML，因为调用方是 htmx，
+// 它默认不交换 4xx/5xx，用户会看到一个永远停在占位符的面板。
+func (s *Server) serveMagicContext(w http.ResponseWriter, r *http.Request, encoding string) {
+	query := r.URL.Query()
+	kind := magiccontext.Kind(query.Get("kind"))
+	// 分区不在白名单里时回落默认分区，而不是报错：面板第一次打开
+	// 可能带上陈旧或拼错的 kind。
+	known := false
+	for _, entry := range magiccontext.Kinds {
+		if entry.Key == kind {
+			known = true
+			break
+		}
+	}
+	if !known {
+		kind = magiccontext.KindMemories
+	}
+	offset, _ := number(r, "offset", 0)
+	limit, _ := number(r, "limit", 50)
+	if limit <= 0 || limit > magiccontext.MaxPageRows {
+		limit = 50
+	}
+	html, err := s.ui.RenderMC(r.Context(), kind, offset, limit, query.Get("category"), query.Get("project"))
+	if err != nil {
+		s.fragmentIssue(w, encoding, err)
 		return
 	}
 	writeHTML(w, encoding, html)

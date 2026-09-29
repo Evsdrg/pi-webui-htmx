@@ -18,6 +18,7 @@ import (
 	"sync"
 	"time"
 
+	"pi-bridge-go/internal/magiccontext"
 	"pi-bridge-go/internal/protocol"
 	"pi-bridge-go/internal/sessions"
 )
@@ -39,6 +40,9 @@ type Renderer struct {
 	// 有人把 --ui-dir 指向巨型目录时无界增长。
 	compressed   map[string][]byte
 	compressedAt int
+	// mc 是 magic-context 本地存储的只读视图。它为 nil 时面板不可用，
+	// 由 SetMagicContext 注入——构造 Renderer 时还没有传输层的信息。
+	mc *magiccontext.Store
 }
 
 // asset 是一份静态资源。
@@ -53,6 +57,18 @@ const (
 	maxCompressedEntries = 1024
 	maxCompressedBytes   = 64 << 20
 )
+
+// SetMagicContext 注入 magic-context 只读视图。
+// 渲染器可以为 nil（没配 --ui-dir 时 UI 层整体禁用），所以这里判空——
+// 测试与禁用 UI 的部署都会走到这条路径。
+func (r *Renderer) SetMagicContext(store *magiccontext.Store) {
+	if r == nil {
+		return
+	}
+	r.mu.Lock()
+	r.mc = store
+	r.mu.Unlock()
+}
 
 // LoadFromDir 从 UI 包目录加载。
 //
