@@ -3,6 +3,7 @@ package protocol
 import (
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 )
 
@@ -51,5 +52,58 @@ func TestReply未知错误不泄露细节(t *testing.T) {
 	m := Reply("r1", nil, errors.New("内部路径 /home/user/secret 泄漏"))
 	if m.Error == nil || m.Error.Message != "操作失败" {
 		t.Fatalf("未知错误应泛化: %v", m.Error)
+	}
+}
+
+// Wrap 是「对外仍是稳定错误码，对内保留原因」的入口。
+// 它必须满足三件事：能回溯原因、外层码优先、原因不进 JSON。
+func TestWrap保留原因且外层码优先(t *testing.T) {
+	cause := errors.New("dial tcp 10.0.0.1:443: connection refused")
+	err := Wrap("pi_error", "请求供应商失败", cause)
+	if !errors.Is(err, cause) {
+		t.Fatal("必须能用 errors.Is 回溯到原因")
+	}
+	var pe *Error
+	if !errors.As(err, &pe) || pe.Code != "pi_error" {
+		t.Fatalf("errors.As 应拿到外层协议错误: %+v", pe)
+	}
+	if !strings.Contains(err.Error(), "请求供应商失败") {
+		t.Fatalf("错误文本应包含对外提示: %q", err.Error())
+	}
+}
+
+// 判定只看最外层：否则一次包装就能把「not_found」塞给调用方，
+// 而 server.go 的 204 分支、claims 的重试判定都是按码分支的。
+func Test错误码判定只看最外层(t *testing.T) {
+	inner := E("not_found", "会话文件不存在")
+	outer := Wrap("busy", "工作进程仍在忙", inner)
+	var pe *Error
+	if !errors.As(outer, &pe) {
+		t.Fatal("应能取到协议错误")
+	}
+	if pe.Code != "busy" {
+		t.Fatalf("最外层码必须是 busy，得到 %q——内层码不得劫持判定", pe.Code)
+	}
+	if !errors.Is(outer, inner) {
+		t.Fatal("原因链仍需可回溯（排查用）")
+	}
+}
+
+// 原因可能含本机路径、上游原文或凭据；它们既不能进 WS 响应，也不能进片段提示。
+func Test错误原因不进入JSON(t *testing.T) {
+	err := Wrap("pi_error", "请求供应商失败", errors.New("Authorization: Bearer sk-secret-value"))
+	b, mErr := json.Marshal(err)
+	if mErr != nil {
+		t.Fatal(mErr)
+	}
+	if strings.Contains(string(b), "sk-secret-value") || strings.Contains(string(b), "Bearer") {
+		t.Fatalf("序列化不得带出原因: %s", b)
+	}
+	var fields map[string]any
+	if uErr := json.Unmarshal(b, &fields); uErr != nil {
+		t.Fatal(uErr)
+	}
+	if len(fields) != 2 || fields["code"] != "pi_error" || fields["message"] != "请求供应商失败" {
+		t.Fatalf("错误对象字段应只有 code/message: %v", fields)
 	}
 }

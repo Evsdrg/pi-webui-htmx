@@ -111,8 +111,8 @@ func (c *Config) Catalog(ctx context.Context, limits DiscoveryLimits) ([]Discove
 		return nil, err
 	}
 	var doc map[string]any
-	if json.Unmarshal(body, &doc) != nil {
-		return nil, protocol.E("pi_error", "models.dev 返回的不是合法 JSON")
+	if jerr := json.Unmarshal(body, &doc); jerr != nil {
+		return nil, protocol.Wrap("pi_error", "models.dev 返回的不是合法 JSON", jerr)
 	}
 	out := make([]DiscoveredModel, 0, 64)
 	for provider, v := range doc {
@@ -199,12 +199,12 @@ func (c *Config) fetchJSON(ctx context.Context, target, api, apiKey string, head
 	}
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return nil, protocol.E("pi_error", "请求供应商失败")
+		return nil, protocol.Wrap("pi_error", "请求供应商失败", err)
 	}
 	defer resp.Body.Close()
 	body, err := io.ReadAll(io.LimitReader(resp.Body, limits.MaxBytes+1))
 	if err != nil {
-		return nil, protocol.E("pi_error", "读取响应失败")
+		return nil, protocol.Wrap("pi_error", "读取响应失败", err)
 	}
 	if int64(len(body)) > limits.MaxBytes {
 		return nil, protocol.E("limit_exceeded", "供应商响应超过体积上限")

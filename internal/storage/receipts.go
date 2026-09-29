@@ -6,6 +6,7 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"math"
@@ -302,7 +303,16 @@ func (r *Receipts) put(rec Receipt) {
 	}
 }
 
-// Record 追加一条回执。存储未启用时安全退化为空操作。
+// ErrNotEnabled 表示回执存储没有打开（未启用或已进入关闭流程）。
+//
+// 它不等于「命令失败」：调用方应把它看作配置事实与降级信号，
+// 而不是把命令判为出错。真正的写盘失败会直接把底层错误返回上来。
+var ErrNotEnabled = errors.New("回执存储未启用")
+
+// Record 追加一条回执。
+//
+// 失败语义：写失败向上返回错误（调用方据此计数或告警），但内存索引仍然更新，
+// 因此同一进程内的去重与对账不受影响；存储未打开时返回 ErrNotEnabled。
 func (r *Receipts) Record(rec Receipt) error {
 	if r == nil || rec.RequestID == "" {
 		return nil
@@ -322,23 +332,26 @@ func (r *Receipts) Record(rec Receipt) error {
 	defer r.mu.Unlock()
 	if r.file == nil {
 		r.degraded = true
-		return os.ErrClosed
+		return ErrNotEnabled
 	}
+	var writeErr error
 	if r.written+int64(len(b)) > r.limits.MaxFileBytes {
-		if err := r.rotateLocked(); err != nil {
+		if rerr := r.rotateLocked(); rerr != nil {
 			r.degraded = true
-			// 轮转失败不阻塞命令，只降级。
+			// 轮转失败不阻塞命令，但要向上反映。
+			writeErr = rerr
 		}
 	}
 	if r.file != nil {
-		if _, err := r.file.Write(b); err != nil {
+		if _, werr := r.file.Write(b); werr != nil {
 			r.degraded = true
+			writeErr = werr
 		} else {
 			r.written += int64(len(b))
 		}
 	}
 	r.put(rec)
-	return nil
+	return writeErr
 }
 
 // rotateLocked 轮转当前日志；调用方需持有锁。

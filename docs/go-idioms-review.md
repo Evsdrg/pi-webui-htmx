@@ -563,3 +563,33 @@ dialogs.go:29/76         再把 raw 读出来使用（:113 是重新登记）
 `docs/code-audit.md` 维护 B01–B81 与 U01–U21 两组编号，内容偏**正确性与安全**；本文件用独立前缀 G，记录的是**语言惯用性与结构**，两者可能落在同一段代码上但视角不同，不重复立号。
 
 落修前应先查 `code-audit.md`：若某个 G 项与既有 B/U 项指向同一处，应合并到那一条修复里一次改完，避免同一段代码被两次重构。本文件未做这项比对。
+
+## 10. 落地记录
+
+按第 8 节的批次推进；每个批次一个提交，逐步追加。
+
+| 批次 | 提交 | 内容 | 与计划的差异 |
+|---|---|---|---|
+| A | `b59f747` | G13/G14/G15/G16/G30 + `t.Setenv` | 无 |
+| B | `7103f6a` | G18：接入 staticcheck v0.8.1、清理基线 | 见下 |
+| C | 本次 | G04 能力 + G05 + G06 | 见下 |
+
+### 批次 A
+
+按计划执行。补充两点观察：`extensionState.forget` 删除时发现它的注释描述的语义（按会话清空前缀状态）根本做不到——状态 key 由插件提供、不按会话隔离，所以顺手把 `update` 的文档改成描述真实生命周期；`presentation.Now` 删除后该包不再有可变全局变量。
+
+### 批次 B
+
+**版本是硬约束**：staticcheck 2025.1.1 及更早读不了 Go 1.27 的导出数据，会先报 `export data version 4 is greater than maximum supported version 2` 再拒绝检查。CI 固定到 v0.8.1。
+
+基线共 16 条，其中 4 条是 ST1005（错误字符串不应大写开头）——中文提示以 `Pi`/`Git` 开头会被这条规则误报，属规则与项目约定的冲突，用 `staticcheck.conf` 排除并写明理由；其余 12 条都是真问题：4 个死符号（`maxContentBytes`、`isEOF`、`extensionState.forget`、两个未使用的测试辅助函数）、2 处「赋值后从不读取」（其中 `Store.alignToTurn` 一直在返回一个没有调用方使用的字节预算）、以及 `leafID`/`handleUIResponse` 两处首字母缩写不一致。
+
+### 批次 C
+
+**G04**：`protocol.Error` 增加未导出 `cause` 与 `Unwrap`，新增 `Wrap(code, message, cause)`；本次只迁移三处（`public_origin` 解析改 `%w`、`discovery` 出站与读取、`config` 序列化），其余调用点保持原样，避免一次性改动面过大。
+
+三条回归先写后改：`Wrap` 可回溯原因且外层码优先、错误对象序列化后只有 `code`/`message`（不泄露原因）、片段提示只渲染外层 `message`。另加一条针对 204 分支的守卫：**损坏的历史文件是 `invalid_history`，不得被当成「分支尚未落盘」**——那会把数据损坏显示成一个稍后会出现的空分支。
+
+**G05/G06**：`Record` 现在把写盘/轮转失败向上返回（内存索引照旧更新，进程内去重不受影响），「未启用」改用 `storage.ErrNotEnabled` 而不是借用 `os.ErrClosed`。传输层新增 `storeReceipt` 统一落盘并统计失败：`ErrNotEnabled` 是配置事实、不计入失败；真实写失败计入 `receiptFailures` 指标，`/healthz` 与 `receipts.degraded` 都能看到。
+
+**一个仍需拍板的取舍**：intent 写失败目前仍然继续派发（fail-open），只计数与暴露降级。严格的做法是 fail-closed——写不进 intent 就拒绝有副作用的命令——否则「结果未知不重发」的承诺在重启后没有依据。改成 fail-closed 会改变对外行为（存储不可用时全部写命令被拒），因此留给明确决策，不在本批单方面改。

@@ -44,6 +44,10 @@ WebSocket 的 origin 白名单与同一规则对齐，否则库层（`Origin.Hos
 
 错误码：`invalid_request`、`unsupported_version`、`unsupported_method`、`invalid_params`、`not_found`、`conflict`、`busy`、`limit_exceeded`、`worker_not_running`、`worker_exited`、`timeout`、`outcome_unknown`、`pi_error`、`resync_required`、`internal`；接入层还包括 `unauthorized`、`host_denied`、`origin_denied`。错误不含正文/密钥。任何新增错误码必须同步 TS 类型和兼容协商。
 
+错误对象**只有 `code` 与 `message` 两个字段**（已在回归里钉住）。桥侧可以给内部错误挂上原因（`protocol.Wrap`）方便排查，但原因不参与序列化：它可能带本机路径、上游原文或凭据，既不进 WS 响应，也不进片段提示（片段只渲染 `message`）。
+
+判定一律以**最外层**错误码为准。桥内部用 `errors.Is/As` 回溯原因，但按码分支的地方——例如历史端点「活跃但未落盘」的 204、回执的可重试判定——只读最外层的 `code`；把内层错误码当结论会让真实故障被当成可恢复状态。
+
 ## 3. 当前方法清单
 
 运行时 `capabilities.methods` 是是否实现的入口依据，但方法存在不代表没有 [审查缺陷](../../docs/code-audit.md)。

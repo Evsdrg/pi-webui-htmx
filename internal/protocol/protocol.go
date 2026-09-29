@@ -22,15 +22,41 @@ type Request struct {
 }
 
 // Error 是协议错误，Code 为稳定错误码，Message 面向使用者展示。
+//
+// cause 保存底层失败，**不参与 JSON 序列化**：它可能含本机路径、上游原文
+// 或凭据，既不该进 WS 响应，也不该进片段提示。用 Wrap 而不是 E 才能带上它。
 type Error struct {
 	Code    string `json:"code"`
 	Message string `json:"message"`
+	cause   error
 }
 
-func (e *Error) Error() string { return e.Code + ": " + e.Message }
+// Error 返回带机器码前缀的文本，供日志与排查使用。
+// 对外展示请用 Message 字段（片段端点就是这么做的）。
+func (e *Error) Error() string {
+	if e.Message == "" && e.cause != nil {
+		return e.Code + ": " + e.cause.Error()
+	}
+	return e.Code + ": " + e.Message
+}
+
+// Unwrap 暴露原因，使 errors.Is/As 能回溯到根因。
+//
+// 代价是 As 也能找到被包在内层的协议错误，所以**判定一律以最外层为准**：
+// 构造时把稳定的协议错误放在最外，内部失败只作为 cause 传进来。
+func (e *Error) Unwrap() error { return e.cause }
 
 // E 构造一个带中文提示的协议错误。
 func E(code, message string) error { return &Error{Code: code, Message: message} }
+
+// Wrap 构造带原因的协议错误：对外仍是稳定的 code/message，
+// 对内保留 err 供 errors.Is/As 回溯。
+func Wrap(code, message string, err error) error {
+	if err == nil {
+		return E(code, message)
+	}
+	return &Error{Code: code, Message: message, cause: err}
+}
 
 // Message 是桥向外发送的响应、事件或控制消息。
 type Message struct {

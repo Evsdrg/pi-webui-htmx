@@ -229,7 +229,10 @@ func (s *Server) admit(req protocol.Request, reply func(protocol.Message)) (bool
 // 命令寿命有意长于浏览器连接：断开只停止等待，不取消已接受的任务。
 func (s *Server) runCommand(c connSink, req protocol.Request) {
 	if protocol.NeedsIntent(req.Method) {
-		_ = s.receipts.Record(storage.Receipt{
+		// intent 必须落盘：桥在「Pi 已接受命令」与「终态回执落盘」之间崩溃时，
+		// 只有它能证明这条命令可能已经执行过。写不进去仍然继续（不阻塞命令），
+		// 但会记进 receiptFailures，让降级可见。
+		s.storeReceipt(storage.Receipt{
 			RequestID:   req.RequestID,
 			SessionID:   req.SessionID,
 			Method:      req.Method,

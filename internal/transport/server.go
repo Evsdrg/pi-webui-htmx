@@ -1115,18 +1115,35 @@ func errorCodeOf(err error) string {
 }
 
 // recordReceipt 落一条命令回执，供跨重启去重与对账。
-// 写失败不影响命令结果，只反映在诊断信息里。
 func (s *Server) recordReceipt(req protocol.Request, err error) {
-	if s.receipts == nil || !protocol.RecordsOutcome(req.Method) {
+	if !protocol.RecordsOutcome(req.Method) {
 		return
 	}
-	_ = s.receipts.Record(storage.Receipt{
+	s.storeReceipt(storage.Receipt{
 		RequestID:   req.RequestID,
 		SessionID:   req.SessionID,
 		Method:      req.Method,
 		Outcome:     outcomeFor(err),
 		Fingerprint: requestFingerprint(req),
 	})
+}
+
+// storeReceipt 落一条回执并统计失败次数。
+//
+// 写失败不改变命令结果——命令已经执行或已经失败，回执只是记录——
+// 但必须可观测：回执是「命令是否执行过」的唯一依据，静默失败会让
+// 重启后的对账失去基础，而 /healthz 的 receipts.degraded 正是为此存在。
+//
+// 「没有启用回执存储」（ErrNotEnabled）是配置事实，不算故障，不计数。
+func (s *Server) storeReceipt(rec storage.Receipt) {
+	if s.receipts == nil {
+		return
+	}
+	if err := s.receipts.Record(rec); err != nil && !errors.Is(err, storage.ErrNotEnabled) {
+		if s.metrics != nil {
+			s.metrics.ReceiptFailed()
+		}
+	}
 }
 
 // connSink 是连接相关的少量能力：生命周期上下文、发送帧、登记终端订阅、

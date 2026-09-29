@@ -63,6 +63,7 @@ type Metrics struct {
 	sessionsIndexed atomic.Uint64
 	historyRequests atomic.Uint64
 	authFailures    atomic.Uint64
+	receiptFailures atomic.Uint64
 	startedAt       time.Time
 
 	byMethod sync.Map // method -> *atomic.Uint64
@@ -139,6 +140,13 @@ func (x *Metrics) HistoryRequest() { x.historyRequests.Add(1) }
 // AuthFailure 记录一次鉴权失败。
 func (x *Metrics) AuthFailure() { x.authFailures.Add(1) }
 
+// ReceiptFailed 记录一次回执落盘失败。
+//
+// 为什么单独计数：回执是「命令是否执行过」的唯一依据，写不进去意味着
+// 重启后的对账失去基础。它不影响当次命令结果，所以不能在调用点变成错误，
+// 但必须能被看见——否则降级会一直存在而无人知道。
+func (x *Metrics) ReceiptFailed() { x.receiptFailures.Add(1) }
+
 // SetSessionsIndexed 设置索引中的会话数（瞬时值）。
 func (x *Metrics) SetSessionsIndexed(n int) { x.sessionsIndexed.Store(uint64(n)) }
 
@@ -159,6 +167,7 @@ func (x *Metrics) Snapshot() map[string]any {
 		"sessionsIndexed": x.sessionsIndexed.Load(),
 		"historyRequests": x.historyRequests.Load(),
 		"authFailures":    x.authFailures.Load(),
+		"receiptFailures": x.receiptFailures.Load(),
 		"byMethod":        dumpMap(&x.byMethod),
 		"byErrorCode":     dumpMap(&x.byError),
 	}

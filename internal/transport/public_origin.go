@@ -2,6 +2,7 @@ package transport
 
 import (
 	"errors"
+	"fmt"
 	"net/http"
 	"net/url"
 	"strings"
@@ -40,7 +41,7 @@ func ParsePublicOrigin(raw string) (PublicOrigin, error) {
 	}
 	u, err := url.Parse(raw)
 	if err != nil {
-		return PublicOrigin{}, errors.New("--public-origin 不是合法 URL：" + err.Error())
+		return PublicOrigin{}, fmt.Errorf("--public-origin 不是合法 URL：%w", err)
 	}
 	if u.Scheme != "http" && u.Scheme != "https" {
 		return PublicOrigin{}, errors.New("--public-origin 只接受 http 或 https")

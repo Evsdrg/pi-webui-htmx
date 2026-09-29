@@ -16,12 +16,14 @@ import (
 	"testing"
 	"time"
 
+	"errors"
 	"github.com/andybalholm/brotli"
 	"github.com/coder/websocket"
 	"pi-bridge-go/internal/management"
 	"pi-bridge-go/internal/observe"
 	"pi-bridge-go/internal/pi"
 	"pi-bridge-go/internal/presentation"
+	"pi-bridge-go/internal/protocol"
 	run "pi-bridge-go/internal/runtime"
 	"pi-bridge-go/internal/sessions"
 	"pi-bridge-go/internal/storage"
@@ -1318,5 +1320,55 @@ func TestWS实际读上限与预算一致(t *testing.T) {
 	_ = json.Unmarshal(raw, &m)
 	if m["kind"] != "response" {
 		t.Fatalf("没有收到响应: %v", m)
+	}
+}
+
+// 204 分支按错误码判定，因此「什么错误码」必须稳：
+// 损坏的历史文件是 invalid_history，绝不能落进「分支尚未落盘」那条路——
+// 那会让真实的数据损坏在界面上表现成「稍后会出现的空分支」。
+func Test损坏历史不得被当作未落盘分支(t *testing.T) {
+	if os.Getenv("PI_WEBUI_DIR") == "" {
+		t.Skip("需要 PI_WEBUI_DIR 加载 UI 包")
+	}
+	s, manager, cwd := newTestServer(t)
+	worker, err := manager.Start(context.Background(), "", cwd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := worker.Info().SessionID
+	path := filepath.Join(s.store.Dir(), id+".jsonl")
+	body := `{"type":"session","version":3,"id":"` + id + `","timestamp":"2026-01-01T00:00:00.000Z","cwd":"` + cwd + `"}` + "\n" +
+		`{"type":"message","id":"a","parentId":null,"timestamp":"2026-01-01T00:00:01.000Z","message":` + "\n"
+	if err := os.WriteFile(path, []byte(body), 0644); err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequest(http.MethodGet, "/ui/sessions/"+id+"/history", nil)
+	req.Host = "127.0.0.1:30142"
+	req.Header.Set("Authorization", "Bearer "+testToken)
+	rec := httptest.NewRecorder()
+	s.ServeHTTP(rec, req)
+	if rec.Code == http.StatusNoContent {
+		t.Fatalf("损坏的历史记录不得返回 204（会被读成未落盘分支）: %s", rec.Body.String())
+	}
+	if rec.Header().Get("X-Session-Unsaved") != "" {
+		t.Fatal("损坏历史不得带未落盘标记")
+	}
+}
+
+// 片段提示只显示最外层的中文提示；原因可能含本机路径或上游原文，不能露出去。
+func Test片段提示不泄露错误原因(t *testing.T) {
+	if os.Getenv("PI_WEBUI_DIR") == "" {
+		t.Skip("需要 PI_WEBUI_DIR 加载 UI 包")
+	}
+	s, _, _ := newTestServer(t)
+	rec := httptest.NewRecorder()
+	s.fragmentIssue(rec, "", protocol.Wrap("pi_error", "请求供应商失败",
+		errors.New("dial tcp /home/operator/.config/pi/agent/auth.json: connection refused")))
+	body := rec.Body.String()
+	if !strings.Contains(body, "请求供应商失败") {
+		t.Fatalf("片段应展示外层提示: %s", body)
+	}
+	if strings.Contains(body, "auth.json") || strings.Contains(body, "dial tcp") {
+		t.Fatalf("片段不得带出底层原因: %s", body)
 	}
 }

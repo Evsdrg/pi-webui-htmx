@@ -211,7 +211,7 @@ func (c *Config) WriteModels(doc map[string]any) error {
 	}
 	input, err := json.Marshal(doc)
 	if err != nil {
-		return protocol.E("invalid_params", "配置无法序列化")
+		return protocol.Wrap("invalid_params", "配置无法序列化", err)
 	}
 	if int64(len(input)) > c.limits.MaxFileBytes {
 		return protocol.E("limit_exceeded", "配置超过体积上限")
@@ -243,7 +243,7 @@ func (c *Config) WriteModels(doc map[string]any) error {
 	}
 	body, err := json.MarshalIndent(mapped, "", "  ")
 	if err != nil {
-		return protocol.E("invalid_params", "配置无法序列化")
+		return protocol.Wrap("invalid_params", "配置无法序列化", err)
 	}
 	body = append(body, '\n')
 	if int64(len(body)) > c.limits.MaxFileBytes {

@@ -2,6 +2,7 @@ package storage
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -246,5 +247,48 @@ func Test同一请求只保留最新结论(t *testing.T) {
 	rec, _ = r.Lookup("req-1")
 	if rec.Outcome != OutcomeOK {
 		t.Fatalf("更新的终态未被接受: %+v", rec)
+	}
+}
+
+// 「未启用」是配置事实，不是文件已关闭：调用方要靠 sentinel 区分
+// 「这个部署没开回执」与「写失败了」，前者不该被当成故障。
+func Test未启用时返回专门哨兵(t *testing.T) {
+	r, err := NewReceipts(t.TempDir(), DefaultLimits())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := r.Close(); err != nil {
+		t.Fatal(err)
+	}
+	err = r.Record(Receipt{RequestID: "x", Method: "session.prompt", Outcome: OutcomeOK})
+	if !errors.Is(err, ErrNotEnabled) {
+		t.Fatalf("关闭后的写入应返回 ErrNotEnabled，得到 %v", err)
+	}
+	if errors.Is(err, os.ErrClosed) {
+		t.Fatal("不得再借用 os.ErrClosed 表达「未启用」")
+	}
+}
+
+// 写失败不能静默：回执是「命令是否执行过」的唯一依据，
+// 调用方必须能知道这一条没落盘（内部仍保留内存索引，去重不受影响）。
+func Test写失败向上返回但不影响内存索引(t *testing.T) {
+	dir := t.TempDir()
+	r, err := NewReceipts(dir, DefaultLimits())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	// 直接关掉底层文件，模拟写盘失败（目录被卸载、磁盘只读等）。
+	if err := r.file.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.Record(Receipt{RequestID: "r1", Method: "session.prompt", Outcome: OutcomeOK}); err == nil {
+		t.Fatal("写盘失败必须向上返回")
+	}
+	if _, ok := r.Lookup("r1"); !ok {
+		t.Fatal("写失败不应丢掉内存索引")
+	}
+	if !r.Stats()["degraded"].(bool) {
+		t.Fatal("写失败必须标记降级，供 /healthz 暴露")
 	}
 }
