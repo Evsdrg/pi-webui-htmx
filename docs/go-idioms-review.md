@@ -76,7 +76,7 @@
 
 ## 4. 逐项说明
 
-### G01 巨型分发函数（高） · 已在批次 K 修复（结构），响应类型化留待 K2
+### G01 巨型分发函数（高） · 已在批次 K1（结构）+ K2（类型）修复
 
 `dispatchCommon` 696 行、60 个 `case`，函数体内 22 处 `return map[string]any{…}`、14 处 `return map[string]bool{…}`。
 
@@ -581,7 +581,8 @@ dialogs.go:29/76         再把 raw 读出来使用（:113 是重新登记）
 | H | `acf5ad0` | G28：删除对内置 `printf` 的覆盖 | 无 |
 | I | `a00615a` | G02 `transport.Options` + G07 具名状态与具名布尔 + G12 nil 约定统一 | 两个协议布尔保留原名 |
 | J | `fa6bc38` | G03 + G29：`Encoding` 具名类型、serveUI 按契约拆三个函数、11 处样板改 `renderFragment` | 顺带修 history 400 → 200 |
-| K | 本次 | G01：`dispatchCommon` 按域拆成 8 个 `dispatch*`（`dispatch.go`），60 个 case 纯搬移 | 响应仍用匿名 map，见下 |
+| K1 | `504c1b3` | G01 结构：`dispatchCommon` 按域拆成 8 个 `dispatch*`（`dispatch.go`），60 个 case 纯搬移 | 无 |
+| K2 | `57bdf47` | G01 类型：36 处回执改具名类型（`responses.go` / `runtime/replies.go` / `management.ModelsReply`） | 用户文档与诊断 map 不动 |
 
 ### 批次 A
 
@@ -749,3 +750,18 @@ dialogs.go:29/76         再把 raw 读出来使用（:113 是重新登记）
 顺序有意保留：`worker.list` 与 `session.start` 仍在取 worker 之前处理——`start` 的任务正是创建那个进程。
 
 **事实来源仍然有三处**，这次没有增加也没有减少：`SupportedMethods`（能力清单）、`protocol.specs`（执行策略）、各域 switch（实际分发）。前两者由 `methods_test.go` 静态核对；第三者由 `Test能力清单与实际分发一致` 逐方法实际调用兜住（声明支持却未实现会红）。新增方法三处都要改，这一点写进了 `dispatch.go` 的包注释。
+
+### 批次 K2（G01 的类型部分）
+
+36 处回执从 `map[string]any{…}` 改成具名类型：`transport/responses.go` 28 个、`runtime/replies.go` 5 个、`management.ModelsReply` 1 个。**同一形状共用一个类型**（`session.steer` 与 `session.follow_up`、`config.models.discover` 与 `config.catalog` 等），想改必须一次改到全部。
+
+**两处顺带修掉的真问题**：
+
+1. `sessions.delete` 有两条回执路径：普通路径返回类型化的 `DeleteResult`，「连带停掉运行中会话」那条**手抄了一遍** `sessionId`/`trashed`/`path` 三个键。`DeleteResult` 一旦加字段，两条路径就会给出不同形状。现在是一个类型 + `omitempty` 标记。
+2. `session.set_model` / `session.cycle_model` / `session.fork` 在 `runtime` 里手拼模型对象与三个字段，同样是「键名只在字面量里」的问题。
+
+**明确不动的两类**（规则写进了文件头注释）：用户文档透传（`models.json` / `settings.json` / `trust.json` 的内容）与诊断快照（`/healthz` 的 stats）。前者的形状由用户决定，后者的采集面本身开放——类型化等于假装它们有固定模式。
+
+**验证**：把 36 个方法的键集合与改造前的 map 字面量逐一对照（脚本从旧源码解析键名、与新类型的 json 标签比对），**零差异**；新增 `responses_test.go` 把每个形状的键集合钉在产生它的方法旁边，`protocol.md` 收同一张表（有意重复：测试的职责是独立重述期望）。
+
+桥自建的**事件载荷**（`terminal_closed`、`terminal.output`）也一并类型化，因此分发路径上不再有任何 map 字面量；**Pi 自己的事件保持原样透传**，形状属于 Pi。
