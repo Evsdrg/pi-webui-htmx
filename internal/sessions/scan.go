@@ -19,6 +19,9 @@ import (
 // 出错时返回 (nil, err)，错误与原先内联在 History 里的完全一致。
 func (s *Store) scanFile(ctx context.Context, f *os.File, size int64, id, cwd string) (map[string]node, string, error) {
 	r := bufio.NewReader(io.LimitReader(f, size))
+	// 复用缓冲：本循环只在当次迭代内用 b（存的是 offset/size），
+	// 不把它交给任何人，因此复用是安全的。
+	var reader jsonl.Reusable
 	nodes := map[string]node{}
 	offset := int64(0)
 	last := ""
@@ -27,7 +30,7 @@ func (s *Store) scanFile(ctx context.Context, f *os.File, size int64, id, cwd st
 		if err := ctx.Err(); err != nil {
 			return nil, "", err
 		}
-		b, n, e := jsonl.Read(r, s.limits.LineBytes)
+		b, n, e := reader.Read(r, s.limits.LineBytes)
 		if errors.Is(e, io.EOF) || errors.Is(e, jsonl.ErrIncomplete) {
 			break
 		}

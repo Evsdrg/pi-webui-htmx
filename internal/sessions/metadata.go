@@ -24,12 +24,14 @@ func (x *Index) titleForPage(ctx context.Context, e indexEntry) (indexEntry, err
 	}
 	defer f.Close()
 	reader := bufio.NewReader(io.LimitReader(f, e.size))
+	// 复用缓冲：本循环只产出 string（标题/摘要），不保留原始字节。
+	var reusable jsonl.Reusable
 	var firstText string
 	for count := 0; count < x.limits.Entries; count++ {
 		if err := ctx.Err(); err != nil {
 			return e, err
 		}
-		line, _, err := jsonl.Read(reader, x.limits.LineBytes)
+		line, _, err := reusable.Read(reader, x.limits.LineBytes)
 		if errors.Is(err, io.EOF) || errors.Is(err, jsonl.ErrIncomplete) {
 			break
 		}

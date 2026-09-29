@@ -2,8 +2,10 @@ package sessions
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -199,5 +201,64 @@ func Test搜索超大行标记截断(t *testing.T) {
 	}
 	if len(out.Matches) == 0 {
 		t.Fatal("超大行之外的命中不应被一并丢掉")
+	}
+}
+
+// 同一文件里多条命中时，每条的摘要必须来自它自己那条记录。
+//
+// 分帧读取现在复用一块内部缓冲（jsonl.Reusable）。如果复用写错——比如
+// 忘记从 buf[:0] 开始，或者把缓冲交给了别人——表现就是「后面的记录覆写
+// 前面的内容」：条数仍然对，但摘要会重复或串到相邻记录上。这里用内容
+// 互不相同的多行把这条钉住。
+func TestSearch多条命中各自摘要不串行(t *testing.T) {
+	cwd := t.TempDir()
+	store, dir := newStore(t, cwd)
+	var body strings.Builder
+	parent := "null"
+	for i := 0; i < 30; i++ {
+		id := "u" + strconv.Itoa(i)
+		// 每条都含搜索词，但尾部标记各不相同且长度递增，
+		// 这样任何「复用缓冲残留」都会让摘要长度或尾部对不上。
+		fmt.Fprintf(&body, `{"type":"message","id":"%s","parentId":%s,"timestamp":"t","message":{"role":"user","content":"命中标记 MARK-%d-%s"}}`+"\n",
+			id, parent, i, strings.Repeat("x", 20+i))
+		parent = `"` + id + `"`
+	}
+	writeSearchSession(t, dir, cwd, "s1", body.String())
+
+	out, err := store.Search(context.Background(), "MARK-", DefaultSearchLimits())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(out.Matches) != 30 {
+		t.Fatalf("应有 30 条命中，得到 %d", len(out.Matches))
+	}
+	seen := map[string]bool{}
+	for i, m := range out.Matches {
+		wantID := "u" + strconv.Itoa(i)
+		if m.EntryID != wantID {
+			t.Fatalf("第 %d 条命中应来自 %s，得到 %s", i, wantID, m.EntryID)
+		}
+		wantTail := fmt.Sprintf("MARK-%d-%s", i, strings.Repeat("x", 20+i))
+		if !strings.Contains(m.Snippet, wantTail) {
+			t.Fatalf("第 %d 条摘要串行：期望含 %q，得到 %q", i, wantTail, m.Snippet)
+		}
+		if seen[m.Snippet] {
+			t.Fatalf("第 %d 条摘要与前面的重复：%q", i, m.Snippet)
+		}
+		seen[m.Snippet] = true
+	}
+
+	// 同一查询连跑两次也必须完全一致：复用缓冲不跨调用留状态。
+	again, err := store.Search(context.Background(), "MARK-", DefaultSearchLimits())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(again.Matches) != len(out.Matches) {
+		t.Fatalf("重复搜索条数不一致: %d vs %d", len(again.Matches), len(out.Matches))
+	}
+	for i := range out.Matches {
+		if again.Matches[i] != out.Matches[i] {
+			t.Fatalf("第 %d 条在重复搜索后不同:\n%+v\n%+v", i, out.Matches[i], again.Matches[i])
+		}
 	}
 }

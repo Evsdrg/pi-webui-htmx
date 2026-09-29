@@ -116,8 +116,10 @@ func (s *Store) searchFile(path, needle string, limits SearchLimits, out *Search
 			out.Matches[i].Cwd = cwd
 		}
 	}()
+	// 复用缓冲：命中只产出 string（摘要/标题），不保留原始字节。
+	var reader jsonl.Reusable
 	for {
-		b, _, e := jsonl.Read(r, limits.LineBytes)
+		b, _, e := reader.Read(r, limits.LineBytes)
 		if e != nil {
 			// 末尾半行忽略，那是 Pi 正在追加的正常状态。
 			// 超大行必须跳过并标记截断：静默跳过会让后续命中被漏掉，
