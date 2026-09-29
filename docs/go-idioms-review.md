@@ -108,7 +108,7 @@ func New(manager *run.Manager, store *sessions.Store, …, token, host string, p
 
 建议方向：定义 `type encoding string` 与常量；内容协商与鉴权在中间件完成，处理函数从上下文取，而不是层层传参；`serveUI` 按路由段拆表（当前它已是一长串 `if`）。
 
-### G04 错误链断裂（高）
+### G04 错误链断裂（高） · 已在批次 C 修复（只加能力），见第 10 节
 
 三处证据：
 
@@ -126,7 +126,7 @@ return PublicOrigin{}, errors.New("--public-origin 不是合法 URL：" + err.Er
 
 建议方向：`Error` 增加未导出 `cause error` 字段与 `Unwrap() error`，新增 `protocol.Wrap(code, message string, cause error) error`；未导出字段不影响 JSON 序列化与现有响应结构。随后把内部 `errors.New(句子 + 根因)`、`protocol.E(说明)` 之类的调用点按需改成 `Wrap`。
 
-### G05 回执写入失败被静默丢弃（中）
+### G05 回执写入失败被静默丢弃（中） · 已在批次 C 修复，见第 10 节
 
 ```go
 _ = s.receipts.Record(storage.Receipt{
@@ -138,7 +138,7 @@ Code Review Comments 对「忽略错误」的立场是要么处理、要么在�
 
 建议方向：保留「不阻塞命令」的行为，但把降级暴露出去——`MetricsSink` 已有 `EventDropped` 之类的先例，可加 `ReceiptDegraded()`；或在 `/healthz` 增加只读位。
 
-### G06 借用 `os.ErrClosed` 表意（低）
+### G06 借用 `os.ErrClosed` 表意（低） · 已在批次 C 修复，见第 10 节
 
 `internal/storage/receipts.go:325` 在存储未启用时返回 `os.ErrClosed`。`os.ErrClosed` 的语义是「文件已关闭」，用它表达「该功能未启用/已降级」会让 `errors.Is(err, os.ErrClosed)` 的调用方误解。
 
@@ -154,7 +154,7 @@ Effective Go 建议用具名类型承载取值域；Code Review Comments 建议�
 
 建议方向：`type status string` + 常量；`stop` 拆成 `stopForce`/`stopIfIdle`，或引入小 options 结构。
 
-### G08 匿名容器穿透层边界（中）
+### G08 匿名容器穿透层边界（中） · 已在批次 E 修复（渲染边界），见第 10 节
 
 典型签名：
 
@@ -202,7 +202,7 @@ nil 安全只覆盖一个方法，等于把「记得判空」的责任交给未�
 
 建议方向：二选一并写进包注释。倾向「UI 层显式判空」：`transport` 已经有两处守卫，补上 `fragmentIssue` 入口判断即可，同时删掉 `SetMagicContext` 的 nil 接收者特例（`transport.New` 改为条件注入）。
 
-### G13 假引用（低）
+### G13 假引用（低） · 已在批次 A 修复
 
 ```go
 var _ = json.Marshal          // internal/tunnel/client.go:270
@@ -213,7 +213,7 @@ var _ = pty.Winsize{}         // internal/terminal/proc_oth.go:13
 
 建议方向：删除。若要保留编译期断言，应写成有意义的断言（例如 `var _ io.Writer = (*Client)(nil)`）。
 
-### G14 无人使用的测试接缝（低）
+### G14 无人使用的测试接缝（低） · 已在批次 A 修复
 
 ```go
 // Now 供测试替换时间来源。
@@ -224,7 +224,7 @@ var Now = time.Now            // internal/presentation/presentation.go:995
 
 建议方向：删除；将来确实需要注入时间时用参数或 `Clock` 接口。
 
-### G15 不可达分支（低）
+### G15 不可达分支（低） · 已在批次 A 修复
 
 `events.Ring.Push`（`internal/events/ring.go:44`）：
 
@@ -243,7 +243,7 @@ for len(r.items) > r.maxItems || r.bytes > r.maxBytes {
 
 建议方向：删掉第一个分支，保留带注释的「单条超限也保留并记 dropped」分支。
 
-### G16 缺包注释（低）
+### G16 缺包注释（低） · 已在批次 A 修复
 
 18 个包中 17 个有 `// Package xxx` 注释，只有 `internal/transport` 没有。`go.dev/doc/comment` 要求包注释以 `Package 包名` 开头，`go doc` 才会把它显示为包说明。
 
@@ -255,7 +255,7 @@ for len(r.items) > r.maxItems || r.bytes > r.maxBytes {
 - `internal/terminal/terminal_test.go:163` 用 `os.Setenv` + `defer os.Setenv` 恢复，应换成 `t.Setenv`（Go 1.17+，自动恢复且禁止并行）。
 - **正面结论**：测试里没有在 goroutine 内调用 `t.Fatal`。我用括号配对脚本核对了 6 个疑似点，全部是「`go func` 一行 + 主 goroutine 里 `select`」的误报。这类问题在这个仓库里不存在。
 
-### G18 缺少静态检查器（中）
+### G18 缺少静态检查器（中） · 已在批次 B 修复（staticcheck v0.8.1 进 CI）
 
 CI（`.github/workflows/check.yml`）只跑 `gofmt -l`、`go vet ./...`、`go test -race -count=1 ./...`。G13、G14、G15 都能在这套检查下存活，说明覆盖有缺口：G14（包级未使用变量）确定在 staticcheck `unused` 的默认检测范围，G13/G15 是否也能被自动发现需要实际跑一遍确认（本次环境未安装这两个工具，所以不给结论）。
 
@@ -393,7 +393,7 @@ func toAnyMaps(v any) []map[string]any {
 
 `serveUI`（381 行）里 `s.fragmentIssue(w, encoding, …)` 出现 25 次、`writeHTML(w, encoding, html)` 16 次，同一段「渲染 → 失败渲染说明 → 写回 → `return true`」重复 16 次。抽一个 `serveFragment(w, encoding, func() (string, error)) bool` 就能消掉，同时把 `serveUI` 从 381 行降下来。与 G03 是同处代码的两个视角，一起做。
 
-**G30 无价值的包装函数（低）**
+**G30 无价值的包装函数（低）** · 已在批次 A 修复
 
 ```19:19:internal/sessions/index.go
 func jsonUnmarshal(b []byte, v any) error { return json.Unmarshal(b, v) }
