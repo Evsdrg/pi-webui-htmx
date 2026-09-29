@@ -69,11 +69,11 @@ func TestGit空仓库与特殊文件名(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if status["branch"] != "main" {
-		t.Fatalf("空仓库分支错误：%v", status["branch"])
+	if status.Branch != "main" {
+		t.Fatalf("空仓库分支错误：%v", status.Branch)
 	}
-	files := status["files"].([]map[string]string)
-	if len(files) != 1 || files[0]["path"] != name {
+	files := status.Files
+	if len(files) != 1 || files[0].Path != name {
 		t.Fatalf("特殊文件名被损坏：%v", files)
 	}
 }

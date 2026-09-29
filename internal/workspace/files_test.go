@@ -166,11 +166,11 @@ func TestGit状态与diff(t *testing.T) {
 	if err != nil {
 		t.Fatalf("git 状态失败: %v", err)
 	}
-	if status["clean"].(bool) {
-		t.Fatalf("有未跟踪文件时应判定为不干净: %v", status)
+	if status.Clean {
+		t.Fatalf("有未跟踪文件时应判定为不干净: %+v", status)
 	}
-	files, _ := status["files"].([]map[string]string)
-	if len(files) != 1 || files[0]["path"] != "new.txt" {
+	files := status.Files
+	if len(files) != 1 || files[0].Path != "new.txt" {
 		t.Fatalf("变更文件异常: %v", files)
 	}
 	// 未暂存时 diff 为空，属正常行为。

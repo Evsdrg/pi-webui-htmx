@@ -187,21 +187,41 @@ func gitQueryError(err error) error {
 	return err
 }
 
+// GitFile 是 worktree 里一条变更记录。
+type GitFile struct {
+	Status string `json:"status"`
+	Path   string `json:"path"`
+	// From 是被重命名/复制的源路径；非重命名项为空。
+	// 保留它是因为 git.status 的 JSON 一直带这个键。
+	From string `json:"from,omitempty"`
+}
+
+// GitStatus 是一次 worktree 状态查询的结果。
+// JSON 标签与既有的 map 形态一致，因此 git.status 的对外响应不变。
+type GitStatus struct {
+	Branch    string    `json:"branch"`
+	Clean     bool      `json:"clean"`
+	Truncated bool      `json:"truncated"`
+	Files     []GitFile `json:"files"`
+}
+
 // GitStatus 用 NUL 分帧解析状态，同时覆盖空仓库和 detached HEAD。
-func (f *Files) GitStatus(ctx context.Context, path string) (map[string]any, error) {
+func (f *Files) GitStatus(ctx context.Context, path string) (GitStatus, error) {
 	ctx, cancel := context.WithTimeout(ctx, gitTimeout)
 	defer cancel()
 	dir, err := f.gitRepository(ctx, path)
 	if err != nil {
-		return nil, gitQueryError(err)
+		return GitStatus{}, gitQueryError(err)
 	}
 	branch := ""
-	files := []map[string]string{}
-	var rename map[string]string
+	files := []GitFile{}
+	var renameIndex = -1
 	parser := &nulRecords{consume: func(record string) bool {
-		if rename != nil {
-			rename["from"] = record
-			rename = nil
+		if renameIndex >= 0 {
+			// NUL 分帧里 rename/copy 的源路径是紧随其后的一条记录：
+			// 归到上一条而不是新增一行。
+			files[renameIndex].From = record
+			renameIndex = -1
 			return true
 		}
 		if strings.HasPrefix(record, "## ") {
@@ -220,28 +240,28 @@ func (f *Files) GitStatus(ctx context.Context, path string) (map[string]any, err
 		if len(files) >= f.limits.MaxEntries {
 			return false
 		}
-		item := map[string]string{"status": strings.TrimSpace(record[:2]), "path": record[3:]}
-		files = append(files, item)
+		files = append(files, GitFile{Status: strings.TrimSpace(record[:2]), Path: record[3:]})
 		if strings.ContainsAny(record[:2], "RC") {
-			rename = item
+			renameIndex = len(files) - 1
 		}
 		return true
 	}}
 	truncated, code, err := f.runGit(ctx, dir, gitStatusBytes, parser, "status", "--porcelain=v1", "-z", "--branch", "--untracked-files=all", "--ignore-submodules=dirty")
 	if err != nil {
-		return nil, err
+		return GitStatus{}, err
 	}
 	if code != 0 {
-		return nil, protocol.E("pi_error", "Git 状态查询失败")
+		return GitStatus{}, protocol.E("pi_error", "Git 状态查询失败")
 	}
-	if rename != nil {
-		files = files[:len(files)-1]
+	if renameIndex >= 0 {
+		// 只拿到 rename 的源路径、没拿到目标路径：这条不完整，丢掉并标记截断。
+		files = files[:renameIndex]
 		truncated = true
 	}
 	if branch == "" {
-		return nil, protocol.E("limit_exceeded", "Git 分支信息不完整")
+		return GitStatus{}, protocol.E("limit_exceeded", "Git 分支信息不完整")
 	}
-	return map[string]any{"branch": branch, "clean": len(files) == 0 && !truncated, "files": files, "truncated": truncated}, nil
+	return GitStatus{Branch: branch, Clean: len(files) == 0 && !truncated, Files: files, Truncated: truncated}, nil
 }
 
 func (f *Files) GitDiff(ctx context.Context, path string, staged bool, maxBytes int) (string, bool, error) {

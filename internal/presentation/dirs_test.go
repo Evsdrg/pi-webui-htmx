@@ -9,9 +9,9 @@ import (
 // 导航，只给名字的话点击后无法知道去了哪里。
 func Test目录选择器只列子目录且带完整路径(t *testing.T) {
 	renderer := testRenderer(t)
-	html, err := renderer.RenderDirs("/srv/projects", "/opt", []map[string]string{
-		{"name": "pi", "path": "/srv/projects/pi"},
-		{"name": "zcode", "path": "/srv/projects/zcode"},
+	html, err := renderer.RenderDirs("/srv/projects", "/opt", []DirRow{
+		{Name: "pi", Path: "/srv/projects/pi"},
+		{Name: "zcode", Path: "/srv/projects/zcode"},
 	}, false)
 	if err != nil {
 		t.Fatalf("渲染失败：%v", err)
@@ -34,8 +34,8 @@ func Test目录选择器只列子目录且带完整路径(t *testing.T) {
 // 浏览，给出一个越出根的按钮会诱导用户点到沙箱外。
 func Test位于根时不提供上一级(t *testing.T) {
 	renderer := testRenderer(t)
-	html, err := renderer.RenderDirs("/srv/projects", "", []map[string]string{
-		{"name": "pi", "path": "/srv/projects/pi"},
+	html, err := renderer.RenderDirs("/srv/projects", "", []DirRow{
+		{Name: "pi", Path: "/srv/projects/pi"},
 	}, false)
 	if err != nil {
 		t.Fatalf("渲染失败：%v", err)

@@ -31,9 +31,9 @@ func testRenderer(t *testing.T) *Renderer {
 // 列表被截断时不能宣称「工作区干净」，否则用户会以为没有未提交改动。
 func TestGit截断时不宣称工作区干净(t *testing.T) {
 	renderer := testRenderer(t)
-	html, err := renderer.RenderGitStatus(map[string]any{
-		"branch": "main", "clean": true, "truncated": true,
-		"files": []map[string]string{{"status": "M", "path": "a.go"}},
+	html, err := renderer.RenderGitStatus(GitStatus{
+		Branch: "main", Clean: true, Truncated: true,
+		Files: []GitFileRow{{Status: "M", Path: "a.go"}},
 	})
 	if err != nil {
 		t.Fatalf("渲染失败：%v", err)
@@ -49,7 +49,7 @@ func TestGit截断时不宣称工作区干净(t *testing.T) {
 // 未截断且无变更时才显示「工作区干净」。
 func TestGit干净状态(t *testing.T) {
 	renderer := testRenderer(t)
-	html, err := renderer.RenderGitStatus(map[string]any{"branch": "main", "clean": true, "files": []any{}})
+	html, err := renderer.RenderGitStatus(GitStatus{Branch: "main", Clean: true})
 	if err != nil {
 		t.Fatalf("渲染失败：%v", err)
 	}
@@ -62,8 +62,8 @@ func TestGit干净状态(t *testing.T) {
 // 标题与目录必须进 HTML，否则点开后又退化成会话 ID（旧缺陷）。
 func Test搜索片段包含标题与目录(t *testing.T) {
 	renderer := testRenderer(t)
-	html, err := renderer.RenderSearch("问题", []map[string]any{
-		{"sessionId": "s1", "entryId": "e9", "title": "示例会话", "cwd": "/repo", "snippet": "命中的这句话"},
+	html, err := renderer.RenderSearch("问题", []SearchHit{
+		{SessionID: "s1", EntryID: "e9", Title: "示例会话", Cwd: "/repo", Snippet: "命中的这句话"},
 	})
 	if err != nil {
 		t.Fatalf("渲染失败：%v", err)

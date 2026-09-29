@@ -142,10 +142,8 @@ func (s *Server) statsMeta(ctx context.Context, worker *run.Worker) presentation
 	}
 	if cwd := worker.Info().Cwd; cwd != "" {
 		meta.Cwd = cwd
-		if status, err := s.files.GitStatus(ctx, cwd); err == nil {
-			if branch, ok := status["branch"].(string); ok {
-				meta.Branch = branch
-			}
+		if status, err := s.files.GitStatus(ctx, cwd); err == nil && status.Branch != "" {
+			meta.Branch = status.Branch
 		}
 	}
 	return meta

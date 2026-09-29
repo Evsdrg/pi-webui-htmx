@@ -24,7 +24,7 @@ func TestGit状态截断及响应转义预算(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if status["truncated"] != true || status["clean"] != false {
+	if !status.Truncated || status.Clean {
 		t.Fatal("截断状态不明确")
 	}
 	body, err := json.Marshal(status)
@@ -35,8 +35,8 @@ func TestGit状态截断及响应转义预算(t *testing.T) {
 	if err != nil || !index.Truncated || len(index.Matches) == 0 {
 		t.Fatalf("Git 索引未传递截断状态：%+v %v", index, err)
 	}
-	for _, file := range status["files"].([]map[string]string) {
-		if _, err := os.Stat(filepath.Join(root, file["path"])); err != nil {
+	for _, file := range status.Files {
+		if _, err := os.Stat(filepath.Join(root, file.Path)); err != nil {
 			t.Fatal("状态包含半条文件名")
 		}
 	}
@@ -55,14 +55,14 @@ func TestGit恰好达到条目上限不误报截断(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if status["truncated"] != false || len(status["files"].([]map[string]string)) != 5 {
+	if status.Truncated || len(status.Files) != 5 {
 		t.Fatal("恰好达到上限被误报截断")
 	}
 	if err := os.WriteFile(filepath.Join(root, "sixth"), nil, 0600); err != nil {
 		t.Fatal(err)
 	}
 	status, err = f.GitStatus(context.Background(), root)
-	if err != nil || status["truncated"] != true || len(status["files"].([]map[string]string)) != 5 {
+	if err != nil || !status.Truncated || len(status.Files) != 5 {
 		t.Fatalf("条目上限失效：%v", err)
 	}
 }
@@ -96,8 +96,8 @@ func TestGit重命名文件保留原名(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	files := status["files"].([]map[string]string)
-	if len(files) != 1 || files[0]["path"] != "new name.md" || files[0]["from"] != "README.md" {
+	files := status.Files
+	if len(files) != 1 || files[0].Path != "new name.md" || files[0].From != "README.md" {
 		t.Fatalf("重命名分帧错误：%v", files)
 	}
 }

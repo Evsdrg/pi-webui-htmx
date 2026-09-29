@@ -346,7 +346,7 @@ CI（`.github/workflows/check.yml`）只跑 `gofmt -l`、`go vet ./...`、`go te
 
 **这条不能一刀切**：`pi/client.go` 把读到的字节向上交出（`json.RawMessage(b)` → `runtime/manager.go:585` 存进 `pendingDialogs`，以及响应帧的 `frame.Data`），而读循环立刻去读下一帧——复用缓冲会静默覆写它们。可安全改的只有不保留字节的扫描类调用点，安全/危险清单见 §6.1。
 
-**G24 喂渲染层的 JSON 往返（中）**
+**G24 喂渲染层的 JSON 往返（中）** —— 已在批次 E 修复，见第 10 节。
 
 ```846:846:internal/transport/server.go
 func toAnyMaps(v any) []map[string]any {
@@ -573,7 +573,8 @@ dialogs.go:29/76         再把 raw 读出来使用（:113 是重新登记）
 | A | `b59f747` | G13/G14/G15/G16/G30 + `t.Setenv` | 无 |
 | B | `7103f6a` | G18：接入 staticcheck v0.8.1、清理基线 | 见下 |
 | C | `eb70488` | G04 能力 + G05 + G06 | 见下 |
-| D | 本次 | G21：三处「拿失败当形状判断」统一为首字节判定 | 无 |
+| D | `6dd4a38` | G21：三处「拿失败当形状判断」统一为首字节判定 | 无 |
+| E | 本次 | G24 + G08：五个渲染入口改收具名行，`git.status` 也类型化 | 无 |
 
 ### 批次 A
 
@@ -611,3 +612,19 @@ dialogs.go:29/76         再把 raw 读出来使用（:113 是重新登记）
 同一个提交顺带消掉了第 5.2 节记录的两处最深嵌套（`metadata.go` 由 7 层降到 3 层）。
 
 新增回归：形状判定本身（含前导空白、`null`、空值）、`flattenContent` 与 `scanLazyBlocks` 在字符串/数组/null/对象四种输入下的行为。
+
+### 批次 E
+
+五个渲染入口（`RenderFiles`/`RenderDirs`/`RenderPackages`/`RenderSearch`/`RenderGitStatus`）改收具名行类型，`transport` 侧用四个显式转换（`fileRows`/`packageRows`/`searchHits`/`gitStatus`）替代 `toAnyMaps` 的 JSON 往返；`workspace.GitStatus` 也从 `map[string]any` 变成结构体（JSON 标签保持一致，`git.status` 对外响应不变，连 `from` 键都留着）。
+
+实测同一个 500 项转换（临时基准，测完即删）：
+
+| 指标 | `toAnyMaps`（改前） | `fileRows`（改后） |
+|---|---|---|
+| 时间 | 589,745 ns/op | **4,912 ns/op** |
+| 分配字节 | 359,921 B/op | **24,576 B/op** |
+| 分配次数 | 7,017 allocs/op | **1 alloc/op** |
+
+顺带被 staticcheck 指出的两个死函数（`boolField`、`intField`）随废弃的 map 路径一起删除；`stringField`/`recordOf`/`anyList` 仍被模型面板、统计与分支树使用，保留。
+
+`events.Ring.Stats()` 保持 `map[string]any`：它只用于测试与诊断，不跨渲染边界，类型化收益有限。

@@ -702,53 +702,48 @@ type PackagesData struct {
 }
 
 // RenderPackages 渲染已安装资源清单。
-func (r *Renderer) RenderPackages(packages []map[string]any) (string, error) {
-	rows := make([]PackageRow, 0, len(packages))
-	for _, p := range packages {
-		rows = append(rows, PackageRow{
-			Name:      stringField(p, "name"),
-			Source:    stringField(p, "source"),
-			Version:   stringField(p, "version"),
-			Latest:    stringField(p, "latest"),
-			HasUpdate: boolField(p, "hasUpdate"),
-			Disabled:  boolField(p, "disabled"),
-			Error:     stringField(p, "error"),
-		})
-	}
-	return r.execute("packages.html", PackagesData{Packages: rows})
+//
+// 入参是具名行而不是 map：这两层之间曾经靠 map 传递，调用方用 JSON 往返
+// 把结构体转成 map，这里再按键取值拼回类型——绕一圈没有任何收益，
+// 而且键名拼错只会在渲染时表现为空白。类型化入参让编译器做这件事。
+func (r *Renderer) RenderPackages(packages []PackageRow) (string, error) {
+	return r.execute("packages.html", PackagesData{Packages: packages})
 }
 
 // FileRow 是文件浏览的一行。
+// Size 是原始字节数，格式化由渲染层负责（模板只展示结果）。
 type FileRow struct {
 	Name  string
 	Path  string
 	IsDir bool
-	Size  string
+	Size  int64
 }
 
 // FilesData 驱动文件浏览。
 type FilesData struct {
 	Root      string
-	Entries   []FileRow
+	Entries   []fileRowView
 	Truncated bool
 }
 
 // RenderFiles 渲染文件浏览片段。
-func (r *Renderer) RenderFiles(root string, entries []map[string]any, truncated bool) (string, error) {
-	rows := make([]FileRow, 0, len(entries))
+func (r *Renderer) RenderFiles(root string, entries []FileRow, truncated bool) (string, error) {
+	rows := make([]fileRowView, 0, len(entries))
 	for _, e := range entries {
-		row := FileRow{
-			Name:  stringField(e, "name"),
-			Path:  stringField(e, "path"),
-			IsDir: boolField(e, "isDir"),
-			Size:  formatSize(intField(e, "size")),
-		}
-		if row.Name == "" {
+		if e.Name == "" {
 			continue
 		}
-		rows = append(rows, row)
+		rows = append(rows, fileRowView{Name: e.Name, Path: e.Path, IsDir: e.IsDir, Size: formatSize(int(e.Size))})
 	}
 	return r.execute("files.html", FilesData{Root: root, Entries: rows, Truncated: truncated})
+}
+
+// fileRowView 是模板实际消费的行：与 FileRow 相比只把字节数换成可读字符串。
+type fileRowView struct {
+	Name  string
+	Path  string
+	IsDir bool
+	Size  string
 }
 
 // DirRow 是目录选择器里的一行。
@@ -769,14 +764,13 @@ type DirsData struct {
 }
 
 // RenderDirs 渲染目录选择器的子目录列表。
-func (r *Renderer) RenderDirs(path, parent string, dirs []map[string]string, truncated bool) (string, error) {
+func (r *Renderer) RenderDirs(path, parent string, dirs []DirRow, truncated bool) (string, error) {
 	rows := make([]DirRow, 0, len(dirs))
 	for _, d := range dirs {
-		row := DirRow{Name: d["name"], Path: d["path"]}
-		if row.Name == "" || row.Path == "" {
+		if d.Name == "" || d.Path == "" {
 			continue
 		}
-		rows = append(rows, row)
+		rows = append(rows, d)
 	}
 	return r.execute("dirs.html", DirsData{Path: path, Parent: parent, Dirs: rows, Truncated: truncated})
 }
@@ -800,19 +794,22 @@ type GitStatusData struct {
 }
 
 // RenderGitStatus 渲染 Git 变更片段。
-func (r *Renderer) RenderGitStatus(status map[string]any) (string, error) {
-	rows := make([]GitFileRow, 0)
-	for _, item := range anyList(status["files"]) {
-		entry := recordOf(item)
-		rows = append(rows, GitFileRow{Status: stringField(entry, "status"), Path: stringField(entry, "path")})
-	}
+func (r *Renderer) RenderGitStatus(status GitStatus) (string, error) {
 	return r.execute("git-status.html", GitStatusData{
-		Branch:    stringField(status, "branch"),
-		Clean:     boolField(status, "clean"),
-		Truncated: boolField(status, "truncated"),
-		Shown:     len(rows),
-		Files:     rows,
+		Branch:    status.Branch,
+		Clean:     status.Clean,
+		Truncated: status.Truncated,
+		Shown:     len(status.Files),
+		Files:     status.Files,
 	})
+}
+
+// GitStatus 是 Git 变更列表的渲染输入，由调用方从 worktree 状态填充。
+type GitStatus struct {
+	Branch    string
+	Clean     bool
+	Truncated bool
+	Files     []GitFileRow
 }
 
 // SearchHit 是一次全文搜索命中。
@@ -832,18 +829,8 @@ type SearchData struct {
 
 // RenderSearch 渲染搜索结果。命中片段本身就是数据到标记的映射，
 // 放在前端拼 DOM 既重复又不安全。
-func (r *Renderer) RenderSearch(query string, hits []map[string]any) (string, error) {
-	rows := make([]SearchHit, 0, len(hits))
-	for _, hit := range hits {
-		rows = append(rows, SearchHit{
-			SessionID: stringField(hit, "sessionId"),
-			EntryID:   stringField(hit, "entryId"),
-			Title:     stringField(hit, "title"),
-			Cwd:       stringField(hit, "cwd"),
-			Snippet:   stringField(hit, "snippet"),
-		})
-	}
-	return r.execute("search.html", SearchData{Query: query, Results: rows})
+func (r *Renderer) RenderSearch(query string, hits []SearchHit) (string, error) {
+	return r.execute("search.html", SearchData{Query: query, Results: hits})
 }
 
 // BranchRow 是分支树的一行。
@@ -960,21 +947,6 @@ func anyList(value any) []any {
 		return out
 	}
 	return nil
-}
-
-func boolField(m map[string]any, key string) bool {
-	v, _ := m[key].(bool)
-	return v
-}
-
-func intField(m map[string]any, key string) int {
-	switch v := m[key].(type) {
-	case float64:
-		return int(v)
-	case int:
-		return v
-	}
-	return 0
 }
 
 // formatSize 把字节数格式化成短字符串。
