@@ -3,6 +3,7 @@ package magiccontext
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"strings"
 )
 
@@ -33,32 +34,38 @@ var Kinds = []struct {
 // 各分区的列表查询。全部写死，末尾统一是 LIMIT ? OFFSET ?，
 // 由 List 代入 offset 与 limit。
 //
-// 正文一律截断后返回（substr），完整正文单独给 FullContent 用：
+// 正文一律截断后返回（substr），完整正文单独给 Detail 用：
 // 一次取回几百行完整记忆会把片段响应撑到几百 KB，而列表视图只需要开头。
 var listQueries = map[Kind]string{
 	KindMemories: `SELECT id, category, scope, importance, shareable,
 		substr(content, 1, 240) AS preview, LENGTH(content) AS content_len,
 		source_type, seen_count, retrieval_count, updated_at
-		FROM memories WHERE status='active' ORDER BY updated_at DESC LIMIT ? OFFSET ?`,
+		FROM memories WHERE status='active' ORDER BY updated_at DESC, id DESC LIMIT ? OFFSET ?`,
 	KindCompartments: `SELECT id, session_id, sequence, title, episode_type, importance,
 		substr(content, 1, 240) AS preview, LENGTH(content) AS content_len,
 		start_message, end_message, harness, created_at
-		FROM compartments ORDER BY created_at DESC LIMIT ? OFFSET ?`,
+		FROM compartments ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?`,
 	KindDirectives: `SELECT id, substr(content, 1, 240) AS preview, LENGTH(content) AS content_len,
-		status, created_at, updated_at FROM user_memories ORDER BY updated_at DESC LIMIT ? OFFSET ?`,
+		status, created_at, updated_at FROM user_memories ORDER BY updated_at DESC, id DESC LIMIT ? OFFSET ?`,
 	KindNotes: `SELECT id, type, status, substr(content, 1, 240) AS preview, LENGTH(content) AS content_len,
 		session_id, project_path, surface_condition, created_at, updated_at
-		FROM notes ORDER BY updated_at DESC LIMIT ? OFFSET ?`,
+		FROM notes ORDER BY updated_at DESC, id DESC LIMIT ? OFFSET ?`,
 	KindDreams: `SELECT id, project_path, started_at, finished_at, tasks_succeeded, tasks_failed,
-		smart_notes_surfaced, smart_notes_pending, memory_changes_json
-		FROM dream_runs ORDER BY started_at DESC LIMIT ? OFFSET ?`,
+		smart_notes_surfaced, smart_notes_pending,
+		substr(memory_changes_json, 1, 240) AS preview, LENGTH(memory_changes_json) AS content_len
+		FROM dream_runs ORDER BY started_at DESC, id DESC LIMIT ? OFFSET ?`,
 }
 
 // Row 是列表里的一行。字段按各分区查询的列名取，缺失即为零值。
 type Row map[string]any
 
 // ID 返回行主键的字符串形式。
-func (r Row) ID() string { return text(r["id"]) }
+func (r Row) ID() string {
+	if value := text(r["id"]); value != "" {
+		return value
+	}
+	return strconv.FormatInt(int64(number(r["id"])), 10)
+}
 
 // Text 取一个字符串字段。
 func (r Row) Text(key string) string { return text(r[key]) }
@@ -184,22 +191,26 @@ func (s *Store) Detail(ctx context.Context, kind Kind, id int64) (string, error)
 	if s.dbPath == "" {
 		return "", ErrUnavailable
 	}
-	known := false
-	for _, entry := range Kinds {
-		if entry.Key == kind {
-			known = true
-			break
-		}
+	queries := map[Kind]string{
+		KindMemories:     "SELECT CASE WHEN length(content)<=65536 THEN content END AS content, length(content) AS n FROM memories WHERE status='active' AND id = ?",
+		KindCompartments: "SELECT CASE WHEN length(content)<=65536 THEN content END AS content, length(content) AS n FROM compartments WHERE id = ?",
+		KindDirectives:   "SELECT CASE WHEN length(content)<=65536 THEN content END AS content, length(content) AS n FROM user_memories WHERE id = ?",
+		KindNotes:        "SELECT CASE WHEN length(content)<=65536 THEN content END AS content, length(content) AS n FROM notes WHERE id = ?",
+		KindDreams:       "SELECT CASE WHEN length(memory_changes_json)<=65536 THEN memory_changes_json END AS content, length(memory_changes_json) AS n FROM dream_runs WHERE id = ?",
 	}
-	if !known {
-		return "", fmt.Errorf("未知分区 %q", kind)
+	query, known := queries[kind]
+	if !known || id <= 0 {
+		return "", fmt.Errorf("分区或条目ID无效")
 	}
-	rows, err := s.query(ctx, fmt.Sprintf("SELECT content FROM %s WHERE id = ?", string(kind)), intArg(int(id)))
+	rows, err := s.query(ctx, query, arg{isNum: true, num: id})
 	if err != nil {
 		return "", err
 	}
 	if len(rows) == 0 {
-		return "", nil
+		return "", fmt.Errorf("条目不存在或已归档")
+	}
+	if number(rows[0]["n"]) > 65536 {
+		return "", fmt.Errorf("正文超过65536字符的预览上限")
 	}
 	return text(rows[0]["content"]), nil
 }

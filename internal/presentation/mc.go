@@ -3,6 +3,7 @@ package presentation
 import (
 	"context"
 	"fmt"
+	"net/url"
 	"strconv"
 	"time"
 
@@ -27,7 +28,9 @@ type MCData struct {
 	Project  string
 	Projects []MCProject
 	// Notice 在库不可用等情况下替代列表显示。
-	Notice string
+	Notice  string
+	MoreURL string
+	Append  bool
 }
 
 // MCKind 是面板上的一个分区入口。
@@ -41,6 +44,7 @@ type MCKind struct {
 // MCRow 是列表里的一行。字段按分区不同而不同，模板按名字取。
 type MCRow struct {
 	ID       string
+	Kind     string
 	Title    string
 	Preview  string
 	Category string
@@ -72,15 +76,19 @@ type MCProject struct {
 	Current bool
 }
 
-// RenderMC 渲染 magic-context 面板片段。
-//
-// 这个库是用户的跨会话记忆，敏感度高于单个会话，所以：
-//   - 列表只给截断后的开头（桥侧 substr 240），全文要显式展开；
-//   - 面板常驻显示数据来源目录，不含混「这可能是本地缓存」的错觉；
-//   - 库不可用时给一句可读原因，不伪造空态。
-func (r *Renderer) RenderMC(ctx context.Context, kind magiccontext.Kind, offset, limit int, category, project string) (string, error) {
+// RenderMCContent 渲染显式展开的正文，读取器负责分区、身份和长度校验。
+func (r *Renderer) RenderMCContent(ctx context.Context, kind magiccontext.Kind, id int64) (string, error) {
+	content, err := r.mc.Detail(ctx, kind, id)
+	if err != nil {
+		return "", err
+	}
+	return r.execute("mc-content.html", content)
+}
+
+// RenderMC 渲染只读面板：列表截断正文，展开单独读取；不可用时明确原因。
+func (r *Renderer) RenderMC(ctx context.Context, kind magiccontext.Kind, offset, limit int, category, project string, appendRows bool) (string, error) {
 	status := r.mc.Status(ctx)
-	data := MCData{Kind: string(kind), Offset: offset, Limit: limit, Status: status, Category: category, Project: project}
+	data := MCData{Append: appendRows, Kind: string(kind), Offset: offset, Limit: limit, Status: status, Category: category, Project: project}
 	for _, entry := range magiccontext.Kinds {
 		data.Kinds = append(data.Kinds, MCKind{Key: string(entry.Key), Label: entry.Label, Hint: entry.Hint, Current: entry.Key == kind})
 	}
@@ -99,6 +107,10 @@ func (r *Renderer) RenderMC(ctx context.Context, kind magiccontext.Kind, offset,
 		return r.execute("mc.html", data)
 	}
 	data.Total = total
+	if offset+len(rows) < total && len(rows) > 0 {
+		q := url.Values{"kind": {string(kind)}, "offset": {strconv.Itoa(offset + len(rows))}, "limit": {strconv.Itoa(limit)}, "category": {category}, "project": {project}, "append": {"1"}}
+		data.MoreURL = "/ui/mc?" + q.Encode()
+	}
 	for _, row := range rows {
 		data.Rows = append(data.Rows, r.mcRow(kind, row))
 	}
@@ -124,7 +136,7 @@ func (r *Renderer) RenderMC(ctx context.Context, kind magiccontext.Kind, offset,
 // 曾经把分类同时当标题又当标签，结果每行都是「ARCHITECTURE · ARCHITECTURE」，
 // 收起态一条记忆都分不出来。
 func (r *Renderer) mcRow(kind magiccontext.Kind, row magiccontext.Row) MCRow {
-	out := MCRow{ID: row.ID()}
+	out := MCRow{ID: row.ID(), Kind: string(kind)}
 	out.Preview = row.Text("preview")
 	out.FullLen = row.Int("content_len")
 	switch kind {

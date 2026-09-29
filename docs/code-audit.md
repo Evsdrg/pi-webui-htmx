@@ -74,20 +74,20 @@
 | B45 | 中 | Bridge | Pi Web 为 Pi 导出的 HTML 把 `sortChildren/mapNodes/markActive` 改为迭代实现，专门修复 5000+ 深树栈溢出；桥直接透传 Pi `export_html` 文件，没有同等处理，长线性会话导出后浏览器仍可能栈溢出。 | `internal/runtime/session_ops.go`；`pi-web/app/api/sessions/[id]/export/route.ts` |
 | B46 | ✅ 已修 | Relay | **修复：** Cookie 属主改 base64url 编码，彻底消除 '.' 分隔符冲突；同时限定 owner/deviceId 字符集（拒绝控制字符与空白，允许 '.'）。 | `internal/relay/users.go`；`users_persist_test.go` |
 | T01 | ✅ 已修 | Tests | 假 Pi 改为每个测试进程独占临时目录；sync.Once 仅复用进程内产物，runtime/transport/testutil 在 TestMain 统一清理。并发构建及编译失败清理测试通过，恢复旧固定路径后反例按预期失败。 | `internal/testutil/fakepi.go`；三个包的 `main_test.go`/`TestMain`；P0 |
-| U06 | ✅ 已修 | UI | **修复：** 文件列表的守卫移到 htmx `beforeSwap`，迟到响应在交换前就被拒。 | `src/modules/workspace.ts` |
+| U06 | ✅ 已修 | UI | 文件列表先按每个xhr的目标/会话代次在beforeOnLoad拒绝旧响应，再保留路径守卫；本地目录意图也有revision。 | `src/modules/fragment-requests.ts`、`workspace.ts` |
 | U07 | ✅ 已修 | UI | **修复：** 惰性图片在 `load` 后 `revokeObjectURL`，不再把 blob 留到页面卸载。 | `src/modules/lazy.ts` |
 | U08 | ✅ 已修 | UI | **修复：** `flatten` 改为显式栈迭代（栈内带 depth），前序结果不变；20 万层线性树回归稳定复现原栈溢出。 | `src/modules/branch.ts`；`tests/unit/branch.test.ts` |
 | U09 | ✅ 已修 | UI | **修复：** `refresh()` 即使在途补全请求失效，debounce 窗口内的旧候选不再写入新菜单。 | `src/modules/mention.ts`；`tests/unit/mention.test.ts` |
-| U10 | ⚠️ 部分 | UI | **已做：** `gotoLeaf` 发起时登记归属，历史请求同样登记；`beforeSwap` 同时校验会话 ID 与代次，切换/新建导致的旧响应会被拒。**仍缺：** A→B→A 同 URL 的迟到响应在前端无法仅凭 URL+当前代次区分，需要请求自带代次标记（见下）。 | `src/modules/workbench.ts`；`tests/unit/workbench.test.ts` |
+| U10 | ✅ 已修 | UI | 每个xhr登记发起epoch，A→B→A不再仅比较URL与最新pendingHistory；切会话取消在途读取，beforeOnLoad拦截旧响应。 | `src/modules/fragment-requests.ts`；`tests/unit/fragment_requests.test.ts` |
 | U11 | ✅ 已修 | UI | **修复：** 排队模式回读改看 `followUpMode`（选 followUp 时桥改的是这个字段），缺失时不猜、保持当前选择。 | `src/modules/workbench.ts`；`tests/unit/workbench.test.ts` |
 | U12 | ✅ 已修 | UI | **修复：** 关闭文件预览改用 `elOrNull`，图片预览顶掉 `#file-content` 后不再抛异常。 | `src/modules/workspace.ts` |
 | U13 | ✅ 已修 | UI | **修复：** `send`/`sendQueued` 的目标会话在发起时取定；切换后明确报错并保留输入与附件，不静默丢弃。 | `src/modules/workbench.ts`；`tests/unit/workbench.test.ts` |
 | U14 | ✅ 已修 | UI | **修复：** 自动重试改为按会话记忆的本地偏好（`autoRetryBySession`），切换会话时套用该会话上次选择、默认关闭；模板明确标注「不是 Pi 的实时状态」。 | `src/modules/workbench.ts`；`src/templates/shell.html` |
 | U15 | 中 | UI | `bridge.event_omitted` 控制事件被忽略；UI 不读取 `resyncRequired`，连接仍在线时不会立即重读历史，直到后续 settled/手动刷新。 | `pi-webui-htmx/src/modules/workbench.ts`；`pi-bridge-go/internal/runtime/manager.go` |
 | U16 | 中 | UI | `EventCursor.accept` 接受任意新 epoch 并把 seq 重置；旧 worker 延迟帧可把 cursor 从新 epoch 切回旧 epoch，随后旧帧被当成新事件处理。 | `pi-webui-htmx/src/modules/stream.ts`；`pi-bridge-go/internal/transport/server.go` |
-| U17 | ⚠️ 部分 | UI | **精度校正后状态：** 已补代次校验（`pendingHistory` + `scope.epoch`），可挡住「切换前发起、切换后到达」的响应，反例稳定失败。**仍缺：** A→B→A 同 URL 乱序、以及 `beforeSwap` 之前的 HX 响应副作用——需要让请求携带代次标记（自定义头）才能在交换前判定。 | `src/modules/workbench.ts` |
+| U17 | ✅ 已修 | UI | xhr→epoch的本地映射在beforeOnLoad核对，先于HX响应头/OOB；不需要让服务器回显自定义头。A→B→A反例覆盖，动态思考按钮也归属会话。 | `src/modules/fragment-requests.ts` |
 | U18 | ⚠️ 部分 | UI | **精度校正后状态：** 对话目标已按 sessionId 校验，并补了代次。**仍缺：** 同一 session 的旧代次/ pending 集合乱序、响应处理前守卫，以及旧错误/`finally` 对新视图的影响。 | `src/modules/workbench.ts` |
-| U19 | ✅ 已修 | UI | **修复：** 模型配置保存后仅在编辑器内容未变时才 reload，未提交草稿不被覆盖。 | `src/modules/models.ts` |
+| U19 | ✅ 再修复 | UI | 模型表单重做后曾回归（F01）。现在维护单一草稿，保存独立快照、完成不重读，重复保存合并；选节点/JSON/末项删除也不丢字段。不承诺跨浏览器配置CAS。 | `src/modules/models.ts`、`tests/unit/models_draft.test.ts` |
 | U20 | ✅ 已修 | UI | **修复：** 附件批次改串行队列，每一批都在上一批落地后判断额度，并发批次不再突破 8 张上限。 | `src/modules/workbench.ts`；`tests/unit/attachments_scope.test.ts` |
 | U21 | ✅ 已修 | UI | **修复：** 思考增量改为追加文本节点（O(增量)），不再每 token 重写整段 40K 文本；上限用独立计数器，不读 DOM。 | `src/modules/stream.ts`；`tests/unit/liveview.test.ts` |
 
@@ -161,7 +161,7 @@
 
 ## 修复方案覆盖（2026-09-27，待实现）
 
-完整设计、取舍与验收在 [architecture.md](architecture.md)，整体批次、依赖、代码影响及迁移以 [repair-plan.md](repair-plan.md) 的 P0–P7 为准。每个编号在下表有一个主要归属，共 105 个台账编号（B01–B81、U01–U21、T01、D01–D02），**不等于 105 个相互独立、全部运行复现的漏洞**；例如 B15/B74 是同一限流根因的不同表现。文档修订解决 D01 的描述漂移，但没有改变 B34/B80 的硬编码实现；D02 的独立 CI 工作流及显式跨仓联测入口已配置，本地验证通过，托管运行待首次接入远程；T01 已修并通过反向验证。U17/U18 已按现有 beforeSwap 守卫收窄描述，未新增或伪称运行复现。
+完整设计、取舍与验收在 [architecture.md](architecture.md)，整体批次、依赖、代码影响及迁移以 [repair-plan.md](repair-plan.md) 的 P0–P7 为准。每个编号在下表有一个主要归属，共 105 个台账编号（B01–B81、U01–U21、T01、D01–D02），**不等于 105 个相互独立、全部运行复现的漏洞**；例如 B15/B74 是同一限流根因的不同表现。文档修订解决 D01 的描述漂移，但没有改变 B34/B80 的硬编码实现；D02 的独立 CI 工作流及显式跨仓联测入口已配置，本地验证通过，托管运行待首次接入远程；T01 已修并通过反向验证。U17的HTTP响应归属已在2026-09-30跨仓修复（UI `docs/htmx-css-ts-review.md` 第6节）；U18只补上同一HTTP守卫，不把pending集合的RPC快照乱序也宣称已完成。
 
 | 方案 | 主要问题编号 | 决策与判定性验收 | 状态 |
 |---|---|---|---|

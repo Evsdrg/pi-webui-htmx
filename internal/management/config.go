@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"math"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -362,6 +363,14 @@ func (c *Config) validateModelsDocument(doc map[string]any) error {
 }
 
 func validateConfigFields(entry map[string]any) error {
+	for _, key := range []string{"contextWindow", "maxTokens"} {
+		if value, exists := entry[key]; exists {
+			n, ok := value.(float64)
+			if !ok || n <= 0 || n > 9007199254740991 || math.Trunc(n) != n {
+				return protocol.E("invalid_params", key+" 必须为安全范围内的正整数")
+			}
+		}
+	}
 	for _, key := range []string{"api", "apiKey"} {
 		if value, exists := entry[key]; exists {
 			if text, ok := value.(string); !ok || text == "" {

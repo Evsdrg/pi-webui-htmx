@@ -168,6 +168,7 @@ Pi 原事件通过 `pi.event` 传递并绑定基线版本；不是跨 agent 通�
 
 ```text
 GET /ui/sessions/{id}/lazy?kind=thinking&entryId=ENTRY&blockIndex=0
+GET /ui/sessions/{id}/lazy?kind=thinking&format=html&entryId=ENTRY&blockIndex=0
 GET /ui/sessions/{id}/lazy?kind=tool-image&entryId=ENTRY&blockIndex=1
 GET /ui/sessions/{id}/lazy?kind=user-image&entryId=USER_ENTRY&blockIndex=1
 ```
@@ -187,6 +188,10 @@ GET /ui/git-status?path=DIR             Git 变更列表
 GET /ui/diff?path=DIR                   差异
 GET /ui/branch?sessionId=ID&leafId=…    分支树 + 可分支消息
 GET /ui/models、/ui/packages、/ui/extensions/*
+GET /ui/dirs?path=PATH
+GET /ui/mc?kind=memories&offset=0&limit=50
+GET /ui/mc/content?kind=memories&id=1
+POST /ui/models/discover、/ui/models/test
 ```
 
 约定：
@@ -222,7 +227,11 @@ htmx 换入的片段端点（`/ui/sessions`、`/ui/search`、`/ui/models`、`/ui
 
 - 理由是 htmx 默认不交换 4xx/5xx 响应。若按错误码返回，面板会停在旧内容上且没有任何解释——这是真机复现过的现象（未启动 worker 时点「会话信息」，请求确实发出，界面却一直显示占位文字）。
 - 与其在前端用 JS 强制交换错误响应，不如让端点把状态当作内容渲染（`internal/presentation` 的 `RenderNote`）：由服务端决定用户看到什么。
-- **不适用**于非 htmx 端点：`/ui/file-text`、`/ui/file-image`、`/ui/sessions/{id}/lazy` 由 JS 的 `response.ok` 判断，`/ui/exports/*` 是浏览器导航——它们保留真实状态码。外壳 `/` 与 `/assets/*` 同理：缓存层按状态码判断，且资源名含内容哈希、带 `immutable` 缓存语义。
+- **真实状态码例外**：`/ui/file-text`、`/ui/file-image`、`/ui/sessions/{id}/lazy` 保留读取/参数失败的真实码。lazy 默认仍返回 JSON/图片，思考的 `format=html` 返回转义后的片段，错误由前端统一提示。`/ui/exports/*` 是浏览器导航。外壳 `/` 与 `/assets/*` 同理：缓存层按状态码判断，且资源名含内容哈希、带 `immutable` 缓存语义。
+
+新增片段契约（2026-09-30）：模型发现/测试 POST 与 WS 调用同用 management 服务、出站策略和全局操作槽；表单最大 64 KiB，字段为 `baseUrl/api/apiKey/headers`（头部一行一个 `名称: 值`）。鉴权与 Host/Origin 检查先于路由，不执行远程命令型密钥、不向供应商发送 `***` 占位值。结果由 Go 模板转义。模型数值上限字段必须是安全整数范围内的正整数；页面发送整份草稿快照，桥仍按原身份恢复秘密，不提供配置 CAS。
+
+记忆追加页用 `append=1`：返回 `#mc-rows` 的 OOB 追加和替换的 `#mc-more`，末页不再给按钮。正文入口限定分区白名单、正整数 ID、最多 65536 字符；只读、不缓存，不返回已归档的 memories 正文。目录片段的成功路径由 OOB 字段及成功标记共同确认，错误片段不承诺成功浏览。
 - **四处例外是状态信号，不是片段语义**（调用方在 `htmx:beforeSwap` 里读它们，见 `src/modules/workbench.ts`）：`/ui/sessions/{id}/history` 的 `204 + X-Session-Unsaved`（新分支尚未落盘）、`/ui/extensions/dialog/{id}` 的 `204`（对话已被回答，移除占位）、以及这两处「明确非法参数」回 `400`（本仓前端不可能发出这类请求）。
 - 反例：`/ui/sessions/{id}/history` 对「会话已不存在」这类**状态**失败曾回 `400`，于是 htmx 不交换、界面停在旧历史上且没有解释。现已按片段约定改为 `200 + 可读提示`。判断标准是：**失败原因是可向用户解释的状态，还是程序性故障**——前者当内容渲染，后者（例如模板缺失）保留 `500`，让日志里看得见。
 

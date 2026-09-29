@@ -533,6 +533,15 @@ func (s *Server) serveUIFragments(w http.ResponseWriter, r *http.Request, encodi
 		s.serveDirs(w, r, encoding)
 		return true
 
+	case path == "/ui/mc/content":
+		return s.renderFragment(w, encoding, func() (string, error) {
+			id, err := strconv.ParseInt(r.URL.Query().Get("id"), 10, 64)
+			if err != nil || id <= 0 {
+				return "", protocol.E("invalid_params", "条目ID必须为正整数")
+			}
+			return s.ui.RenderMCContent(r.Context(), magiccontext.Kind(r.URL.Query().Get("kind")), id)
+		})
+
 	case path == "/ui/mc":
 		s.serveMagicContext(w, r, encoding)
 		return true
@@ -776,6 +785,10 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if r.Method == http.MethodPost && (r.URL.Path == "/ui/models/discover" || r.URL.Path == "/ui/models/test") {
+		s.serveModelProbe(w, r, encoding)
+		return
+	}
 	if r.Method != http.MethodGet {
 		writeError(w, encoding, 405, protocol.E("invalid_request", "请求方法不被允许"))
 		return
@@ -1509,6 +1522,19 @@ func (s *Server) serveLazy(w http.ResponseWriter, r *http.Request, path string) 
 			writeError(w, encoding, 400, err)
 			return
 		}
+		if r.URL.Query().Get("format") == "html" {
+			if s.ui == nil {
+				writeError(w, encoding, 404, protocol.E("not_found", "未配置 UI 包"))
+				return
+			}
+			html, err := s.ui.RenderThinking(text)
+			if err != nil {
+				writeError(w, encoding, 500, err)
+				return
+			}
+			writeHTML(w, encoding, html)
+			return
+		}
 		writeJSON(w, encoding, 200, map[string]string{"thinking": text})
 	case "tool-image", "user-image":
 		var body []byte
@@ -1624,7 +1650,7 @@ func (s *Server) serveMagicContext(w http.ResponseWriter, r *http.Request, encod
 	if limit <= 0 || limit > magiccontext.MaxPageRows {
 		limit = 50
 	}
-	html, err := s.ui.RenderMC(r.Context(), kind, offset, limit, query.Get("category"), query.Get("project"))
+	html, err := s.ui.RenderMC(r.Context(), kind, offset, limit, query.Get("category"), query.Get("project"), query.Get("append") == "1")
 	if err != nil {
 		s.fragmentIssue(w, encoding, err)
 		return

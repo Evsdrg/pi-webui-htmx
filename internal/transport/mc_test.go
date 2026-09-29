@@ -156,10 +156,10 @@ func TestMagicContextPanelListsFilters(t *testing.T) {
 	withMagicContextDB(t)
 	body := getFragment(t, s, "/ui/mc?kind=memories")
 	// 分类与项目筛选必须出现在界面上，否则几百条记忆没法看。
-	if !strings.Contains(body, "data-mc-filter=\"category\"") {
+	if !strings.Contains(body, "name=\"category\"") {
 		t.Error("应提供分类筛选")
 	}
-	if !strings.Contains(body, "data-mc-filter=\"project\"") {
+	if !strings.Contains(body, "name=\"project\"") {
 		t.Error("应提供项目筛选")
 	}
 	if !strings.Contains(body, "dir:0123abcd4567") {
