@@ -1,7 +1,8 @@
 @import "tailwindcss";
 @import "./tokens.css";
-@source "../templates/**/*.html";
-
+/* 不写 @source：本项目的样式全部是自定义类名，没有使用任何 Tailwind
+   工具类。@source 只是告诉 Tailwind 去扫哪些文件找候选类，
+   扫出来的候选一个都不会被用到，纯粹是构建期与产物里的开销。 */
 /* 桌面三栏与移动抽屉共用一套主题，页面本身不滚动。
    主题色值全部在 tokens.css 里定义，这里只声明 color-scheme
    （它决定表单控件、滚动条等 UA 内建部件的明暗）。 */
@@ -104,11 +105,41 @@ kbd { font-size:10px; color:var(--text-dim); margin-left:auto; }
 .role { color:var(--accent); font-weight:650; padding-top:2px; font-size:12px; }
 .bubble { min-width:0; white-space:pre-wrap; overflow-wrap:anywhere; }
 .turn-assistant .bubble { flex:1; }
-.turn-process { margin:12px 0 14px 26px; color:var(--text-muted); font-size:12px; border:1px solid var(--border); border-radius:8px; background:var(--bg-subtle); }
-.turn-process summary { padding:8px 12px; cursor:pointer; }
-.turn-process pre,.turn-process ol { padding:0 12px 12px; margin:0; max-height:320px; overflow:auto; white-space:pre-wrap; overflow-wrap:anywhere; }
-.step-detail { white-space:pre-wrap; }
-.step-kind { color:var(--accent); }
+/* ── 过程区：每个工具调用一块，成功/失败用颜色区分（对齐 Pi Web）──
+   Pi Web 用 rgba(34,197,94,.25/.04) 表示成功、rgba(248,113,113,.45/.05) 表示失败。
+   这里换成主题令牌：绿色与红色分别取 --success/--danger 的色相，
+   用 color-mix 得到同等观感的半透明边框与底色，同时能跟随五个主题。 */
+.turn-process { margin:12px 0 14px 26px; display:flex; flex-direction:column; gap:6px; }
+/* 成功/失败的配色一次切干净：三个自定义属性在 data-ok=false 时整体换掉，
+   避免 border/background/文字色各写一条覆盖规则。 */
+/* 工具块与思考块共用同一副外形：7px 圆角、细边框、等宽小字。 */
+.tool-call,.thinking-block { border-radius:7px; font-family:var(--font-mono); font-size:11px; line-height:1.5; }
+.tool-call { --tc-line:var(--success-border); --tc-fill:var(--success-bg); --tc-ink:var(--success); overflow:hidden; font-size:12px; border:1px solid var(--tc-line); background:var(--tc-fill); }
+.tool-call[data-ok=false] { --tc-line:var(--danger-border); --tc-fill:var(--danger-bg); --tc-ink:var(--danger); }
+.tool-call > summary { display:flex; align-items:center; gap:7px; min-width:0; padding:6px 10px; cursor:pointer; list-style:none; }
+.tool-call .tool-name { flex:0 0 auto; color:var(--tc-ink); font-family:var(--font-mono); font-size:11px; font-weight:600; }
+.tool-call .tool-preview { flex:1 1 auto; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--text-dim); font-family:var(--font-mono); font-size:11px; }
+.tool-call .tool-chevron { flex:0 0 auto; color:var(--text-dim); transition:transform .15s ease; }
+.tool-call[open] .tool-chevron { transform:rotate(180deg); }
+.tool-call .tool-detail { margin:0; padding:0 10px 8px; max-height:320px; overflow:auto; font-size:11px; color:var(--text-muted); }
+/* 两处时长显示同一形态：不抢占宽度、等宽数字，避免秒数变化时文字抖动。 */
+.tool-duration,.thinking-duration { flex:0 0 auto; color:var(--text-dim); font-size:11px; font-variant-numeric:tabular-nums; }
+/* 工具详情与思考正文都要原样保留换行；长行（路径、单行 JSON）必须就地折断，
+   否则窄屏下会把整个消息流撑宽。 */
+.tool-call .tool-detail,.thinking-block .thinking-body { white-space:pre-wrap; overflow-wrap:anywhere; }
+
+/* ── 思考块：单行等宽预览，展开后正文占满（对齐 Pi Web）── */
+.thinking-block { margin:12px 0 14px 26px; display:flex; align-items:flex-start; gap:6px; min-width:0; padding:6px 10px; border:1px solid var(--border); background:var(--bg); }
+.thinking-block > summary { display:flex; align-items:center; gap:6px; flex:0 1 auto; min-width:0; min-height:1.5em; padding:0; cursor:pointer; list-style:none; color:var(--text-muted); }
+/* 原生 marker 会挤占 summary 的行内空间，两个折叠块统一去掉。 */
+.tool-call > summary::-webkit-details-marker,
+.thinking-block > summary::-webkit-details-marker { display:none; }
+.thinking-block[open] > summary { flex:0 0 auto; }
+.thinking-block .thinking-icon { flex:0 0 auto; }
+.thinking-block[open] .thinking-icon { color:var(--thinking-active); }
+.thinking-block .thinking-preview { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.thinking-block[open] .thinking-preview { display:none; }
+.thinking-block .thinking-body { flex:1 1 auto; min-width:0; color:var(--text-muted); }
 /* ==== 回合操作 =================================================================== */
 .turn-actions { display:flex; justify-content:flex-end; gap:6px; margin-top:5px; }
 .turn-actions .icon-btn { font-size:11px; }

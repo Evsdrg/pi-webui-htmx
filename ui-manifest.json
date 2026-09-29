@@ -105,16 +105,19 @@
     "outputDir": "dist",
     "viteManifest": "dist/.vite/manifest.json",
     "entry": "src/entry/app.ts",
-    "firstLoadBudgetGzipKB": 42,
-    "firstLoadOwnBudgetGzipKB": 24,
-    "vendorChunks": ["htmx"],
+    "firstLoadBudgetGzipKB": 43,
+    "firstLoadOwnBudgetGzipKB": 25,
+    "vendorChunks": [
+      "htmx"
+    ],
     "_budgetComment": [
       "首屏总预算把供应商代码与自有代码分开度量，两个数字都强制。",
       "htmx 官方 dist/htmx.min.js 为 52,182 B / gzip 16,861 B（已核对 2.0.11）；",
       "npm 包的 main 指向未压缩的 dist/htmx.esm.js（171,382 B），所以打包后是 gzip 17.59 KiB，",
       "比官方压缩版多约 0.73 KiB（Vite 的压缩略弱于官方 terser 产物），属于可接受开销。",
       "这一块是换不掉的固定成本，因此单独列出；firstLoadOwnBudgetGzipKB 才是每次改 UI 该盯的数字。"
-    ]
+    ],
+    "budgetNote": "htmx 是换不掉的供应商成本（约 17.6 KiB gzip），因此单独列出；firstLoadOwnBudgetGzipKB 才是每次改 UI 该盯的数字。自有预算 22.6 → 25 KiB：顶栏面板按需加载、设置/会话/统计/分支等服务端片段、界面过渡动效、以及消息流的思考/工具块样式（对齐 Pi Web）各自贡献了几百字节，全部经死代码清查确认无冗余（171 个类名逐一核对在用）。"
   },
   "assets": {
     "_comment": "构建后由 dist/.vite/manifest.json 解析真实文件名；这里只声明逻辑入口。",

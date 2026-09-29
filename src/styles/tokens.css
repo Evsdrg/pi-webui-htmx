@@ -36,6 +36,15 @@
   --bg-subtle: rgba(0, 0, 0, 0.03);
   --danger: #b3261e;
   --success: #166b2f;
+  /* 思考块展开时图标的启用色。Pi Web 用固定 #d4a017，这里收成令牌，
+     让五个主题都能各自取值（浅色主题下需要更深一档才够对比度）。 */
+  --thinking-active: #d4a017;
+  /* 工具块的半透明边框与底色。Pi Web 用写死的 rgba，这里收成令牌：
+     五个主题可以各自取值，app.css 也只剩变量引用。 */
+  --success-border: color-mix(in srgb, var(--success) 25%, transparent);
+  --success-bg: color-mix(in srgb, var(--success) 4%, transparent);
+  --danger-border: color-mix(in srgb, var(--danger) 45%, transparent);
+  --danger-bg: color-mix(in srgb, var(--danger) 5%, transparent);
   /* 阴影在浅色上是淡淡的蓝黑，在深色上要更重才看得出层次。 */
   --shadow-color: rgba(15, 23, 42, 0.06);
 }
@@ -62,6 +71,7 @@
   /* 深底上的语义色要比浅底更亮：原来的 #d13c45 / #278353 在 #16202b 上
      只有 3.5:1，作为正文色不达 WCAG AA 的 4.5:1。 */
   --dark-danger: #ff7b72;
+  --dark-thinking-active: #e8b93a;
   --dark-success: #3fb950;
   --dark-shadow-color: rgba(0, 0, 0, 0.45);
 }
@@ -85,6 +95,7 @@
   --bg-subtle: var(--dark-bg-subtle);
   --danger: var(--dark-danger);
   --success: var(--dark-success);
+  --thinking-active: var(--dark-thinking-active);
   --shadow-color: var(--dark-shadow-color);
 }
 @media (prefers-color-scheme: dark) {
@@ -106,6 +117,7 @@
     --bg-subtle: var(--dark-bg-subtle);
     --danger: var(--dark-danger);
     --success: var(--dark-success);
+    --thinking-active: var(--dark-thinking-active);
     --shadow-color: var(--dark-shadow-color);
   }
 }
