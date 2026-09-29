@@ -261,7 +261,7 @@ CI（`.github/workflows/check.yml`）只跑 `gofmt -l`、`go vet ./...`、`go te
 
 建议方向：接入 staticcheck（或 golangci-lint 固定规则集），先不加 `-fail` 跑一遍看完整基线，再挑零误报的规则进 CI。这一步能防止同类问题再被写进来，价值高于逐个手改；同时也会暴露本文件未列到的同类问题。
 
-### G19 magic-context 的 SQL 构造（低）
+### G19 magic-context 的 SQL 构造（低） · 本批只登记，见第 10 节
 
 `internal/magiccontext` 通过 `sqlite3` 命令行执行只读查询，参数经校验后代回 SQL 字符串（sqlite3 CLI 不支持绑定参数）。这与 Go 惯用的 `database/sql` 相反，但它是**为不加 SQLite 驱动而做的显式取舍**，且已配套沙箱与白名单校验。本轮只登记，不建议在本批改动。
 
@@ -358,7 +358,7 @@ func toAnyMaps(v any) []map[string]any {
 
 与 G08 一起做：改的是 Go 内部签名，不动协议。代价与两个方案见 §6.6；注意 `stringField`/`boolField`/`recordOf` 还被模型面板、统计、分支树使用，**不能连带删除**。
 
-**G25 bash 输出按上限预分配（低）**
+**G25 bash 输出按上限预分配（低）** · 已在批次 N1 修复，见第 10 节
 
 ```90:90:internal/runtime/bash.go
 	buf := make([]byte, maxBytes)
@@ -366,7 +366,7 @@ func toAnyMaps(v any) []map[string]any {
 
 `maxBytes` 由请求给出、上限 8MiB；文件只有几百字节时也分配这么多，随后 `string(buf[:n])` 再复制一次。改成 `want := min(maxBytes, st.Size())` 就够。
 
-**G26 WS 读上限隐含的内存上界（低）**
+**G26 WS 读上限隐含的内存上界（低）** · 本批只登记，见第 10 节
 
 `wsReadLimit = 8 × 12MiB + 1MiB ≈ 97MiB`（为容纳 8 张附件的 base64）。`coder/websocket` 会为整条消息分配缓冲，所以**单连接最坏约 97MiB**，连接槽上限 8 → 最坏约 776MiB。这是显式取舍（附件必须能过），但值得写进文档，避免以后有人以为是 KB 级。
 
@@ -584,6 +584,8 @@ dialogs.go:29/76         再把 raw 读出来使用（:113 是重新登记）
 | K1 | `504c1b3` | G01 结构：`dispatchCommon` 按域拆成 8 个 `dispatch*`（`dispatch.go`），60 个 case 纯搬移 | 无 |
 | K2 | `57bdf47` | G01 类型：36 处回执改具名类型（`responses.go` / `runtime/replies.go` / `management.ModelsReply`） | 用户文档与诊断 map 不动 |
 | L | `5b21aae` | G10：出站字节配额由 2ms 轮询改为归还时广播 | 见下（实测数据） |
+| N1 | `dbbb207` | G25：bash 输出缓冲按文件大小分配 | 无 |
+| N2 | 本次 | G17 决定不改名（见下）+ G19/G26 登记 + M/N 收尾 | 见下 |
 
 ### 批次 A
 
@@ -787,3 +789,31 @@ dialogs.go:29/76         再把 raw 读出来使用（:113 是重新登记）
 **一个失败的测量也记下来**：先试图用 `voluntary_ctxt_switches` 数唤醒次数，结果新旧都是 0 或 1。原因是 Go 的定时器唤醒走 netpoller，多数情况下不产生 OS 线程切换，这个计数器抓不到轮询。它证明不了任何事，已放弃。
 
 **回归**（`send_queue_test.go`）：一次归还唤醒全部等待者（单播实现会失败）、无人等待时归还的空间不丢、等待被取消后不残留唤醒计数、超单帧上限与空帧直接拒绝。
+
+### 批次 N1（G25）
+
+`ReadBashOutput` 先 `make([]byte, maxBytes)`（上限 8 MiB）再看文件多大。改成按**实际会读到的字节数**分配。回归用 `runtime.MemStats` 观测分配量而不是断言具体数字：读 9 字节的文件不得分配接近上限的量。**反向验证**——把分配改回按上限，测试如期失败并报出「小文件读取分配了 8394784 字节」；改回后通过。另一条测试钉住截断路径仍只取尾部。
+
+### 批次 N2：决策与登记
+
+**G17（测试改名）——本轮决定不改，理由用实测数字说话。**
+
+现状：454 个测试函数中 423 个名称含中文，其中 **246 个在 `Test` 之后直接跟中文**，其余 177 个有 ASCII 前缀。
+
+| 判断项 | 实测 |
+|---|---|
+| `go test -run 'Test补发缺口明确失败'` | **可用**（中文参数正常匹配） |
+| `go test -list '.*'` | 可用 |
+| CI / `scripts/` 是否有 `-run` 过滤 | **没有** |
+| 文档是否引用测试名 | 只有本文件（改名需同步 6 处） |
+| 改名规模 | 79 个文件、423 个函数 |
+
+改名没有任何行为收益，却要在 79 个文件上产生数百行纯搬运的 diff，并让这些文件的 `git blame` 失去意义。工具链层面唯一的代价（`-run` 要输入中文）实测不成立：中文参数可用，且 177 个有 ASCII 前缀的用例本来就能用前缀选取。
+
+因此**不做**；该条目里唯一有实质收益的部分（`os.Setenv` → `t.Setenv`）已在批次 A 完成，全仓现已无 `os.Setenv`。
+
+这条与本文件其它条目不同：它是**主动决定不做**，不是遗漏。代价与影响已量化，任何时候都可以单独执行。
+
+**G19（magic-context 的 SQL 构造）——登记，不改。** `internal/magiccontext` 走 `sqlite3` 命令行、参数校验后代回 SQL 字符串，与 `database/sql` 的惯用做法相反，但这是「不引入 CGO/驱动」的显式取舍，且已配套沙箱与白名单校验。
+
+**G26（WS 读上限的乘数效应）——登记，不改。** `wsReadLimit` 决定单连接最坏的读取缓冲（约 97 MiB × 8 连接）。它与 `pi.MaxImages × MaxImageDataLen`、附件预算、U05 的修复以及 `server_test.go` 的断言绑在一起，调整必须同步前端预检，属于**跨仓联动改动**，不该混在本次清理里顺手做。
