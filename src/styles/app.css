@@ -607,3 +607,43 @@ input,select,textarea { background:var(--bg); border:1px solid var(--border); bo
    输入框于是长得比按钮高一截。 */
 .config-detail .tl-custom input { width:9ch; box-sizing:border-box; border:0; outline:none; background:var(--bg-panel); color:var(--text-dim); font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:10px; padding:2px 6px; line-height:1.5; transition:background .1s,color .1s; }
 .tl-row[data-state=string] .config-detail .tl-custom input,.config-detail .tl-row[data-state=string] .tl-custom input { background:var(--bg); color:var(--text); }
+
+/* ==== magic-context 只读面板 ──
+   数据来自本机 magic-context 的 SQLite 库，与 Pi 会话文件无关。
+   面板常驻显示来源目录：这是跨会话记忆，用户必须一眼看出数据在哪。 */
+.mc-panel { display:flex; flex-direction:column; gap:10px; }
+.mc-head { display:flex; align-items:baseline; gap:10px; }
+.mc-title { color:var(--text); font-size:12px; font-weight:600; }
+.mc-source { min-width:0; overflow:hidden; color:var(--text-dim); font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:10px; text-overflow:ellipsis; white-space:nowrap; }
+.mc-source.is-off { color:var(--danger); }
+.mc-empty { margin:0; padding:10px 0; color:var(--text-dim); font-size:11px; line-height:1.6; }
+.mc-kinds { display:flex; flex-wrap:wrap; gap:4px; }
+.mc-kind { padding:3px 9px; border:1px solid var(--border); border-radius:5px; background:var(--bg-panel); color:var(--text-dim); cursor:pointer; font-size:10px; transition:background .12s,color .12s; }
+.mc-kind:hover,.mc-kind:focus-visible { background:var(--bg-hover); color:var(--text); }
+.mc-kind[aria-current=page] { border-color:var(--accent); background:var(--accent); color:var(--accent-contrast); font-weight:600; }
+.mc-filters { display:flex; flex-wrap:wrap; gap:10px; }
+.mc-filter { display:flex; align-items:center; gap:5px; color:var(--text-dim); font-size:10px; }
+.mc-filter select { max-width:180px; height:26px; padding:2px 6px; border:1px solid var(--border); border-radius:5px; background:var(--bg-panel); color:var(--text-muted); font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:10px; }
+.mc-rows { display:flex; flex-direction:column; gap:3px; max-height:min(52dvh,520px); overflow-y:auto; }
+.mc-row { border:1px solid var(--border); border-radius:6px; background:var(--bg-panel); }
+.mc-row > summary { display:flex; align-items:center; gap:6px; padding:5px 9px; cursor:pointer; list-style:none; }
+.mc-row > summary::-webkit-details-marker { display:none; }
+.mc-row > summary:hover { background:var(--bg-hover); }
+.mc-row-title { flex:1 1 auto; min-width:0; overflow:hidden; color:var(--text); font-size:11px; text-overflow:ellipsis; white-space:nowrap; }
+/* 标签做成实色芯片而不是半透明底：半透明 accent 会把底色压暗，
+   实测 accent 文字对自家底色只有 3.46:1（不达 AA），
+   而对面板底色有 5.56:1。用 accent 实底 + --accent-contrast
+   是 tokens 里已经逐主题核算过的一组，五个主题都成立。 */
+.mc-tag { flex:0 0 auto; padding:1px 5px; border-radius:3px; background:var(--accent); color:var(--accent-contrast); font-size:10px; font-weight:600; }
+.mc-tag.is-active { background:var(--success); color:var(--accent-contrast); }
+.mc-tag.is-archived,.mc-tag.is-superseded { background:var(--text-dim); color:var(--accent-contrast); }
+.mc-scope { flex:0 0 auto; color:var(--text-dim); font-size:9px; }
+.mc-when { flex:0 0 auto; color:var(--text-dim); font-size:9px; font-variant-numeric:tabular-nums; }
+.mc-preview { margin:0; padding:0 9px 8px; color:var(--text-muted); font-size:11px; line-height:1.6; white-space:pre-wrap; word-break:break-word; }
+.mc-extra { display:flex; flex-wrap:wrap; gap:4px 12px; margin:0; padding:0 9px 8px; }
+.mc-extra dt { color:var(--text-dim); font-size:9px; }
+.mc-extra dd { margin:0 0 0 3px; color:var(--text-muted); font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:9px; }
+.mc-foot { display:flex; align-items:center; justify-content:space-between; gap:10px; }
+.mc-count { color:var(--text-dim); font-size:10px; }
+.mc-more { padding:3px 10px; border:1px solid var(--border); border-radius:5px; background:var(--bg-panel); color:var(--text-muted); cursor:pointer; font-size:10px; transition:background .12s,color .12s; }
+.mc-more:hover,.mc-more:focus-visible { background:var(--bg-hover); color:var(--text); }

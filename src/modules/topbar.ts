@@ -24,7 +24,7 @@ export interface TopbarHost {
   refreshState(): Promise<void>;
 }
 
-const PANELS = ['panel-info', 'panel-title', 'panel-system', 'panel-tools'];
+const PANELS = ['panel-info', 'panel-title', 'panel-system', 'panel-tools', 'panel-mc'];
 
 // formatCompact 把 token 数压成短标签，供顶栏上下文用量使用。
 function formatCompact(value: number): string {
@@ -58,6 +58,15 @@ export function toggle(host: TopbarHost, target: string, force?: boolean): void 
     // 工具面板同理：显示的是本次进程实际暴露给模型的工具，不是预设的自述。
     el<HTMLInputElement>('tools-session').value = host.sessionId();
     window.htmx.trigger(document.body, 'tools-refresh');
+  }
+  if (target === 'panel-mc') {
+    // 记忆面板读本机 magic-context 的 SQLite 库，由桥渲染。
+    // 四个隐藏字段各自带自己的 name，由 hx-include 带上去；JS 只改值不拼 URL。
+    el<HTMLInputElement>('mc-kind').value = 'memories';
+    el<HTMLInputElement>('mc-offset').value = '0';
+    el<HTMLInputElement>('mc-category').value = '';
+    el<HTMLInputElement>('mc-project').value = '';
+    window.htmx.trigger(document.body, 'mc-refresh');
   }
 }
 

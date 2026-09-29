@@ -226,7 +226,7 @@ export class Workbench {
       void this.topbar().then((m) => m.changeToolPreset(this.host)).catch((err) => this.fail(err));
     }, { signal });
     el('title-form').addEventListener('submit', (event) => { event.preventDefault(); void this.topbar().then((m) => m.saveLocalTitle(this.host)).catch((err) => this.fail(err)); }, { signal });
-    for (const action of ['panel-info', 'panel-title', 'panel-system', 'panel-tools']) {
+    for (const action of ['panel-info', 'panel-title', 'panel-system', 'panel-tools', 'panel-mc']) {
       document.querySelector(`[data-action="${action}"]`)?.addEventListener('click', () => this.toggleTopPanel(action), { signal });
       document.querySelector(`[data-action="${action}-close"]`)?.addEventListener('click', () => this.toggleTopPanel(action, false), { signal });
     }
@@ -241,12 +241,48 @@ export class Workbench {
         this.updateControls();
       }, { signal });
     }
+    // 记忆面板（magic-context）的分区切换、筛选与翻页。
+    // 全部走 htmx 声明式请求：四个隐藏字段各自带自己的 name，
+    // 由 hx-include 一起带上去，JS 不拼 URL。
+    //
+    // 曾经这里用一个 name="params" 的输入、值里塞整串查询串，htmx 于是发出
+    // params=offset%3D50 这一个参数，服务端看到的 offset 永远是默认值——
+    // 翻页看起来点了没反应。
+    const mcField = (id: string) => el<HTMLInputElement>(id);
+    const mcRequest = () => window.htmx.trigger(document.body, 'mc-refresh');
+    document.getElementById('mc-body')?.addEventListener('click', (event) => {
+      const target = event.target as Element;
+      const kind = target.closest<HTMLElement>('[data-mc-kind-btn]');
+      if (kind) {
+        mcField('mc-kind').value = kind.dataset.mcKindBtn ?? 'memories';
+        // 换分区必须回到第一页，否则可能落在超出新分区总数的 offset 上。
+        mcField('mc-offset').value = '0';
+        mcField('mc-category').value = '';
+        mcField('mc-project').value = '';
+        mcRequest();
+        return;
+      }
+      const more = target.closest<HTMLElement>('[data-mc-more]');
+      if (more) {
+        mcField('mc-offset').value = String(Number(more.dataset.mcMore ?? '0') + 50);
+        mcRequest();
+      }
+    }, { signal });
+    // 下拉框用 change：点击监听捕不到 select 的 change 事件。
+    document.getElementById('mc-body')?.addEventListener('change', (event) => {
+      const filter = (event.target as Element).closest<HTMLElement>('[data-mc-filter]');
+      if (!filter) return;
+      mcField(`mc-${filter.dataset.mcFilter ?? 'category'}`).value = (filter as HTMLSelectElement).value;
+      // 换筛选同样回到第一页。
+      mcField('mc-offset').value = '0';
+      mcRequest();
+    }, { signal });
     document.addEventListener('click', (event) => this.onClick(event), { signal });
     document.addEventListener('keydown', (event) => { if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'k') { event.preventDefault(); void this.newSession().catch((err) => this.fail(err)); } }, { signal });
     // Escape 关闭已打开的顶栏面板（同时只开一个）。
     document.addEventListener('keydown', (event) => {
       if (event.key !== 'Escape') return;
-      for (const action of ['panel-info', 'panel-title', 'panel-system', 'panel-tools']) {
+      for (const action of ['panel-info', 'panel-title', 'panel-system', 'panel-tools', 'panel-mc']) {
         if (!el(action === 'panel-info' ? 'panel-info' : action).hidden) { this.toggleTopPanel(action, false); return; }
       }
     }, { signal });

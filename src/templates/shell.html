@@ -50,6 +50,11 @@
         <button class="topbar-btn" type="button" data-action="panel-title" aria-controls="panel-title" aria-expanded="false"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m15 4 5 5L7 22l-5-5Z"/><path d="m14 5 5 5"/><path d="M6 4V2M5 3H3M19 19v3M17.5 20.5h3"/></svg><span class="topbar-btn-label">生成标题</span></button>
         <button class="topbar-btn" type="button" data-action="panel-system" aria-controls="panel-system" aria-expanded="false"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="M9 13h6M9 17h4"/></svg><span class="topbar-btn-label">系统</span></button>
         <button class="topbar-btn" type="button" data-action="panel-tools" aria-controls="panel-tools" aria-expanded="false"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.8-3.8a6 6 0 0 1-7.9 7.9l-6.9 6.9a2.1 2.1 0 0 1-3-3l6.9-6.9a6 6 0 0 1 7.9-7.9z"/></svg><span class="topbar-btn-label">工具</span></button>
+        {{/* 记忆面板读的是本机 magic-context 的 SQLite 库（跨会话记忆），
+             与 Pi 的会话文件无关。magic-context 官方那个「面板」是独立的
+             Tauri 应用，读的是同一个库——我们走同一条只读路径，
+             不往 Pi 的 RPC 里塞扩展界面。 */}}
+        <button class="topbar-btn" type="button" data-action="panel-mc" aria-controls="panel-mc" aria-expanded="false" title="magic-context 记忆"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5a3 3 0 0 0-3 3 3 3 0 0 0-1 5.8V16a3 3 0 0 0 6 0v-2.2A3 3 0 0 0 15 8a3 3 0 0 0-3-3Z"/><path d="M12 5V3"/><path d="M9 19h6"/></svg><span class="topbar-btn-label">记忆</span></button>
       </nav>
       {{/* 右侧成组：对齐锤在容器上，不在可能被 hidden 的子元素上。
            #context-usage 在没有上下文数据时是 hidden（display:none），
@@ -81,6 +86,22 @@
       <button class="icon-btn panel-close" type="button" data-action="panel-system-close" aria-label="关闭系统面板">×</button>
       <input type="hidden" id="system-session" name="sessionId" value="">
       <div id="system-body" hx-get="/ui/system" hx-trigger="system-refresh from:body" hx-include="#system-session" hx-swap="innerHTML" title="Pi 的 RPC 不直接暴露系统提示词；此处内容来自一次按需导出的会话快照。"><p class="muted">打开时读取。</p></div>
+    </section>
+    <section id="panel-mc" class="top-panel" hidden>
+      <button class="icon-btn panel-close" type="button" data-action="panel-mc-close" aria-label="关闭记忆面板">×</button>
+      {{/* 内容由桥的服务端片段填充：这个库由 magic-context 插件持续写入，
+           缓存会让用户看到过期状态，所以每次打开都重新请求。 */}}
+      {{/* 四个隐藏字段各自带自己的 name，由 hx-include 一起带上去。
+           曾经这里只有一个 name="params" 的输入、值里塞整串查询串，
+           结果 htmx 发出的是 params=offset%3D50 这一个参数，
+           服务端看到的 offset 永远是默认值——翻页看起来没反应。 */}}
+      <div id="mc-fields" hidden>
+        <input type="hidden" id="mc-kind" name="kind" value="memories">
+        <input type="hidden" id="mc-offset" name="offset" value="0">
+        <input type="hidden" id="mc-category" name="category" value="">
+        <input type="hidden" id="mc-project" name="project" value="">
+      </div>
+      <div id="mc-body" hx-get="/ui/mc" hx-trigger="mc-refresh from:body" hx-include="#mc-fields" hx-swap="innerHTML"><p class="config-empty">正在读取 magic-context 存储…</p></div>
     </section>
     <section id="panel-tools" class="top-panel" hidden>
       <button class="icon-btn panel-close" type="button" data-action="panel-tools-close" aria-label="关闭工具面板">×</button>
