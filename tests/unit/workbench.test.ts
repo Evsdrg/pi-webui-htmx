@@ -67,7 +67,7 @@ beforeEach(async () => {
   if(method==='worker.list')return[{sessionId:'s1',cwd:'/fixture',busy}];
   if(method==='session.state')return{sessionId:'s1',sessionName:'隔离会话',isStreaming:busy,isCompacting:false,steeringMode:'all',followUpMode:'all',autoCompactionEnabled:true};
   if(method==='session.thinking_levels')return['off','high'];
-  if(method==='config.models.raw')return{providers:{cpa:{api:'openai-completions',baseUrl:'https://example.com/v1',apiKey:'***',models:[{id:'m1',name:'旧名字',reasoning:true},{id:'m2',name:'第二个'}]}}};
+  if(method==='config.models.raw')return{providers:{cpa:{api:'openai-completions',baseUrl:'https://example.com/v1',apiKey:'***',models:[{id:'m1',name:'旧名字',reasoning:true,thinkingLevelMap:{off:'off',low:null,high:'high'}},{id:'m2',name:'第二个'}]}}};
   if(method==='config.models.write')return{written:true};
   if(method==='config.models.discover')return{models:[{id:'gpt-x',name:'GPT X'}]};
   if(method==='config.models.test')return{ok:true,message:'连通正常'};
@@ -1143,6 +1143,64 @@ describe('模型配置的两级树与字段表单', () => {
     // 思考等级映射必须把七个等级都渲染出来，否则用户看不到有哪些可选。
     expect(document.querySelectorAll('#mm-thinking [data-thinking-level]').length).toBe(7);
   });
+
+  it('思考等级映射按三态回显：有值、null、缺键各不相同', async () => {
+    await open();
+    clickTree('#models-tree-body [data-models-model="0"]');
+    const row = (level: string) => document.querySelector<HTMLElement>(`#mm-thinking [data-thinking-level="${level}"]`)!;
+    // 有值 → string，输入框带值
+    expect(row('high').dataset.state).toBe('string');
+    expect(row('high').querySelector('input')!.value).toBe('high');
+    // null → 禁用态
+    expect(row('low').dataset.state).toBe('null');
+    expect(row('low').querySelector('input')!.value).toBe('');
+    // 缺键 → 默认态
+    expect(row('medium').dataset.state).toBe('omit');
+  });
+
+  it('思考等级映射写出时保留 null 与省略的区别', async () => {
+    await open();
+    clickTree('#models-tree-body [data-models-model="0"]');
+    // 把 off 从自定义改成禁用，把 high 改成默认（删键），medium 设成自定义
+    row_click('off', 'null');
+    row_click('high', 'omit');
+    row_click('medium', 'string');
+    const writes: unknown[] = [];
+    vi.mocked(fake.request).mockImplementation(async (method: string, _id: string, params?: unknown) => {
+      if (method === 'config.models.raw') return { providers: { cpa: { api: 'openai-completions', baseUrl: 'https://example.com/v1', apiKey: '***', models: [{ id: 'm1', name: '旧名字', reasoning: true }, { id: 'm2', name: '第二个' }] } } };
+      if (method === 'config.models.write') { writes.push(params); return { written: true }; }
+      return {};
+    });
+    await (workbench as unknown as { action(a: string, b: HTMLElement): Promise<void> }).action('models-save', document.createElement('button'));
+    await vi.waitFor(() => expect(writes.length).toBe(1));
+    const map = (writes[0] as { config: { providers: { cpa: { models: Array<{ thinkingLevelMap?: Record<string, string | null> }> } } } }).config.providers.cpa.models[0].thinkingLevelMap!;
+    // null 必须写出去，不能被转成空串或删掉。
+    expect(map.off).toBeNull();
+    expect('high' in map).toBe(false);
+    expect(map.medium).toBe('medium');
+    // 没动过的 low 仍是 null。
+    expect(map.low).toBeNull();
+  });
+
+  it('思考等级切到默认或禁用时清掉输入框里的旧值', async () => {
+    await open();
+    clickTree('#models-tree-body [data-models-model="0"]');
+    const row = document.querySelector<HTMLElement>('#mm-thinking [data-thinking-level="high"]')!;
+    expect(row.querySelector('input')!.value).toBe('high');
+    row.querySelector<HTMLElement>('[data-tl="omit"]')!.click();
+    // 值必须清掉：留着会让人以为它还生效，而保存时这一行不会被读。
+    expect(row.querySelector('input')!.value).toBe('');
+    expect(row.dataset.state).toBe('omit');
+    // 再切回自定义，自动填上等级名本身。
+    row.querySelector<HTMLElement>('[data-tl="string"]')!.click();
+    expect(row.querySelector('input')!.value).toBe('high');
+    expect(row.dataset.state).toBe('string');
+  });
+
+  function row_click(level: string, state: string): void {
+    const row = document.querySelector<HTMLElement>(`#mm-thinking [data-thinking-level="${level}"]`)!;
+    row.querySelector<HTMLElement>(`[data-tl="${state}"]`)!.click();
+  }
 
   it('改表单后保存，写回的是整份文档而不是只有改过的字段', async () => {
     await open();

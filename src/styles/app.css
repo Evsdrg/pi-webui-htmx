@@ -578,3 +578,27 @@ input,select,textarea { background:var(--bg); border:1px solid var(--border); bo
 .config-kv-row input { flex:1 1 auto; min-width:0; padding:5px 9px; border:1px solid var(--border); border-radius:5px; background:var(--bg); color:var(--text); font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:11px; }
 /* provider 表单里的「发现模型」与上面的字段分开：Pi Web 用一条上边框隔开。 */
 .config-section-sep { display:flex; flex-direction:column; gap:10px; padding-top:14px; border-top:1px solid var(--border); }
+
+/* ==== 思考等级映射：一行一个等级，三态（默认 / 禁用 / 自定义）──
+   对齐 Pi Web 的 ThinkingLevelMapEditor。三态是必须的：
+   「默认」= 映射表里没有这个键，「禁用」= 键存在但值为 null，
+   「自定义」= 一个字符串。只用文本框会把前两者混成一谈。 */
+.tl-row { display:flex; align-items:center; gap:8px; padding:5px 4px; border:1px solid transparent; border-radius:6px; }
+.tl-id { display:flex; align-items:center; gap:5px; flex:0 0 68px; }
+.tl-dot { width:6px; height:6px; border-radius:50%; background:var(--tl-color,var(--text-dim)); flex:0 0 auto; }
+/* 禁用态：点变暗、名字加删除线——和 Pi Web 一致，让人一眼看出这一级被关掉了。 */
+.tl-row[data-state=null] .tl-dot { opacity:.3; }
+.tl-row[data-state=null] .tl-name { color:var(--text-dim); text-decoration:line-through; }
+.tl-name { color:var(--text-muted); font-family:var(--font-mono); font-size:11px; }
+/* 分段按钮与自定义输入共用一套外形：5px 圆角、细边框、10px 字。 */
+.tl-seg,.tl-custom { display:flex; flex:0 0 auto; border:1px solid var(--border); border-radius:5px; overflow:hidden; }
+.tl-custom { transition:border-color .1s; }
+.tl-row[data-state=string] .tl-custom { border-color:var(--accent); }
+.tl-btn { padding:4px 10px; border:0; background:var(--bg-panel); color:var(--text-dim); cursor:pointer; font-size:10px; white-space:nowrap; transition:background .1s,color .1s; }
+.tl-btn + .tl-btn { border-left:1px solid var(--border); }
+.tl-row[data-state=omit] .tl-btn[data-tl=omit],
+.tl-row[data-state=null] .tl-btn[data-tl=null],
+.tl-row[data-state=string] .tl-btn[data-tl=string] { background:var(--accent); color:var(--accent-contrast); font-weight:600; }
+.tl-row[data-state=null] .tl-btn[data-tl=null] { background:var(--danger); color:var(--accent-contrast); }
+.tl-custom input { width:12ch; border:0; outline:none; background:var(--bg-panel); color:var(--text-dim); font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:11px; padding:4px 7px; transition:background .1s,color .1s; }
+.tl-row[data-state=string] .tl-custom input { background:var(--bg); color:var(--text); }

@@ -237,25 +237,83 @@ export class ModelsEditor {
     this.select('model');
   }
 
+  // 思考等级映射一行一个等级，三态：
+  //   omit  —— 映射表里没有这个键，用 Pi 的默认行为
+  //   null  —— 键存在但值为 null，该等级被显式禁用
+  //   string—— 自定义值
+  // 三态缺一不可：只用文本框时「没有这个键」和「值为空串」看起来一样，
+  // 而 null 根本表达不出来（Pi Web 的 ThinkingLevelMapEditor 同样分三态）。
   private renderThinking(map: unknown): void {
     const box = el('mm-thinking');
     box.replaceChildren();
-    const current = record(map) as Record<string, string>;
+    const current = record(map) as Record<string, string | null>;
     for (const level of THINKING_LEVELS) {
+      const present = Object.prototype.hasOwnProperty.call(current, level);
+      const raw = current[level];
+      const state = !present ? 'omit' : raw === null ? 'null' : 'string';
       const row = document.createElement('div');
-      row.className = 'config-kv-row';
-      const label = document.createElement('span');
-      label.className = 'kv-level';
-      label.textContent = level;
+      row.className = 'tl-row';
+      row.dataset.thinkingLevel = level;
+      row.dataset.state = state;
+      row.style.setProperty('--tl-color', `var(--tl-${level})`);
+      const id = document.createElement('span');
+      id.className = 'tl-id';
+      const dot = document.createElement('span');
+      dot.className = 'tl-dot';
+      const name = document.createElement('span');
+      name.className = 'tl-name';
+      name.textContent = level;
+      id.append(dot, name);
+      row.append(id);
+      const seg = document.createElement('div');
+      seg.className = 'tl-seg';
+      for (const [value, label] of [['omit', '默认'], ['null', '禁用']] as const) {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'tl-btn';
+        button.dataset.tl = value;
+        button.textContent = label;
+        seg.append(button);
+      }
+      row.append(seg);
+      const custom = document.createElement('div');
+      custom.className = 'tl-custom';
+      const customButton = document.createElement('button');
+      customButton.type = 'button';
+      customButton.className = 'tl-btn';
+      customButton.dataset.tl = 'string';
+      customButton.textContent = '自定义';
       const input = document.createElement('input');
       input.type = 'text';
-      input.dataset.thinkingLevel = level;
-      input.value = text(current[level]) ?? '';
-      input.placeholder = '不映射';
+      input.maxLength = 10;
+      input.placeholder = level;
       input.spellcheck = false;
-      row.append(label, input);
+      input.value = typeof raw === 'string' ? raw : '';
+      // 聚焦输入框即视为选择「自定义」：用户敲字就是想填值，
+      // 不该要求他先点一下自定义按钮（Pi Web 的 onFocus 也是这个语义）。
+      input.addEventListener('focus', () => { row.dataset.state = 'string'; });
+      input.addEventListener('input', () => { row.dataset.state = 'string'; });
+      custom.append(customButton, input);
+      row.append(custom);
       box.append(row);
     }
+    box.addEventListener('click', (event) => {
+      const button = (event.target as Element).closest<HTMLElement>('[data-tl]');
+      const row2 = button?.closest<HTMLElement>('[data-thinking-level]');
+      if (!button || !row2) return;
+      const next = button.dataset.tl!;
+      row2.dataset.state = next;
+      const input = row2.querySelector('input');
+      if (!input) return;
+      if (next === 'string') {
+        // 切到自定义而输入框还是空的，填上等级名本身——这是最常见的取值。
+        if (!input.value) input.value = row2.dataset.thinkingLevel!;
+      } else {
+        // 切到默认/禁用时清空：留着旧值会让人以为它仍然生效，
+        // 而保存时这一行根本不会被读（Pi Web 同样把 strVal 清掉）。
+        input.value = '';
+      }
+    });
   }
 
   /** 把表单当前值写回文档。只在字段真的变过时返回 true。 */
@@ -306,11 +364,18 @@ export class ModelsEditor {
       if (Number.isFinite(ctx) && ctx > 0) next.contextWindow = ctx; else delete next.contextWindow;
       const max = Number(el<HTMLInputElement>('mm-max').value);
       if (Number.isFinite(max) && max > 0) next.maxTokens = max; else delete next.maxTokens;
-      const levels: Record<string, string> = {};
-      for (const input of el('mm-thinking').querySelectorAll<HTMLInputElement>('[data-thinking-level]')) {
-        const value = input.value.trim();
-        if (value) levels[input.dataset.thinkingLevel!] = value;
+      const levels: Record<string, string | null> = {};
+      for (const row of el('mm-thinking').querySelectorAll<HTMLElement>('[data-thinking-level]')) {
+        const level = row.dataset.thinkingLevel!;
+        const state = row.dataset.state ?? 'omit';
+        if (state === 'null') levels[level] = null;
+        else if (state === 'string') {
+          const value = (row.querySelector('input')?.value ?? '').trim();
+          // 空串没有意义：要么当成没填（省略），要么用户本该选「禁用」。
+          if (value) levels[level] = value;
+        }
       }
+      // 整表为空时删掉整个字段，与 Pi Web 的 onChange(... : undefined) 一致。
       if (Object.keys(levels).length) next.thinkingLevelMap = levels; else delete next.thinkingLevelMap;
       return next;
     });

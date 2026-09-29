@@ -39,6 +39,15 @@
   /* 思考块展开时图标的启用色。Pi Web 用固定 #d4a017，这里收成令牌，
      让五个主题都能各自取值（浅色主题下需要更深一档才够对比度）。 */
   --thinking-active: #d4a017;
+  /* 思考等级映射里每个等级的状态色点。Pi Web 用写死的七个色值，
+     这里收成令牌以便五个主题各自取值；点只是装饰，不参与文字对比度。 */
+  --tl-off: #6b7280;
+  --tl-minimal: #6b7280;
+  --tl-low: #60a5fa;
+  --tl-medium: #a78bfa;
+  --tl-high: #f472b6;
+  --tl-xhigh: #fb923c;
+  --tl-max: #ef4444;
   /* 工具块的半透明边框与底色。Pi Web 用写死的 rgba，这里收成令牌：
      五个主题可以各自取值，app.css 也只剩变量引用。 */
   --success-border: color-mix(in srgb, var(--success) 25%, transparent);
