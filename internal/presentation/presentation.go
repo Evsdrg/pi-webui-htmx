@@ -458,6 +458,15 @@ func sessionTitle(h sessions.Header) string {
 type Step struct {
 	Kind   string
 	Detail string
+	// Name 是工具名（read/bash/edit/...），直接来自工具结果的 toolName 字段。
+	// 空值表示记录里没有工具名，模板退回 Kind。
+	Name string
+	// OK 表示工具结果没有报错。false 时用错误配色，与 Pi Web 的 isError 同义。
+	OK bool
+	// Duration 是工具执行的整秒数，0 表示不显示。由工具结果时间戳减去
+	// 所属 assistant 条目的时间戳得到——assistant 写入即生成结束、工具开始跑，
+	// 这与 Pi Web 的 toolCallDurations 推导方式一致。
+	Duration int
 	// EntryID 与 Images 配对：前者是承载图片块的条目 ID，
 	// 后者是块下标。缺任一条件就不渲染占位符。
 	EntryID string
@@ -499,6 +508,10 @@ type ImageBlock struct {
 type ThinkingBlock struct {
 	EntryID    string `json:"entryId"`
 	BlockIndex int    `json:"blockIndex"`
+	// Duration 是承载本块的 assistant 条目的生成整秒数，0 表示不显示。
+	// 按块而不是按回合归属：一个回合可能有多条 assistant 条目（每次工具
+	// 调用后都会再生成一条），各自有不同的生成耗时。
+	Duration int `json:"duration"`
 }
 
 // HistoryData 驱动历史模板。
@@ -512,11 +525,11 @@ type HistoryData struct {
 }
 
 // thinkingBlocks 把某个条目的思考块转成自带归属的占位符列表。
-func thinkingBlocks(entryID string, blocks []sessions.LazyBlock) []ThinkingBlock {
+func thinkingBlocks(entryID string, blocks []sessions.LazyBlock, duration int) []ThinkingBlock {
 	out := []ThinkingBlock{}
 	for _, b := range blocks {
 		if b.Kind == "thinking" {
-			out = append(out, ThinkingBlock{EntryID: entryID, BlockIndex: b.BlockIndex})
+			out = append(out, ThinkingBlock{EntryID: entryID, BlockIndex: b.BlockIndex, Duration: duration})
 		}
 	}
 	return out
@@ -539,6 +552,9 @@ func lazyIndexes(blocks []sessions.LazyBlock, kind string) []int {
 func GroupTurns(entries []sessions.Entry) []Turn {
 	turns := []Turn{}
 	current := -1
+	// previous 是上一条目的时间戳，用于推导思考时长；
+	// assistantAt 是本回合最后一个 assistant 条目的时间戳，用于推导工具时长。
+	var previous, assistantAt time.Time
 	for _, e := range entries {
 		switch e.Kind {
 		case sessions.KindUser:
@@ -550,7 +566,9 @@ func GroupTurns(entries []sessions.Entry) []Turn {
 			current = len(turns) - 1
 		case sessions.KindAssistant:
 			// 每个块都带上自己的 entry ID，绝不合并到回合级的单一 ID 上。
-			thinking := thinkingBlocks(e.ID, e.Lazy)
+			// 生成耗时按块带上：本条目的时间戳减前一条目的时间戳。
+			thinking := thinkingBlocks(e.ID, e.Lazy, secondsBetween(previous, e.Timestamp))
+			assistantAt = e.Timestamp
 			if current < 0 {
 				turns = append(turns, Turn{ID: e.ID, EntryIDs: []string{e.ID}, AssistantText: e.Text, Error: e.Error, Thinking: thinking, Usage: cloneUsage(e.Usage)})
 				continue
@@ -580,21 +598,31 @@ func GroupTurns(entries []sessions.Entry) []Turn {
 			}
 		case sessions.KindTool:
 			images := lazyIndexes(e.Lazy, "image")
+			step := Step{Kind: "工具", Detail: e.Text, EntryID: e.ID, Images: images, Name: e.ToolName, OK: !e.Failed, Duration: secondsBetween(assistantAt, e.Timestamp)}
 			if current < 0 {
-				turns = append(turns, Turn{ID: e.ID, EntryIDs: []string{e.ID}, HasProcess: true, Steps: []Step{{Kind: "工具", Detail: e.Text, EntryID: e.ID, Images: images}}})
+				turns = append(turns, Turn{ID: e.ID, EntryIDs: []string{e.ID}, HasProcess: true, Steps: []Step{step}})
+				previous = e.Timestamp
 				continue
 			}
 			turns[current].EntryIDs = append(turns[current].EntryIDs, e.ID)
-			turns[current].Steps = append(turns[current].Steps, Step{Kind: "工具", Detail: e.Text, EntryID: e.ID, Images: images})
+			turns[current].Steps = append(turns[current].Steps, step)
 			turns[current].HasProcess = true
 		case sessions.KindCompaction:
 			// 压缩边界单独成轮，避免把摘要并进相邻回合。
 			turns = append(turns, Turn{ID: e.ID, EntryIDs: []string{e.ID}, AssistantText: e.Text})
 			current = len(turns) - 1
 		}
+		if !e.Timestamp.IsZero() {
+			previous = e.Timestamp
+		}
 	}
 	return turns
 }
+
+// secondsBetween 返回 to 相对于 from 的整秒数；顺序写反会得到负数，
+// 而 ElapsedSeconds 对非正值返回 0，于是时长静默消失。
+// 两个调用点都按「后发生的时间戳在前」书写。
+func secondsBetween(from, to time.Time) int { return sessions.ElapsedSeconds(from, to) }
 
 // RenderHistory 渲染一页历史片段。
 func (r *Renderer) RenderHistory(sessionID string, page sessions.Page) (string, error) {

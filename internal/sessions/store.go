@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -77,6 +78,15 @@ type Entry struct {
 	// Lazy 列出可延后加载的内容块（思考、工具图片）。
 	// 只带索引不带内容：历史页因此能渲染占位符，而不把大块数据传出去。
 	Lazy []LazyBlock `json:"lazy,omitempty"`
+	// Timestamp 是条目写入时间。时长统计完全由它推导：Pi 不记录单块
+	// 耗时，JSONL 里没有 durationMs 这类字段。零值表示时间戳缺失或
+	// 解析失败，调用方据此跳过时长而不是当成 1970 年。
+	Timestamp time.Time `json:"timestamp"`
+	// ToolName 是工具结果对应的工具名；非工具结果为空。
+	ToolName string `json:"toolName,omitempty"`
+	// Failed 表示工具结果报错，与 Pi Web 的 isError 同义。
+	// 工具块的边框与配色由它决定。
+	Failed bool `json:"failed,omitempty"`
 }
 
 // ProjectEntries 把原始条目投影成渲染友好的结构。
@@ -85,15 +95,16 @@ func ProjectEntries(raw []json.RawMessage) []Entry {
 	out := make([]Entry, 0, len(raw))
 	for _, r := range raw {
 		var item struct {
-			Type    string          `json:"type"`
-			ID      string          `json:"id"`
-			Summary string          `json:"summary"`
-			Message json.RawMessage `json:"message"`
+			Type      string          `json:"type"`
+			ID        string          `json:"id"`
+			Summary   string          `json:"summary"`
+			Message   json.RawMessage `json:"message"`
+			Timestamp string          `json:"timestamp"`
 		}
 		if json.Unmarshal(r, &item) != nil || item.ID == "" {
 			continue
 		}
-		e := Entry{ID: item.ID, Detail: r, Lazy: scanLazyBlocks(item.Message)}
+		e := Entry{ID: item.ID, Detail: r, Lazy: scanLazyBlocks(item.Message), Timestamp: parseTimestamp(item.Timestamp)}
 		switch item.Type {
 		case "message":
 			role, text := messageRoleAndText(item.Message)
@@ -106,6 +117,7 @@ func ProjectEntries(raw []json.RawMessage) []Entry {
 				e.Usage = parseUsage(item.Message)
 			case "toolResult":
 				e.Kind, e.Text = KindTool, text
+				e.ToolName, e.Failed = toolResultMeta(item.Message)
 			default:
 				e.Kind, e.Text = KindOther, text
 			}
@@ -526,4 +538,47 @@ func (u Usage) Summary() string {
 		parts = append(parts, "$"+strconv.FormatFloat(u.Cost, 'f', 4, 64))
 	}
 	return strings.Join(parts, " · ")
+}
+
+// parseTimestamp 解析条目时间戳。解析失败返回零值，调用方据此跳过
+// 时长显示，而不是把零值当成 1970 年。
+func parseTimestamp(raw string) time.Time {
+	if raw == "" {
+		return time.Time{}
+	}
+	ts, err := time.Parse(time.RFC3339Nano, raw)
+	if err != nil {
+		return time.Time{}
+	}
+	return ts
+}
+
+// toolResultMeta 取出工具名与失败标记。
+func toolResultMeta(raw json.RawMessage) (string, bool) {
+	if len(raw) == 0 {
+		return "", false
+	}
+	var msg struct {
+		ToolName string `json:"toolName"`
+		IsError  bool   `json:"isError"`
+	}
+	if json.Unmarshal(raw, &msg) != nil {
+		return "", false
+	}
+	return msg.ToolName, msg.IsError
+}
+
+// ElapsedSeconds 计算整秒差，四舍五入到最接近的整秒。
+// 任一时间戳为零值、或差值不足以进位的返回 0，调用方据此不显示时长——
+// 与 Pi Web 的 `Math.round(ms/1000)` 加 `secs > 0 ? secs : undefined` 一致：
+// 给一个 42 毫秒的步骤显示 "0s" 只会干扰阅读。
+func ElapsedSeconds(from, to time.Time) int {
+	if from.IsZero() || to.IsZero() {
+		return 0
+	}
+	secs := int(math.Round(to.Sub(from).Seconds()))
+	if secs <= 0 {
+		return 0
+	}
+	return secs
 }
