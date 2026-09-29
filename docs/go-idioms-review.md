@@ -579,7 +579,7 @@ dialogs.go:29/76         再把 raw 读出来使用（:113 是重新登记）
 | G1 | `5cb5f65` | G22：整页一次分配，`selected`/`Entries` 预分配 | 无 |
 | G2 | `025e94d` | G23：`jsonl.Reusable` 复用缓冲，三个安全调用点切换 | `lazy.go` 经核对不安全，未切 |
 | H | `acf5ad0` | G28：删除对内置 `printf` 的覆盖 | 无 |
-| I | `bb9247a` | G02 `transport.Options` + G07 具名状态与具名布尔 + G12 nil 约定统一 | 两个协议布尔保留原名 |
+| I | `a00615a` | G02 `transport.Options` + G07 具名状态与具名布尔 + G12 nil 约定统一 | 两个协议布尔保留原名 |
 
 ### 批次 A
 
