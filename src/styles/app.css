@@ -583,22 +583,27 @@ input,select,textarea { background:var(--bg); border:1px solid var(--border); bo
    对齐 Pi Web 的 ThinkingLevelMapEditor。三态是必须的：
    「默认」= 映射表里没有这个键，「禁用」= 键存在但值为 null，
    「自定义」= 一个字符串。只用文本框会把前两者混成一谈。 */
-.tl-row { display:flex; align-items:center; gap:8px; padding:5px 4px; border:1px solid transparent; border-radius:6px; }
-.tl-id { display:flex; align-items:center; gap:5px; flex:0 0 68px; }
-.tl-dot { width:6px; height:6px; border-radius:50%; background:var(--tl-color,var(--text-dim)); flex:0 0 auto; }
+/* 尺寸刻意比 Pi Web 紧一档：七个等级连成七行，按它的原尺寸在 1280x720 下
+   会把详情面板顶出滚动区。行高压到 26px 左右，控件仍可点击。 */
+.tl-row { display:flex; align-items:center; gap:6px; padding:2px 3px; border:1px solid transparent; border-radius:5px; }
+.tl-id { display:flex; align-items:center; gap:4px; flex:0 0 56px; }
+.tl-dot { width:5px; height:5px; border-radius:50%; background:var(--tl-color,var(--text-dim)); flex:0 0 auto; }
 /* 禁用态：点变暗、名字加删除线——和 Pi Web 一致，让人一眼看出这一级被关掉了。 */
 .tl-row[data-state=null] .tl-dot { opacity:.3; }
 .tl-row[data-state=null] .tl-name { color:var(--text-dim); text-decoration:line-through; }
-.tl-name { color:var(--text-muted); font-family:var(--font-mono); font-size:11px; }
+.tl-name { color:var(--text-muted); font-family:var(--font-mono); font-size:10px; }
 /* 分段按钮与自定义输入共用一套外形：5px 圆角、细边框、10px 字。 */
 .tl-seg,.tl-custom { display:flex; flex:0 0 auto; border:1px solid var(--border); border-radius:5px; overflow:hidden; }
 .tl-custom { transition:border-color .1s; }
 .tl-row[data-state=string] .tl-custom { border-color:var(--accent); }
-.tl-btn { padding:4px 10px; border:0; background:var(--bg-panel); color:var(--text-dim); cursor:pointer; font-size:10px; white-space:nowrap; transition:background .1s,color .1s; }
+.tl-btn { padding:2px 7px; border:0; background:var(--bg-panel); color:var(--text-dim); cursor:pointer; font-size:10px; line-height:1.5; white-space:nowrap; transition:background .1s,color .1s; }
 .tl-btn + .tl-btn { border-left:1px solid var(--border); }
 .tl-row[data-state=omit] .tl-btn[data-tl=omit],
 .tl-row[data-state=null] .tl-btn[data-tl=null],
 .tl-row[data-state=string] .tl-btn[data-tl=string] { background:var(--accent); color:var(--accent-contrast); font-weight:600; }
 .tl-row[data-state=null] .tl-btn[data-tl=null] { background:var(--danger); color:var(--accent-contrast); }
-.tl-custom input { width:12ch; border:0; outline:none; background:var(--bg-panel); color:var(--text-dim); font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:11px; padding:4px 7px; transition:background .1s,color .1s; }
-.tl-row[data-state=string] .tl-custom input { background:var(--bg); color:var(--text); }
+/* 选择器必须带够特异性：.config-detail input[type=text] 是 (0,2,1)，
+   只写 .tl-custom input（0,1,1）会被它的 padding:6px 9px 与 width:100% 压过，
+   输入框于是长得比按钮高一截。 */
+.config-detail .tl-custom input { width:9ch; box-sizing:border-box; border:0; outline:none; background:var(--bg-panel); color:var(--text-dim); font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:10px; padding:2px 6px; line-height:1.5; transition:background .1s,color .1s; }
+.tl-row[data-state=string] .config-detail .tl-custom input,.config-detail .tl-row[data-state=string] .tl-custom input { background:var(--bg); color:var(--text); }
