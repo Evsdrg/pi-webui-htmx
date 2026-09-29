@@ -21,8 +21,8 @@ func TestFork后进程表重绑定(t *testing.T) {
 	if err != nil {
 		t.Fatalf("fork 失败: %v", err)
 	}
-	newID, _ := out["sessionId"].(string)
-	if out["persisted"] != false || out["text"] != "分叉出的消息" {
+	newID := out.SessionID
+	if out.Persisted || out.Text != "分叉出的消息" {
 		t.Fatalf("未落盘的 fork 应返回原消息与持久化状态: %+v", out)
 	}
 	if newID == "" || newID == old {
@@ -70,7 +70,7 @@ func TestFork已有磁盘记录返回已落盘(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if out["persisted"] != true {
+	if !out.Persisted {
 		t.Fatalf("已写盘的 fork 不能当成临时分支: %+v", out)
 	}
 }
@@ -163,7 +163,7 @@ func Test压缩与统计(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if out["summary"] != "压缩摘要" || out["tokensBefore"].(int) != 100 {
+	if out.Summary != "压缩摘要" || out.TokensBefore != 100 {
 		t.Fatalf("压缩结果异常: %v", out)
 	}
 	stats, err := w.Stats(ctx)
@@ -232,7 +232,7 @@ func Test并发身份变更不产生双键(t *testing.T) {
 		if err != nil {
 			t.Fatalf("第 %d 次 fork 失败: %v", i, err)
 		}
-		id, _ := out["sessionId"].(string)
+		id := out.SessionID
 		if seen[id] {
 			t.Fatalf("会话 ID 重复出现在进程表: %s", id)
 		}

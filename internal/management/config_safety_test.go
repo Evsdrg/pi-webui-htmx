@@ -125,10 +125,10 @@ func Test模型摘要按真实数组限制总数量(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if out["modelCount"] != 4 {
-		t.Fatalf("原始模型数错误：%v", out["modelCount"])
+	if out.ModelCount != 4 {
+		t.Fatalf("原始模型数错误：%v", out.ModelCount)
 	}
-	providers := out["providers"].(map[string]any)
+	providers := out.Providers
 	count := 0
 	for _, v := range providers {
 		count += len(v.(map[string]any)["models"].([]any))

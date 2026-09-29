@@ -47,7 +47,7 @@ func (s *Server) dispatchRun(ctx context.Context, r protocol.Request, w *run.Wor
 		if err := w.SetQueueMode(ctx, p.Kind, p.Mode); err != nil {
 			return nil, err
 		}
-		return map[string]any{"kind": p.Kind, "mode": p.Mode}, nil
+		return queueModeReply{Kind: p.Kind, Mode: p.Mode}, nil
 
 	case "session.steer":
 		var p struct {
@@ -64,7 +64,7 @@ func (s *Server) dispatchRun(ctx context.Context, r protocol.Request, w *run.Wor
 		if err := w.Steer(ctx, p.Text, images); err != nil {
 			return nil, err
 		}
-		return map[string]bool{"queued": true}, nil
+		return queuedReply{Queued: true}, nil
 
 	case "session.follow_up":
 		var p struct {
@@ -81,7 +81,7 @@ func (s *Server) dispatchRun(ctx context.Context, r protocol.Request, w *run.Wor
 		if err := w.FollowUp(ctx, p.Text, images); err != nil {
 			return nil, err
 		}
-		return map[string]bool{"queued": true}, nil
+		return queuedReply{Queued: true}, nil
 
 	case "session.compact":
 		var p struct {
@@ -102,7 +102,7 @@ func (s *Server) dispatchRun(ctx context.Context, r protocol.Request, w *run.Wor
 		if err := w.SetAutoCompaction(ctx, p.Enabled); err != nil {
 			return nil, err
 		}
-		return map[string]bool{"enabled": p.Enabled}, nil
+		return enabledReply{Enabled: p.Enabled}, nil
 
 	case "session.set_auto_retry":
 		var p struct {
@@ -114,7 +114,7 @@ func (s *Server) dispatchRun(ctx context.Context, r protocol.Request, w *run.Wor
 		if err := w.SetAutoRetry(ctx, p.Enabled); err != nil {
 			return nil, err
 		}
-		return map[string]bool{"enabled": p.Enabled}, nil
+		return enabledReply{Enabled: p.Enabled}, nil
 
 	case "session.abort_retry":
 		if err := decodeEmpty(r.Params); err != nil {
@@ -123,7 +123,7 @@ func (s *Server) dispatchRun(ctx context.Context, r protocol.Request, w *run.Wor
 		if err := w.AbortRetry(ctx); err != nil {
 			return nil, err
 		}
-		return map[string]bool{"aborted": true}, nil
+		return abortedReply{Aborted: true}, nil
 
 	case "session.prompt":
 		var p struct {
@@ -141,14 +141,14 @@ func (s *Server) dispatchRun(ctx context.Context, r protocol.Request, w *run.Wor
 		if err := w.Prompt(ctx, p.Text, p.Behavior, images); err != nil {
 			return nil, err
 		}
-		return map[string]bool{"accepted": true}, nil
+		return acceptedReply{Accepted: true}, nil
 
 	case "session.abort":
 		if err := decodeEmpty(r.Params); err != nil {
 			return nil, err
 		}
 		q, err := w.Abort(ctx)
-		return map[string]any{"clearedQueue": q}, err
+		return clearedQueueReply{ClearedQueue: q}, err
 
 	case "session.stop":
 		var p struct {
@@ -158,7 +158,7 @@ func (s *Server) dispatchRun(ctx context.Context, r protocol.Request, w *run.Wor
 			return nil, err
 		}
 		err := w.Stop(p.Force)
-		return map[string]bool{"stopped": err == nil}, err
+		return stoppedReply{Stopped: err == nil}, err
 	}
 	return nil, errUnhandled(r.Method)
 }
@@ -212,7 +212,7 @@ func (s *Server) dispatchSession(ctx context.Context, r protocol.Request, w *run
 		if err := w.SetThinkingLevel(ctx, p.Level); err != nil {
 			return nil, err
 		}
-		return map[string]any{"level": p.Level}, nil
+		return levelReply{Level: p.Level}, nil
 
 	case "session.cycle_thinking":
 		if err := decodeEmpty(r.Params); err != nil {
@@ -222,7 +222,7 @@ func (s *Server) dispatchSession(ctx context.Context, r protocol.Request, w *run
 		if err != nil {
 			return nil, err
 		}
-		return map[string]any{"level": level}, nil
+		return levelReply{Level: level}, nil
 
 	case "session.stats":
 		if err := decodeEmpty(r.Params); err != nil {
@@ -240,7 +240,7 @@ func (s *Server) dispatchSession(ctx context.Context, r protocol.Request, w *run
 		if err := w.SetName(ctx, p.Name); err != nil {
 			return nil, err
 		}
-		return map[string]bool{"renamed": true}, nil
+		return renamedReply{Renamed: true}, nil
 
 	case "session.last_assistant":
 		if err := decodeEmpty(r.Params); err != nil {
@@ -250,7 +250,7 @@ func (s *Server) dispatchSession(ctx context.Context, r protocol.Request, w *run
 		if err != nil {
 			return nil, err
 		}
-		return map[string]any{"text": text}, nil
+		return textReply{Text: text}, nil
 
 	case "session.commands":
 		if err := decodeEmpty(r.Params); err != nil {
@@ -294,7 +294,7 @@ func (s *Server) dispatchSession(ctx context.Context, r protocol.Request, w *run
 		if err != nil {
 			return nil, err
 		}
-		return map[string]any{"sessionId": id}, nil
+		return sessionIDReply{SessionID: id}, nil
 
 	case "session.switch":
 		var p struct {
@@ -307,7 +307,7 @@ func (s *Server) dispatchSession(ctx context.Context, r protocol.Request, w *run
 		if err != nil {
 			return nil, err
 		}
-		return map[string]any{"sessionId": id}, nil
+		return sessionIDReply{SessionID: id}, nil
 
 	case "session.fork":
 		var p struct {
@@ -326,7 +326,7 @@ func (s *Server) dispatchSession(ctx context.Context, r protocol.Request, w *run
 		if err != nil {
 			return nil, err
 		}
-		return map[string]any{"sessionId": id}, nil
+		return sessionIDReply{SessionID: id}, nil
 	}
 	return nil, errUnhandled(r.Method)
 }
@@ -376,16 +376,10 @@ func (s *Server) dispatchSessionOps(ctx context.Context, r protocol.Request) (an
 		if derr != nil {
 			return nil, derr
 		}
-		if stopped {
-			// 让前端知道这次删除连带停掉了一个运行中的会话。
-			return map[string]any{
-				"sessionId":     result.SessionID,
-				"trashed":       result.Trashed,
-				"path":          result.Path,
-				"stoppedWorker": true,
-			}, nil
-		}
-		return result, nil
+		// 两条路径返回同一个类型：只多一个 stoppedWorker 标记。
+		// 以前这里是另拼一个 map，字段名与 DeleteResult 重复，
+		// 一旦上游增字段就会给出两种形状。
+		return deleteReply{DeleteResult: result, StoppedWorker: stopped}, nil
 
 	case "session.export_html":
 		var p struct {
@@ -410,7 +404,7 @@ func (s *Server) dispatchSessionOps(ctx context.Context, r protocol.Request) (an
 		if filepath.Clean(path) != filepath.Clean(target) {
 			return nil, protocol.E("conflict", "导出路径与请求不一致")
 		}
-		return map[string]any{"path": path}, nil
+		return exportReply{Path: path}, nil
 	}
 	return nil, errUnhandled(r.Method)
 }
@@ -442,7 +436,7 @@ func (s *Server) dispatchConfig(ctx context.Context, r protocol.Request) (any, e
 		if err := s.piConfig.WriteModels(p.Config); err != nil {
 			return nil, err
 		}
-		return map[string]bool{"written": true}, nil
+		return writtenReply{Written: true}, nil
 
 	case "config.models.discover":
 		var p struct {
@@ -458,7 +452,7 @@ func (s *Server) dispatchConfig(ctx context.Context, r protocol.Request) (any, e
 		if err != nil {
 			return nil, err
 		}
-		return map[string]any{"models": models}, nil
+		return modelsReply{Models: models}, nil
 
 	case "config.models.test":
 		var p struct {
@@ -480,7 +474,7 @@ func (s *Server) dispatchConfig(ctx context.Context, r protocol.Request) (any, e
 		if err != nil {
 			return nil, err
 		}
-		return map[string]any{"models": entries}, nil
+		return modelsReply{Models: entries}, nil
 
 	case "config.packages":
 		if err := decodeEmpty(r.Params); err != nil {
@@ -490,7 +484,7 @@ func (s *Server) dispatchConfig(ctx context.Context, r protocol.Request) (any, e
 		if err != nil {
 			return nil, err
 		}
-		return map[string]any{"packages": list}, nil
+		return packagesReply{Packages: list}, nil
 
 	case "config.settings":
 		if err := decodeEmpty(r.Params); err != nil {
@@ -549,16 +543,16 @@ func (s *Server) dispatchTerminal(r protocol.Request, sink connSink) (any, error
 				chunk, err := sub.Next(connCtx)
 				if err != nil {
 					if connCtx.Err() == nil {
-						sink.send(protocol.Message{Version: 1, Kind: "control", Event: "bridge.terminal_closed", Data: map[string]any{"terminalId": term.ID()}})
+						sink.send(protocol.Message{Version: 1, Kind: "control", Event: "bridge.terminal_closed", Data: terminalClosedEvent{TerminalID: term.ID()}})
 					}
 					return
 				}
-				if !sink.send(protocol.Message{Version: 1, Kind: "event", Event: "terminal.output", Data: map[string]any{"terminalId": term.ID(), "data": string(chunk)}}) {
+				if !sink.send(protocol.Message{Version: 1, Kind: "event", Event: "terminal.output", Data: terminalOutputEvent{TerminalID: term.ID(), Data: string(chunk)}}) {
 					return
 				}
 			}
 		}()
-		return map[string]any{"terminalId": info.ID, "cwd": info.Cwd, "pid": info.PID, "cols": info.Cols, "rows": info.Rows}, nil
+		return terminalOpenedReply{TerminalID: info.ID, Cwd: info.Cwd, PID: info.PID, Cols: info.Cols, Rows: info.Rows}, nil
 
 	case "terminal.input":
 		var p struct {
@@ -575,7 +569,7 @@ func (s *Server) dispatchTerminal(r protocol.Request, sink connSink) (any, error
 		if err := term.Write([]byte(p.Data)); err != nil {
 			return nil, err
 		}
-		return map[string]bool{"written": true}, nil
+		return writtenReply{Written: true}, nil
 
 	case "terminal.resize":
 		var p struct {
@@ -593,7 +587,7 @@ func (s *Server) dispatchTerminal(r protocol.Request, sink connSink) (any, error
 		if err := term.Resize(p.Cols, p.Rows); err != nil {
 			return nil, err
 		}
-		return map[string]bool{"resized": true}, nil
+		return resizedReply{Resized: true}, nil
 
 	case "terminal.close":
 		var p struct {
@@ -606,13 +600,13 @@ func (s *Server) dispatchTerminal(r protocol.Request, sink connSink) (any, error
 		if err := s.terminals.CloseTerminal(p.TerminalID); err != nil {
 			return nil, err
 		}
-		return map[string]bool{"closed": true}, nil
+		return closedReply{Closed: true}, nil
 
 	case "terminal.list":
 		if err := decodeEmpty(r.Params); err != nil {
 			return nil, err
 		}
-		return map[string]any{"terminals": s.terminals.List()}, nil
+		return terminalsReply{Terminals: s.terminals.List()}, nil
 	}
 	return nil, errUnhandled(r.Method)
 }
@@ -632,7 +626,7 @@ func (s *Server) dispatchWorkspace(ctx context.Context, r protocol.Request) (any
 		if err != nil {
 			return nil, err
 		}
-		return map[string]any{"entries": entries, "truncated": truncated}, nil
+		return entriesReply{Entries: entries, Truncated: truncated}, nil
 
 	case "files.stat":
 		var p struct {
@@ -661,7 +655,7 @@ func (s *Server) dispatchWorkspace(ctx context.Context, r protocol.Request) (any
 			text = text[:wsTextBudget]
 			truncated = true
 		}
-		return map[string]any{"text": text, "truncated": truncated, "size": size}, nil
+		return fileTextReply{Text: text, Truncated: truncated, Size: size}, nil
 
 	case "files.image":
 		var p struct {
@@ -674,7 +668,7 @@ func (s *Server) dispatchWorkspace(ctx context.Context, r protocol.Request) (any
 		if err != nil {
 			return nil, err
 		}
-		return map[string]any{"mime": mime, "data": base64.StdEncoding.EncodeToString(body), "size": len(body)}, nil
+		return fileImageReply{Mime: mime, Data: base64.StdEncoding.EncodeToString(body), Size: len(body)}, nil
 
 	case "files.index":
 		var p struct {
@@ -694,7 +688,7 @@ func (s *Server) dispatchWorkspace(ctx context.Context, r protocol.Request) (any
 		if err := decodeEmpty(r.Params); err != nil {
 			return nil, err
 		}
-		return map[string]any{"roots": s.files.Roots()}, nil
+		return rootsReply{Roots: s.files.Roots()}, nil
 
 	case "git.status":
 		var p struct {
@@ -721,7 +715,7 @@ func (s *Server) dispatchWorkspace(ctx context.Context, r protocol.Request) (any
 		if err != nil {
 			return nil, err
 		}
-		return map[string]any{"diff": text, "truncated": truncated}, nil
+		return diffReply{Diff: text, Truncated: truncated}, nil
 	}
 	return nil, errUnhandled(r.Method)
 }
@@ -750,7 +744,7 @@ func (s *Server) dispatchBash(ctx context.Context, r protocol.Request, w *run.Wo
 		if err := w.AbortBash(ctx); err != nil {
 			return nil, err
 		}
-		return map[string]bool{"aborted": true}, nil
+		return abortedReply{Aborted: true}, nil
 
 	case "session.bash_output":
 		var p struct {
@@ -764,7 +758,7 @@ func (s *Server) dispatchBash(ctx context.Context, r protocol.Request, w *run.Wo
 		if err != nil {
 			return nil, err
 		}
-		return map[string]any{"text": text, "truncated": truncated}, nil
+		return textTruncatedReply{Text: text, Truncated: truncated}, nil
 	}
 	return nil, errUnhandled(r.Method)
 }
@@ -786,7 +780,7 @@ func (s *Server) dispatchDialogs(ctx context.Context, r protocol.Request, w *run
 		if err := w.UIResponse(ctx, p.ID, p.Value, p.Confirmed, p.Cancelled); err != nil {
 			return nil, err
 		}
-		return map[string]bool{"answered": true}, nil
+		return answeredReply{Answered: true}, nil
 
 	case "session.pending_dialogs":
 		if err := decodeEmpty(r.Params); err != nil {
@@ -797,7 +791,7 @@ func (s *Server) dispatchDialogs(ctx context.Context, r protocol.Request, w *run
 		payloads := w.PendingDialogPayloads()
 		items := make([]json.RawMessage, 0, len(payloads))
 		items = append(items, payloads...)
-		return map[string]any{"dialogs": items, "ids": w.PendingDialogs()}, nil
+		return dialogsReply{Dialogs: items, IDs: w.PendingDialogs()}, nil
 	}
 	return nil, errUnhandled(r.Method)
 }

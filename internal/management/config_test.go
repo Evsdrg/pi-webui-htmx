@@ -32,7 +32,7 @@ func TestModels密钥被打码(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	providers, _ := out["providers"].(map[string]any)
+	providers := out.Providers
 	entry, _ := providers["cpa"].(map[string]any)
 	if entry["apiKey"] != "***" {
 		t.Fatalf("密钥必须被打码: %v", entry["apiKey"])
@@ -40,8 +40,8 @@ func TestModels密钥被打码(t *testing.T) {
 	if entry["api"] != "https://example.com/v1" {
 		t.Fatalf("非密钥字段不应被打码: %v", entry["api"])
 	}
-	if out["modelCount"].(int) != 1 {
-		t.Fatalf("模型计数异常: %v", out["modelCount"])
+	if out.ModelCount != 1 {
+		t.Fatalf("模型计数异常: %v", out.ModelCount)
 	}
 }
 
@@ -51,7 +51,7 @@ func TestModels不存在时返回空(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(out["providers"].(map[string]any)) != 0 {
+	if len(out.Providers) != 0 {
 		t.Fatalf("无配置时应返回空: %v", out)
 	}
 }
@@ -113,7 +113,7 @@ func Test超长嵌套密钥同样打码(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	providers := out["providers"].(map[string]any)
+	providers := out.Providers
 	p := providers["p"].(map[string]any)
 	models := p["models"].([]any)
 	m := models[0].(map[string]any)
@@ -142,7 +142,7 @@ func Test模型数量上限(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	p := out["providers"].(map[string]any)["p"].(map[string]any)
+	p := out.Providers["p"].(map[string]any)
 	if len(p["models"].([]any)) != 5 {
 		t.Fatalf("模型数应受上限约束: %v", p)
 	}

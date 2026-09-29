@@ -487,7 +487,7 @@ func (s *Server) serveUIFragments(w http.ResponseWriter, r *http.Request, encodi
 			if err != nil {
 				return "", err
 			}
-			return s.ui.RenderModels(presentation.ConfigModels(out), "")
+			return s.ui.RenderModels(presentation.ConfigModels(out.Providers), "")
 		})
 
 	case path == "/ui/diff":

@@ -139,35 +139,35 @@ func (w *Worker) SwitchSession(ctx context.Context, sessionPath string) (string,
 }
 
 // Fork 从指定条目分叉出新会话，并重绑定进程表。
-func (w *Worker) Fork(ctx context.Context, entryID string) (map[string]any, error) {
+func (w *Worker) Fork(ctx context.Context, entryID string) (ForkReply, error) {
 	if entryID == "" {
-		return nil, protocol.E("invalid_params", "entryId 不能为空")
+		return ForkReply{}, protocol.E("invalid_params", "entryId 不能为空")
 	}
 	raw, err := w.call(ctx, "fork", map[string]any{"entryId": entryID}, true)
 	if err != nil {
-		return nil, err
+		return ForkReply{}, err
 	}
 	var out struct {
 		Text      string `json:"text"`
 		Cancelled bool   `json:"cancelled"`
 	}
 	if json.Unmarshal(raw, &out) != nil {
-		return nil, protocol.E("pi_error", "Pi 返回的 fork 结果无效")
+		return ForkReply{}, protocol.E("pi_error", "Pi 返回的 fork 结果无效")
 	}
 	if out.Cancelled {
-		return nil, protocol.E("conflict", "扩展取消了 fork")
+		return ForkReply{}, protocol.E("conflict", "扩展取消了 fork")
 	}
 	state, err := w.stateAfterRebind(ctx)
 	if err != nil {
-		return nil, err
+		return ForkReply{}, err
 	}
 	if err := w.owner.Rebind(w, state.SessionID); err != nil {
-		return nil, err
+		return ForkReply{}, err
 	}
 	// Pi 对无 assistant 的分支延迟写盘。身份已切换，索引不可用时
 	// 保守报告未落盘，不能因只读查询失败让调用方误以为 fork 未执行。
 	_, findErr := w.store.Find(ctx, state.SessionID)
-	return map[string]any{"sessionId": state.SessionID, "text": out.Text, "persisted": findErr == nil}, nil
+	return ForkReply{SessionID: state.SessionID, Text: out.Text, Persisted: findErr == nil}, nil
 }
 
 // Clone 复制当前分支到新会话，并重绑定进程表。

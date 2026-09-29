@@ -42,6 +42,35 @@ WebSocket 的 origin 白名单与同一规则对齐，否则库层（`Origin.Hos
 {"version":1,"kind":"response","requestId":"req-1","ok":false,"error":{"code":"worker_not_running","message":"请先显式启动会话"}}
 ```
 
+`data` 的形状按方法固定，由 `internal/transport/responses.go` 的具名类型定义、`responses_test.go` 的表格钉住。**同一形状的方法共用同一个类型**，想改必须一次改到全部：
+
+| 形状 | 用到它的方法 |
+|---|---|
+| `{queued}` | `session.steer`、`session.follow_up`（只表示已排入队列，**不代表任务完成**） |
+| `{accepted}` | `session.prompt`（同上） |
+| `{enabled}` | `session.set_auto_compaction`、`session.set_auto_retry` |
+| `{aborted}` | `session.abort_retry`、`session.abort_bash` |
+| `{written}` | `config.models.write`、`terminal.input` |
+| `{level}` | `session.set_thinking`、`session.cycle_thinking`（返回生效后的等级） |
+| `{sessionId}` | `session.new`、`session.switch`、`session.clone` |
+| `{sessionId,text,persisted}` | `session.fork`（见下文「分支与导出」：`persisted:false` 只在当前 worker 中存在） |
+| `{models}` | `config.models.discover`（供应商返回）、`config.catalog`（models.dev） |
+| `{providers,modelCount}` | `config.models`（`providers` 是脱敏后的用户文档子树，形状由用户的 models.json 决定） |
+| `{id,name,provider}` / `{id,provider,thinkingLevel}` | `session.set_model` / `session.cycle_model`（后者把生效后的思考等级一并返回） |
+| `{entries,leafId}` | `session.entries` |
+| `{summary,firstKeptEntryId,tokensBefore,estimatedTokensAfter}` | `session.compact`（估算值，非精确计数） |
+| `{entries,truncated}` | `files.list` |
+| `{text,truncated,size}` | `files.read` |
+| `{mime,data,size}` | `files.image`（base64） |
+| `{diff,truncated}` | `git.diff` |
+| `{text,truncated}` | `session.bash_output` |
+| `{dialogs,ids}` | `session.pending_dialogs`（`dialogs` 是 Pi 的原始载荷，HTTP 端点据此渲染） |
+| `{clearedQueue}` | `session.abort`（原始 JSON，桥不解释队列结构） |
+| `{stopped}` / `{resized}` / `{closed}` / `{renamed}` / `{answered}` / `{path}` / `{kind,mode}` / `{text}` / `{roots}` / `{terminals}` | 各自单一方法 |
+| `{sessionId,trashed,path[,stoppedWorker]}` | `sessions.delete`；`stoppedWorker` 只在本次删除连带停掉了运行中的会话时出现 |
+
+事件侧只列桥自建的两个载荷：`bridge.terminal_closed` 的 `{terminalId}` 与 `terminal.output` 的 `{terminalId,data}`。**Pi 的事件（`agent_start`、`message_update` 等）是原样透传的原始 JSON**，结构由 Pi 决定，桥不解释也不重写。
+
 错误码：`invalid_request`、`unsupported_version`、`unsupported_method`、`invalid_params`、`not_found`、`conflict`、`busy`、`limit_exceeded`、`worker_not_running`、`worker_exited`、`timeout`、`outcome_unknown`、`pi_error`、`resync_required`、`internal`；接入层还包括 `unauthorized`、`host_denied`、`origin_denied`。错误不含正文/密钥。任何新增错误码必须同步 TS 类型和兼容协商。
 
 错误对象**只有 `code` 与 `message` 两个字段**（已在回归里钉住）。桥侧可以给内部错误挂上原因（`protocol.Wrap`）方便排查，但原因不参与序列化：它可能带本机路径、上游原文或凭据，既不进 WS 响应，也不进片段提示（片段只渲染 `message`）。

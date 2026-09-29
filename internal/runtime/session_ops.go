@@ -42,13 +42,13 @@ func (w *Worker) Models(ctx context.Context) ([]map[string]any, error) {
 }
 
 // SetModel 切换模型，返回切换后的模型标识。
-func (w *Worker) SetModel(ctx context.Context, provider, modelID string) (map[string]any, error) {
+func (w *Worker) SetModel(ctx context.Context, provider, modelID string) (SetModelReply, error) {
 	if provider == "" || modelID == "" {
-		return nil, protocol.E("invalid_params", "provider 与 modelId 均不能为空")
+		return SetModelReply{}, protocol.E("invalid_params", "provider 与 modelId 均不能为空")
 	}
 	raw, err := w.call(ctx, "set_model", map[string]any{"provider": provider, "modelId": modelID}, true)
 	if err != nil {
-		return nil, err
+		return SetModelReply{}, err
 	}
 	var m struct {
 		ID       string `json:"id"`
@@ -56,19 +56,19 @@ func (w *Worker) SetModel(ctx context.Context, provider, modelID string) (map[st
 		Provider string `json:"provider"`
 	}
 	if json.Unmarshal(raw, &m) != nil || m.ID == "" {
-		return nil, protocol.E("pi_error", "Pi 返回的模型无效")
+		return SetModelReply{}, protocol.E("pi_error", "Pi 返回的模型无效")
 	}
-	return map[string]any{"id": m.ID, "name": m.Name, "provider": m.Provider}, nil
+	return SetModelReply{ModelRef: ModelRef{ID: m.ID, Name: m.Name, Provider: m.Provider}}, nil
 }
 
 // CycleModel 切换到下一个可用模型。
-func (w *Worker) CycleModel(ctx context.Context) (map[string]any, error) {
+func (w *Worker) CycleModel(ctx context.Context) (CycleModelReply, error) {
 	raw, err := w.call(ctx, "cycle_model", nil, true)
 	if err != nil {
-		return nil, err
+		return CycleModelReply{}, err
 	}
 	if string(raw) == "null" || len(raw) == 0 {
-		return nil, nil
+		return CycleModelReply{}, nil
 	}
 	var out struct {
 		Model struct {
@@ -78,9 +78,9 @@ func (w *Worker) CycleModel(ctx context.Context) (map[string]any, error) {
 		ThinkingLevel string `json:"thinkingLevel"`
 	}
 	if json.Unmarshal(raw, &out) != nil {
-		return nil, protocol.E("pi_error", "Pi 返回的模型无效")
+		return CycleModelReply{}, protocol.E("pi_error", "Pi 返回的模型无效")
 	}
-	return map[string]any{"id": out.Model.ID, "provider": out.Model.Provider, "thinkingLevel": out.ThinkingLevel}, nil
+	return CycleModelReply{ModelRef: ModelRef{ID: out.Model.ID, Provider: out.Model.Provider}, ThinkingLevel: out.ThinkingLevel}, nil
 }
 
 // ThinkingLevels 返回当前模型支持的思考强度。
@@ -171,14 +171,14 @@ func (w *Worker) FollowUp(ctx context.Context, text string, images []map[string]
 }
 
 // Compact 手动压缩上下文。
-func (w *Worker) Compact(ctx context.Context, instructions string) (map[string]any, error) {
+func (w *Worker) Compact(ctx context.Context, instructions string) (CompactReply, error) {
 	fields := map[string]any{}
 	if instructions != "" {
 		fields["customInstructions"] = instructions
 	}
 	raw, err := w.call(ctx, "compact", fields, true)
 	if err != nil {
-		return nil, err
+		return CompactReply{}, err
 	}
 	var out struct {
 		Summary              string `json:"summary"`
@@ -187,11 +187,11 @@ func (w *Worker) Compact(ctx context.Context, instructions string) (map[string]a
 		EstimatedTokensAfter int    `json:"estimatedTokensAfter"`
 	}
 	if json.Unmarshal(raw, &out) != nil {
-		return nil, protocol.E("pi_error", "Pi 返回的压缩结果无效")
+		return CompactReply{}, protocol.E("pi_error", "Pi 返回的压缩结果无效")
 	}
-	return map[string]any{
-		"summary": out.Summary, "firstKeptEntryId": out.FirstKeptEntryID,
-		"tokensBefore": out.TokensBefore, "estimatedTokensAfter": out.EstimatedTokensAfter,
+	return CompactReply{
+		Summary: out.Summary, FirstKeptEntryID: out.FirstKeptEntryID,
+		TokensBefore: out.TokensBefore, EstimatedTokensAfter: out.EstimatedTokensAfter,
 	}, nil
 }
 
@@ -304,9 +304,9 @@ func (w *Worker) ForkMessages(ctx context.Context) (map[string]any, error) {
 
 // Entries 返回追加顺序的条目；since 为空时返回全部。
 // 注意：这是追加游标，包含其他分支与压缩前历史，不能当分支分页用。
-func (w *Worker) Entries(ctx context.Context, since string, limit int) (map[string]any, error) {
+func (w *Worker) Entries(ctx context.Context, since string, limit int) (EntriesReply, error) {
 	if limit <= 0 || limit > 500 {
-		return nil, protocol.E("invalid_params", "limit 必须在 1 到 500 之间")
+		return EntriesReply{}, protocol.E("invalid_params", "limit 必须在 1 到 500 之间")
 	}
 	fields := map[string]any{}
 	if since != "" {
@@ -314,19 +314,19 @@ func (w *Worker) Entries(ctx context.Context, since string, limit int) (map[stri
 	}
 	raw, err := w.call(ctx, "get_entries", fields, false)
 	if err != nil {
-		return nil, err
+		return EntriesReply{}, err
 	}
 	var out struct {
 		Entries []json.RawMessage `json:"entries"`
 		LeafID  string            `json:"leafId"`
 	}
 	if json.Unmarshal(raw, &out) != nil {
-		return nil, protocol.E("pi_error", "Pi 返回的条目无效")
+		return EntriesReply{}, protocol.E("pi_error", "Pi 返回的条目无效")
 	}
 	if len(out.Entries) > limit {
 		out.Entries = out.Entries[:limit]
 	}
-	return map[string]any{"entries": out.Entries, "leafId": out.LeafID}, nil
+	return EntriesReply{Entries: out.Entries, LeafID: out.LeafID}, nil
 }
 
 // ExportHTML 让 Pi 把当前会话导出为 HTML。

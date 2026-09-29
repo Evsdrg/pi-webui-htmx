@@ -66,21 +66,31 @@ func (c *Config) Raw() (map[string]any, error) {
 	return out, nil
 }
 
-// Models 返回有界模型摘要，modelCount 表示截断前的模型总数。
-func (c *Config) Models() (map[string]any, error) {
+// ModelsReply 是 config.models 的回执。
+//
+// Providers 是脱敏后的用户文档子树，形状由用户的 models.json 决定，
+// 因此保持 map[string]any——这里固定下来的只是外层信封。
+// 用户文档透传（Raw / Settings / Trust）同理，不做事具名类型。
+type ModelsReply struct {
+	Providers  map[string]any `json:"providers"`
+	ModelCount int            `json:"modelCount"`
+}
+
+// Models 返回有界模型摘要，ModelCount 表示截断前的模型总数。
+func (c *Config) Models() (ModelsReply, error) {
 	doc, err := c.Raw()
 	if err != nil {
-		return nil, err
+		return ModelsReply{}, err
 	}
 	providers, ok := doc["providers"].(map[string]any)
 	if !ok {
-		return nil, protocol.E("invalid_history", "providers 必须是对象")
+		return ModelsReply{}, protocol.E("invalid_history", "providers 必须是对象")
 	}
 	total, remaining := 0, c.limits.MaxModels
 	for _, name := range sortedKeys(providers) {
 		entry, ok := providers[name].(map[string]any)
 		if !ok {
-			return nil, protocol.E("invalid_history", "provider 必须是对象")
+			return ModelsReply{}, protocol.E("invalid_history", "provider 必须是对象")
 		}
 		value, exists := entry["models"]
 		if !exists {
@@ -88,7 +98,7 @@ func (c *Config) Models() (map[string]any, error) {
 		}
 		models, ok := value.([]any)
 		if !ok {
-			return nil, protocol.E("invalid_history", "models 必须是数组")
+			return ModelsReply{}, protocol.E("invalid_history", "models 必须是数组")
 		}
 		total += len(models)
 		count := min(len(models), remaining)
@@ -98,7 +108,7 @@ func (c *Config) Models() (map[string]any, error) {
 		}
 		remaining -= count
 	}
-	return map[string]any{"providers": providers, "modelCount": total}, nil
+	return ModelsReply{Providers: providers, ModelCount: total}, nil
 }
 
 func (c *Config) Settings() (map[string]any, error) {
