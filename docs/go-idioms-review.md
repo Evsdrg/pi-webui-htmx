@@ -28,7 +28,9 @@
 - 脚本化取证，避免凭印象：花括号配对测量函数体长度；剥离字符串与注释后配对 `go func` 字面量，检查 `t.Fatal` 是否落在 goroutine 内；逐包扫描包注释；统计 `%w`、`errors.Is/As`、`any`、`map[string]…` 返回、`encoding string` 参数的出现量。
 - 计数都在 `863041d` 上采集，命令可复现。
 
-没做的：本机未安装 staticcheck/golangci-lint，因此下文 G18 只给建议未给基线；未做性能基准以外的长时间内存观测；未逐条比对 B/U 台账（落修前应先查重，见第 8 节）。
+没做的：本机未安装 staticcheck/golangci-lint，因此下文 G18 只给建议未给基线；未做性能基准以外的长时间内存观测；未逐条比对 B/U 台账（落修前应先查重，见第 9 节）。
+
+引用约定：第 3 节表格给出每个问题的**全路径**；正文为可读性改用文件名简写（`store.go:343`），同名的文件靠包名与上下文区分（如 `sessions/store.go` 与 `magiccontext/store.go`）。文中所有行号均按 `863041d`/`f1e95da` 的源码核对过。
 
 ## 3. 结论摘要
 
@@ -180,7 +182,7 @@ case <-time.After(2 * time.Millisecond):
 
 `internal/transport/send_queue.go:33`，用 CAS + 2ms 轮询等待字节配额。先澄清一个常见误判：**Go 1.23 起未被引用的定时器可被 GC 回收**，所以这里不是定时器泄漏（`time` 包文档已更新此说明）。问题是用轮询代替通知：等待方每 2ms 唤醒一次，配额释放没有触发唤醒。
 
-建议方向：发送协程归还配额时通过带缓冲 channel 通知，或直接用 `sync.Cond`／把配额与入队合并成一个受互斥保护的队列。这块是背压修复（10133 段）的核心，改动前需要先跑 `replay_ws_integration_test.go` 与 `-race`。
+建议方向：发送协程归还配额时通过带缓冲 channel 通知，或直接用 `sync.Cond`／把配额与入队合并成一个受互斥保护的队列。这块是背压修复的核心，改动前需要先跑 `replay_ws_test.go`（穿过 fake Pi → 补发环 → WS 的联测）与 `-race`。
 
 ### G11 双锁纪律未注释（低）
 
@@ -279,8 +281,8 @@ CI（`.github/workflows/check.yml`）只跑 `gofmt -l`、`go vet ./...`、`go te
 | 指标 | 值 |
 |---|---|
 | 时间 / 分配 | ~306µs，139KB/op，133 allocs/op |
-| `make([]byte, node.size)`（`store.go:343`） | 287.53MB / 3000 ≈ **96KB/op**（占该函数 flat 分配的 96%） |
-| `alignToTurn`（`store.go:429`，cum） | 92.97MB / 3000 ≈ **31KB/op** |
+| `make([]byte, node.size)`（`internal/sessions/store.go:343`） | 287.53MB / 3000 ≈ **96KB/op**（占该函数 flat 分配的 96%） |
+| `alignToTurn`（`internal/sessions/store.go:429`，cum） | 92.97MB / 3000 ≈ **31KB/op** |
 | 其中 `ProjectEntries`（cum，经 `entryKind`） | 72.86MB / 3000 ≈ 24KB/op |
 | `readEntry`（flat） | 20.11MB / 3000 ≈ 6.7KB/op |
 | `jsontext.(*Value).UnmarshalJSON` | 63.36MB / 3000 ≈ 21KB/op |
@@ -310,7 +312,7 @@ CI（`.github/workflows/check.yml`）只跑 `gofmt -l`、`go vet ./...`、`go te
 | 6 | 2 | 0.1% |
 | 7 | 2 | 0.1% |
 
-深度 ≥5 的全部 13 处：`sessions/metadata.go:67`、`:69`（titleForPage 的串/数组回落）、`presentation/presentation.go:200`、`:201`（funcMap 的 printf）、`runtime/manager.go:322`（reap 的指标判空）、`transport/server.go:366`、`:1630`、`management/config_values.go:96`、`:103`（密钥/占位符判定）、`management/discovery.go:145`（input 数组解析）、`management/packages.go:122`、`:128`、`:132`（并发查询结果归类）。
+深度 ≥5 的全部 13 处：`sessions/metadata.go:67`、`:69`（titleForPage 的串/数组回落，两个尝试分别在 `:58` 与 `:65`）、`presentation/presentation.go:200`、`:201`（funcMap 的 printf）、`runtime/manager.go:322`（reap 的指标判空）、`transport/server.go:366`、`:1630`、`management/config_values.go:96`、`:103`（密钥/占位符判定）、`management/discovery.go:145`（input 数组解析）、`management/packages.go:122`、`:128`、`:132`（并发查询结果归类）。
 
 ### 5.3 逐项
 
@@ -318,7 +320,11 @@ CI（`.github/workflows/check.yml`）只跑 `gofmt -l`、`go vet ./...`、`go te
 
 `alignToTurn`（`store.go:429`）把本页最旧一条以及向前补取的每一条都交给 `readEntry` + `entryKind`；`entryKind` 又调 `ProjectEntries`（完整 `json.Unmarshal` 成 `Entry`）——而它只想知道「这条是不是 user」。同一信息，`scanFile` 扫描时**已经解析过行首**（`type`/`id`/`parentId` 的快路径，见 `sessions/scan.go:20`）。
 
-修法：扫描时把「是不是 user 锚点」存进 `node`，`alignToTurn` 直接查表，不再读盘也不反序列化。预期消掉 ≈31KB/op 与相应分配次数（139KB/op 的约 22%）。两个注意点：`node` 变大后 `maxCachedBytes`（16MB）的估算要重算；轮边界对齐有既有回归，改完必须复跑。
+修法：扫描时把「是不是 user 锚点」存进 `node`，`alignToTurn` 直接查表，不再读盘也不反序列化。预期消掉 ≈31KB/op 与相应分配次数（139KB/op 的约 22%）。三个约束（详见 §6.3）：
+
+1. `isUser` 需要 `message.role`，而快路径只读到 parentId；增量是「顺手解出 role」（该路径本来就已整行扫过一遍做 `balancedJSON` 校验），不是整行重解析。
+2. 「扫描期顺手存派生信息」已有先例：`node.lastModelID` 就是这么来的（`scan.go:82-87`、`:116-121`）。
+3. 去掉读盘**不会**丢掉「读期间文件变化」的检测（页循环仍逐条 `ReadAt` + `json.Valid`），但失败形态会从「页更短」变成 `conflict`；另外 `node` 变大后 `maxCachedBytes`（16MB）的估算要重算。
 
 **G21 用失败做类型判断（中）**
 
@@ -326,7 +332,7 @@ CI（`.github/workflows/check.yml`）只跑 `gofmt -l`、`go vet ./...`、`go te
 	if json.Unmarshal(msg.Content, &blocks) != nil {
 ```
 
-`content` 是纯文本（字符串）时这次 unmarshal **必然失败**；`flattenContent`（`search.go:208`）则相反：对数组内容先试字符串、失败一次再试数组。两处都把「失败」当成类型判断，而 JSON 解码失败会构造带位置的错误对象——渲染基准里这类对象共 ~9KB/op。
+`content` 是纯文本（字符串）时这次 unmarshal **必然失败**；`flattenContent`（`search.go:208`）则相反：对数组内容先试字符串、失败一次再试数组；`metadata.go:58/65` 是第三份同样的写法。三处都把「失败」当成类型判断，而 JSON 解码失败会构造带位置的错误对象——渲染基准里这类对象共 ~9KB/op。
 
 修法：看 `content` 的第一个非空白字节（`"` 是字符串、`[` 是数组），选好再解析。行为不变、收益确定、风险极低。
 
@@ -336,9 +342,9 @@ CI（`.github/workflows/check.yml`）只跑 `gofmt -l`、`go vet ./...`、`go te
 
 **G23 每条记录一次分配（低）**
 
-`jsonl.Read` 每次都 `append` 到 `nil` 切片，因此每条记录都新分配一块。它被扫描（`scan.go:21`）、搜索（`search.go:108`）、惰性加载（`lazy.go:198`）、元数据（`metadata.go:26`）与 Pi 读循环（`pi/client.go:321`）共用。
+`jsonl.Read` 每次都 `append` 到 `nil` 切片，因此每条记录都新分配一块。它被扫描（`scan.go:30`）、搜索（`search.go:122`）、惰性加载（`lazy.go:204`）、元数据（`metadata.go:32`）、会话索引（`index.go:390`）与 Pi 读循环（`pi/client.go:323`）共用。
 
-可以加「调用方提供缓冲」的变体，但**返回切片不得跨调用保留**——需逐个调用点确认（扫描与 RPC 读循环都只当场解析后丢弃，理论上可行）。这条不要顺手改，属于「有收益但要小心」的一类。
+**这条不能一刀切**：`pi/client.go` 把读到的字节向上交出（`json.RawMessage(b)` → `runtime/manager.go:585` 存进 `pendingDialogs`，以及响应帧的 `frame.Data`），而读循环立刻去读下一帧——复用缓冲会静默覆写它们。可安全改的只有不保留字节的扫描类调用点，安全/危险清单见 §6.1。
 
 **G24 喂渲染层的 JSON 往返（中）**
 
@@ -346,11 +352,11 @@ CI（`.github/workflows/check.yml`）只跑 `gofmt -l`、`go vet ./...`、`go te
 func toAnyMaps(v any) []map[string]any {
 ```
 
-调用点在 `:423`（包清单）、`:444`（文件列表）、`:483`（搜索结果）。类型化切片 → `json.Marshal` → `json.Unmarshal` 成 `[]map[string]any` → 渲染层再用 `stringField(p, "name")` 之类的按键取值拼回**强类型行结构**（`FileRow`/`PackageRow`）。就是为了回到类型，先绕了一圈 JSON。
+调用点在 `:423`（包清单）、`:444`（文件列表）、`:483`（搜索结果）；加上 `RenderDirs` 与 `RenderGitStatus`，共 5 个吃 map 的入口。类型化切片 → `json.Marshal` → `json.Unmarshal` 成 `[]map[string]any` → 渲染层再用 `stringField(p, "name")` 之类的按键取值拼回**强类型行结构**（`FileRow`/`PackageRow`/`SearchHit`）。就是为了回到类型，先绕了一圈 JSON。
 
-模板用的是 `{{.Name}}`/`{{.Path}}` 这类**字段名**，不吃 JSON 键名，所以让渲染层直接收 `[]presentation.FileRow`（由 `transport` 从 `workspace.Entry` 逐字段转换）即可整段删掉往返。`RenderDirs` 已证明可行：它收 `[]map[string]string` 后第一件事就是转成 `[]DirRow`。
+模板用的是 `{{.Name}}`/`{{.Path}}` 这类**字段名**（已逐字核对：`files.html` 用 `Name/Path/IsDir/Size`，`packages.html` 用 `Name/Source/Version/Latest/HasUpdate/Disabled/Error`，`search.html` 用 `SessionID/EntryID/Title/Cwd/Snippet`），不吃 JSON 键名，所以让渲染层直接收类型化行即可整段删掉往返。
 
-与 G08 一起做：改的是 Go 内部签名，不动协议。改前先核对三个模板用到的字段名（`files.html`、`packages.html`、`search.html`）。
+与 G08 一起做：改的是 Go 内部签名，不动协议。代价与两个方案见 §6.6；注意 `stringField`/`boolField`/`recordOf` 还被模型面板、统计、分支树使用，**不能连带删除**。
 
 **G25 bash 输出按上限预分配（低）**
 
@@ -379,9 +385,9 @@ func toAnyMaps(v any) []map[string]any {
 | `printf "%s" 7` | 空字符串 | `%!s(int=7)` |
 | `printf "%%"` | `%%` | `%` |
 
-今天没有线上错误：全部模板里只有 `pi-webui-htmx/src/templates/models.html:2` 用了一处 `printf "%s/%s"`，两个参数都是字符串。风险是**静默**的——内置实现遇到类型不符会打出 `%!s(int=7)` 这种显眼标记，自定义版直接输出空。
+今天没有线上错误：全部模板里只有 `pi-webui-htmx/src/templates/models.html:2` 用了一处 `printf "%s/%s"`，两个参数都是字符串；另外 `%/` 在全部模板里**没有任何使用**。风险是**静默**的——内置实现遇到类型不符会打出 `%!s(int=7)` 这种显眼标记，自定义版直接输出空。
 
-建议：要么改名成 `joinSlash`/`key` 这样诚实的名字（只服务那一个用途），要么遇到不认识的动词时回落 `fmt.Sprintf`。不要保留一个「看起来像 fmt」的半实现。
+建议：**优先选零跨仓的修法**——删掉自定义覆盖，直接用内置 `printf`（`%s/%s` 行为一致）。改名成 `joinSlash`/`key` 属于跨仓原子改动，顺序要求与陷阱见 §6.5。
 
 **G29 serveUI 的重复样板（中）**
 
@@ -412,7 +418,106 @@ func jsonUnmarshal(b []byte, v any) error { return json.Unmarshal(b, v) }
 - **G20 的 node 扩字段**会让 `maxCachedBytes` 的字节估算偏乐观，改完应重测一次 2000 轮会话的常驻内存。
 - 本轮**没做**长时间稳定性观测（如 8 连接持续压力下的 RSS 曲线），也没在 CI 里加内存回归。若要锁住 G21/G22/G24 的收益，最省事的是把已有基准加一条 `-benchmem` 上限断言。
 
-## 6. 明确不算问题（避免后续误改）
+## 6. 交叉影响：谁和谁能一起改、谁会把谁改坏
+
+这一节是落地前的约束清单。下列判断都基于源码事实（行号已核对），不是推测。
+
+### 6.1 三组会互相破坏的组合
+
+**(1) G23（复用读取缓冲） × 事件与响应的所有权 —— 会静默损坏数据（最危险）**
+
+数据流是这样的：
+
+```
+pi/client.go:323   b, _, err := jsonl.Read(r, c.maxFrame)
+pi/client.go:354   rr := result{data: frame.Data}          // frame.Data 是 b 的子切片，交给等待中的 goroutine
+pi/client.go:365   c.onEvent(json.RawMessage(b))           // 同一个 b 继续向上传
+runtime/manager.go:585   w.pendingDialogs[ev.ID] = raw     // 原样保留，直到用户回答对话框
+dialogs.go:29/76         再把 raw 读出来使用（:113 是重新登记）
+```
+
+而读循环在交出 `b` 后**立刻**去读下一帧。一旦 `jsonl.Read` 改成复用缓冲，扩展对话框的内容与 RPC 响应数据都会被后续帧覆写——这正是补发队列修复里同一类「看起来没事」的别名缺陷，而且 `-race` 发现不了（它是逻辑所有权问题，不是数据竞争）。
+
+安全范围与危险范围：
+
+| 调用点 | 是否保留 `b` | 能否复用缓冲 |
+|---|---|---|
+| `sessions/scan.go:30` | 否，只存 offset/size | 可以 |
+| `sessions/index.go:390` | 否，只读首行 | 可以 |
+| `sessions/search.go:122`、`sessions/metadata.go:32` | 否，只产出 string | 可以 |
+| `sessions/lazy.go:204` | 需逐端点确认（thinking/image 当场解码；`session.entries` 会把原始条目带出） | 待审 |
+| `pi/client.go:323` | **是**（响应 data + pendingDialogs） | **不可以** |
+
+补一句：`events.Ring.Push` 存的是 `json.Marshal` 的新字节（`manager.go:517`），所以补发环本身与 `jsonl.Read` 无关；风险全在 `pi/client` 那条路径上。
+
+**(2) G04（加 `Unwrap`） × 37 处 `errors.As/Is` —— 用错误码决定行为的地方会改道**
+
+加 `Unwrap` 后 `errors.As` 会穿到更深层。三个已知的码驱动点：
+
+- `transport/server.go:359-372` 的 204 分支：要求 history 报 `not_found` **且** `store.Find` 报 `not_found` **且** 该身份仍有活跃 worker。若迁移时把某个底层失败（权限、IO）包成 `not_found`，这个分支会开始吞掉真正的错误，把故障伪装成「分支尚未落盘」。
+- `claims.go:183-232`：`outcome_unknown` / `conflict` / `busy` 决定「能不能重试」，直接关系 #258「结果未知不重发」。
+- `fragment.go:24-27`：用 `errors.As` 取 `Message` 决定用户看到哪句话；深层协议错误会取代外层提示。
+
+落地规则：`protocol.Error` 只放在最外层，cause 放内层；**逐点迁移，禁止全局 `%w` 替换**；每点配一个反例。
+
+**(3) G29（抽 `serveFragment`） × 非片段端点的状态码契约**
+
+`fragmentIssue` 的契约是「htmx 片段端点一律 200 + 可读 HTML」，而 `/ui/file-text`、`/ui/file-image`、lazy 加载、`/ui/exports/*` **必须保留真实状态码**——它们的调用方是 `response.ok` 或浏览器导航。把助手做成通用写响应函数、顺手用到这些端点上，会让 4xx 变成 200，前端 `if (!response.ok)` 静默失效。约束：助手只在片段渲染路径内使用。
+
+### 6.2 必须合并成一批的
+
+| 合并项 | 为什么不能分开 |
+|---|---|
+| G03 + G29 | 同一函数（`serveUI` 381 行）；拆路由表与抽助手是同一次重排 |
+| G02 + G07 + G12 + G24 | 都在改 transport/presentation 的函数签名，分开做要改两遍 |
+| G08 + G24 + G09 | 同一条渲染边界；先 G24 换签名、再决定 G09 要不要接口，反过来接口要写两遍 |
+| G04 + G05 + G06 | 同一条错误/回执契约；G06 换哨兵时若让「未启用」被当成失败，没配 storage 的部署会开始拒绝命令 |
+| G21 + G27（metadata 那两处） | `lazy.go:55`、`search.go:213`、`metadata.go:58/65` 是同一个问题（拿失败当类型判断），一个 helper 全覆盖，顺带消掉最深的 7 层嵌套 |
+
+### 6.3 顺序敏感
+
+- **G20 必须早于 G22/G23，并且改完要重新采样**：它会消掉首页 139KB/op 里的 ~31KB（22%），profile 的占比会整体移动；在旧数据上继续优化等于白测。
+- **G20 的可行性取决于扫描期能拿到什么**。`node` 目前只存 `parent/offset/size/lastModelID`（`store.go:260-265`），而 `lastModelID` 正是扫描期顺手存下来的派生信息（`scan.go:82-87`、`:116-121`，依据 `head.Type == "model_change"`）——**先例已经存在**。但 `isUser` 需要 `message.role`，而快路径刻意只读到 parentId 为止。好在该路径**已经整行扫过一遍**（`balancedJSON(b)` 的 B13 结构校验），所以增量是「顺手解出 `message.role`」而不是「整行重新解析」。
+- **G20 不会丢掉「读期间文件变化」的检测**：页循环（`store.go:341-352`）对每条选中的条目都会重新 `ReadAt` + `json.Valid`，而 `alignToTurn` 追加的条目也在同一批里；另外 `scanFile` 遇到坏记录本来就是直接失败。差别只在失败形态：原来是「页更短」，之后是 `conflict` 错误——这是有意选择，要写进改动说明。
+- **G18 要排在 G13/G14/G15/G30 之后**，否则 CI 立刻变红；或在接入时先跑基线、用忽略清单过渡。
+- **G17（386 个测试改名）单独提交**：已核实 CI 与 `scripts/` 没有 `-run` 过滤，文档也没有引用测试名（只有本文件举的一个例子），所以改名本身安全；但混在行为/性能改动里会让 diff 失去可读性。
+
+### 6.4 常量与接口的连带约束
+
+| 约束 | 细节 |
+|---|---|
+| `wsReadLimit` | `server.go:68` 与 `pi.MaxImages × MaxImageDataLen`、附件预算、U05 的修复绑在一起，`server_test.go:1272-1279` 有断言。G26 若调整，必须同步测试与前端预检 |
+| `MetricsSink` | `runtime/manager.go:102`，目前**只有 `observe.Metrics` 一个实现、没有测试替身**，所以 G05 加一个计数方法成本很低；但它属于 `runtime`，不要顺势扩成通用观测总线 |
+| 方法表 | `transport.SupportedMethods`（`server.go:41`）与 `protocol.specs`（`methods.go:59`）由 `methods_test.go:28/47`、`ui_contract_test.go:17/75` 交叉核对；G01 拆分若顺手动方法表，会同时触发这两组测试 |
+| `IsUrgent` | `claims.go:224` 用它在派发**之外**决定排队优先级；拆 `dispatchCommon` 时不要把它一起搬进去 |
+
+### 6.5 G28 的跨仓陷阱，以及零跨仓的方案
+
+模板里只有一处 `printf`（`pi-webui-htmx/src/templates/models.html:2`，`printf "%s/%s"`，两个参数都是字符串），而 `%/` **在全部模板里没有任何使用**。
+
+- **推荐**：删掉自定义覆盖，直接用内置 `printf`。`%s/%s` 行为一致；而且内置遇到类型不符会打印 `%!s(int=7)` 这种显眼标记，不再静默出空串。零跨仓改动。
+- 若要改名（`key`/`joinSlash`）：模板里出现未知函数会让 `LoadFromDir` 直接失败、桥**拒绝启动**，所以必须「桥先加新名 → UI 改模板 → 桥再删旧名」三步走，不能一次改完。
+
+### 6.6 G24 的两个落点
+
+现状是：`transport` 用 `toAnyMaps` 把类型化切片 JSON 往返成 `[]map[string]any`（`server.go:423/444/483`），`presentation` 再用 `stringField(m,"name")` 按键取值拼回类型化行。吃 map 的入口共 5 个：`RenderFiles`、`RenderDirs`、`RenderPackages`、`RenderSearch`、`RenderGitStatus`。
+
+- **方案 A（改成类型化入参，推荐）**：模板只用**字段名**，已逐字核对——`files.html` 用 `Name/Path/IsDir/Size`，`packages.html` 用 `Name/Source/Version/Latest/HasUpdate/Disabled/Error`，`search.html` 用 `SessionID/EntryID/Title/Cwd/Snippet`——所以模板不用动。代价是要同步改直接构造 map 的测试（`presentation/dirs_test.go:12-54`、`fragments_test.go:34-81`），并保留 `formatSize(intField(e,"size"))`（`presentation.go:744`）的格式化语义。
+- **方案 B（就地构造 map，不经过 JSON）**：测试不动、风险最小，省掉 marshal/unmarshal，但每行仍有一次 map 分配。
+
+另：`stringField`/`boolField`/`recordOf` **不能连带删除**——模型面板（`presentation.go:673`）、统计（`stats.go:133`）、分支树（`presentation.go:1036`）都还在用。
+
+### 6.7 明确「不要一起做」的清单
+
+- 不要把 G23（缓冲复用）用到 `pi/client.go`。
+- 不要把 G29 的助手用到非片段端点。
+- 不要在 G04 迁移里做全局 `%w` 替换。
+- 不要把 G01（分发拆分）与 G03/G29（`serveUI` 重排）放进同一次提交：都是 `server.go` 的大块移动。
+- 不要把 G17（测试改名）与任何行为/性能改动放同一次提交。
+- 不要为 G27（嵌套深度）单独重构：真正值得动的两处已经在 G21/G28 里。
+- G19（magic-context 的 SQL 构造）与本轮所有改动解耦，保持不动。
+
+## 7. 明确不算问题（避免后续误改）
 
 | 现象 | 为什么不改 |
 |---|---|
@@ -425,23 +530,35 @@ func jsonUnmarshal(b []byte, v any) error { return json.Unmarshal(b, v) }
 | `context` 首参、不入结构体；`http.Server` 超时齐全 | 符合 Code Review Comments |
 | 测试未在 goroutine 内 `t.Fatal` | 已用脚本核对，6 个疑似点均为误报 |
 
-## 7. 建议的修复顺序
+## 8. 建议的批次与顺序
 
-按「风险低 → 风险高」排，前两步可以立刻做且几乎无回归风险：
+批次按上面的耦合结论排（每批一个提交；标注「独立」的可以随时插队）：
 
-1. **零风险清理**（G13、G14、G15、G16、G17 的 `t.Setenv`、G30）：删假引用、死代码与无价值包装、补包注释。一个提交。
-2. **接入 staticcheck**（G18）：先看基线，再定规则。它可能再报出本文件没列到的同类问题。
-3. **错误链**（G04）：`Error` 加 cause 与 `Unwrap`、新增 `Wrap`；先只加能力不改调用点，再逐包迁移。需要回归的错误路径：`public_origin` 解析、`discovery` 出站、`magiccontext` 存储不可用。
-4. **回执可观测性**（G05、G06）：加降级计数/健康位，`Record` 语义收敛。
-5. **类型表达**（G07、G08）：`status`/`encoding` 具名类型、`stop(force, idleOnly)` 拆分、渲染边界结构体。面较大，建议按包分批。
-6. **结构性重构**（G01、G02、G03、G09、G12）：分发拆分、`transport.Config`、`serveUI` 拆表、nil 语义统一。这批动的是主干，建议单独排期，并在开始前先补齐「62 个方法逐一调用」的契约回归——现有 `ui_contract_test.go` 与 `methods_test.go` 是基础。
-7. **G10（并发配额通知）**：与 G01 同批或独立，改动前先跑补发环联测与 `-race`。
-8. **第二轮内存项**（G20→G24）：按收益/风险比排——先 G21（首字节判断，几乎无风险）与 G24（与 G08 同批做），再 G20（node 存 kind，需重估缓存上界），最后 G22/G23（涉切片所有权，各自单独提交）。
-9. **G25–G29**：G25 一行改；G28 要么改名要么回落 `fmt.Sprintf`；G29 与 G03 同批。
+| 批次 | 内容 | 前置 | 关键约束 |
+|---|---|---|---|
+| **A 清理** | G13、G14、G15、G16、G30 + G17 的 `t.Setenv`（不含改名） | 无 | 零行为变化；G15 删除不可达分支时要留注释说明 `len==1` 只可能因为超字节上限 |
+| **B 静态检查** | G18 接入 staticcheck | A | 先跑基线再定规则，别一开始就 `-fail` |
+| **C 错误与回执契约** | G04（只加能力）+ G05 + G06 | 先补三个反例：204 分支、`outcome_unknown`、fragment 提示文案 | 逐点迁移；`protocol.Error` 留最外层；「未启用」不等于失败 |
+| **D 内容形状判定** | G21（`lazy.go` / `search.go` / `metadata.go` 三处同一 helper） | 无 | 顺带消掉 G27 的两处最深嵌套 |
+| **E 渲染边界** | G24（方案 A）+ G08 | 已核对模板字段名（§6.6） | 勿连带删除 `stringField`/`recordOf`；同步改 `dirs_test.go`/`fragments_test.go` |
+| **F 扫描期 kind** | G20 | 无 | 扩展 head 解析（不是整行重解析）；**改完立刻重测 pprof**，再决定 G22/G23 |
+| **G 内存收尾** | G22（一个提交）→ G23（另一个提交，范围受限） | F | G23 **排除 `pi/client.go`**；两处都涉及切片所有权，各自配 `-race` 与基准对比 |
+| **H printf** | G28 零跨仓方案（删覆盖） | 无 | 若改名则必须三步跨仓 |
+| **I HTTP 签名** | G02 + G07 + G12（`transport.Config`、`encoding` 具名类型、nil 语义统一） | C、E | G12 要给 `New` 加 `ui != nil` 守卫（现在靠 `SetMagicContext` 的 nil 接收者兜着，调用点在 `server.go:126`） |
+| **J serveUI** | G03 + G29 | I | 助手只用于片段端点 |
+| **K 分发拆分** | G01 | J | 保持 `claims`/`IsUrgent` 在派发之外；方法表保持单一来源 |
+| **L 配额通知** | G10 | 独立 | 先跑 `replay_ws_test.go` 联测与 `replay_queue_test.go` 的四个补发反例 |
+| **M 测试改名** | G17 剩余部分 | 独立 | 纯机械提交，不夹带行为改动 |
+| **N 记录不动** | G19、G26 | — | G26 只补文档说明内存上界 |
 
 每步的验收沿用仓库既有门槛：`test -z "$(gofmt -l .)"`、`go vet ./...`、`go test -race -count=1 ./...`，跨仓改动再跑 `scripts/verify-pair.sh`。
 
-## 8. 与既有台账的关系
+两点提醒：
+
+1. A/B/D/H 四批都不改行为，可以连续做掉；C/F 是唯一需要重新采样的两批。
+2. 别名类缺陷（G23 若越界）与错误码改道（G04 若迁移过头）都不会被 `-race` 或现有断言发现，只能靠**先写反例**——这也是本仓库既有的做法（先红后绿）。
+
+## 9. 与既有台账的关系
 
 `docs/code-audit.md` 维护 B01–B81 与 U01–U21 两组编号，内容偏**正确性与安全**；本文件用独立前缀 G，记录的是**语言惯用性与结构**，两者可能落在同一段代码上但视角不同，不重复立号。
 
