@@ -16,6 +16,7 @@
 | [当前 v1 协议](api/v1/protocol.md) | 已有入口/方法与目标语义的区别 |
 | [Pi 兼容矩阵](docs/pi-compatibility.md) | Pi 0.85.1、桥、UI 和刻意排除/暂缓项 |
 | [审查台账](docs/code-audit.md) | 问题、证据、方案归属与待修状态 |
+| [Go 惯用写法复核](docs/go-idioms-review.md) | G01–G19：错误链、类型表达、结构体量与工程配置的对照结论 |
 | [UI 包契约](../pi-webui-htmx/docs/contract.md) | 模板/构建/前端行为与版本配套 |
 
 ## 当前能力
