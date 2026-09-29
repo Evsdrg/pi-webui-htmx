@@ -10,8 +10,6 @@ import (
 	"github.com/creack/pty"
 )
 
-var _ = pty.Winsize{}
-
 // errUnsupportedPlatform 让非 Linux 平台在运行期明确失败。
 // Pdeathsig 是 Linux 专有能力；与 runtime/process_oth.go 一致，
 // 宁可显式报错，也不假装行为等价。

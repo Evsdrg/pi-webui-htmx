@@ -1,3 +1,13 @@
+// Package transport 是桥的 HTTP 与 WebSocket 入口：鉴权、限额、路由与命令分发。
+//
+// 分发只有一份实现：WebSocket 连接与云端隧道虚拟连接都走 dispatchCommon，
+// 两者只在订阅与连接生命周期上不同（见 connSink）。这一点的原因是两套实现
+// 曾经各写一份，补发与确认的顺序随即漂移。
+//
+// HTTP 端点按「调用方期待什么」分为两类，不能混：
+//   - 片段端点（htmx 会交换的）：一律 200 + 可读 HTML，错误当内容渲染。
+//   - fetch/导航端点（/ui/file-text、/ui/file-image、lazy、/ui/exports/*）：
+//     必须保留真实状态码，调用方靠 response.ok 或浏览器行为判断。
 package transport
 
 import (

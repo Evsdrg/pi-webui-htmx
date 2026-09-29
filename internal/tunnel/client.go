@@ -4,7 +4,6 @@ package tunnel
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"net/http"
 	"strings"
@@ -266,5 +265,3 @@ const (
 	maxFrame     = 1 << 20
 	writeTimeout = 10 * time.Second
 )
-
-var _ = json.Marshal

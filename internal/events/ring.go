@@ -40,11 +40,10 @@ func (r *Ring) Push(seq uint64, payload []byte) {
 	r.items = append(r.items, Item{Seq: seq, Payload: payload})
 	r.bytes += int64(len(payload))
 	for len(r.items) > r.maxItems || r.bytes > r.maxBytes {
-		if len(r.items) == 1 && r.bytes <= r.maxBytes {
-			break
-		}
+		// 只剩一条时一定是因为它自己就超了字节上限（maxItems 至少为 1，
+		// 那时 len > maxItems 不可能成立），淘汰它会让 Ring 变成空的、
+		// 看起来像「什么都没有」，反而误导重连方。保留它并记录丢弃。
 		if len(r.items) == 1 {
-			// 单条已超限：保留它并记录丢弃，避免空 Ring 造成误导。
 			r.dropped++
 			break
 		}

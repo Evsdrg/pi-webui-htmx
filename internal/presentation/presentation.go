@@ -991,9 +991,6 @@ func formatSize(n int) string {
 	return strconv.Itoa(n/div) + " " + string("KMGTPE"[exp]) + "iB"
 }
 
-// Now 供测试替换时间来源。
-var Now = time.Now
-
 // BranchRows 把 Pi 的会话树与可分支消息转成渲染行。
 //
 // 摊平必须用显式栈而不是递归：长会话的分支树可能是上万层的线性链，

@@ -136,7 +136,7 @@ func (s *Store) searchFile(path, needle string, limits SearchLimits, out *Search
 			ID   string `json:"id"`
 			Cwd  string `json:"cwd"`
 		}
-		if jsonUnmarshal(b, &header) == nil && header.Type == "session" && ValidID(header.ID) {
+		if json.Unmarshal(b, &header) == nil && header.Type == "session" && ValidID(header.ID) {
 			sessionID = header.ID
 			cwd = header.Cwd
 			continue
@@ -145,7 +145,7 @@ func (s *Store) searchFile(path, needle string, limits SearchLimits, out *Search
 			var info struct {
 				Name string `json:"name"`
 			}
-			if jsonUnmarshal(b, &info) == nil {
+			if json.Unmarshal(b, &info) == nil {
 				title = shortTitle(info.Name, 160)
 			}
 			continue
@@ -157,7 +157,7 @@ func (s *Store) searchFile(path, needle string, limits SearchLimits, out *Search
 					Content json.RawMessage `json:"content"`
 				} `json:"message"`
 			}
-			if jsonUnmarshal(b, &item) == nil && item.Message.Role == "user" {
+			if json.Unmarshal(b, &item) == nil && item.Message.Role == "user" {
 				firstText = shortTitle(flattenContent(item.Message.Content), 80)
 			}
 		}
@@ -171,7 +171,7 @@ func (s *Store) searchFile(path, needle string, limits SearchLimits, out *Search
 			Message   json.RawMessage `json:"message"`
 			Summary   string          `json:"summary"`
 		}
-		if jsonUnmarshal(b, &item) != nil {
+		if json.Unmarshal(b, &item) != nil {
 			continue
 		}
 		role := ""
@@ -182,7 +182,7 @@ func (s *Store) searchFile(path, needle string, limits SearchLimits, out *Search
 				Content json.RawMessage `json:"content"`
 				Command string          `json:"command"`
 			}
-			if jsonUnmarshal(item.Message, &msg) == nil {
+			if json.Unmarshal(item.Message, &msg) == nil {
 				role = msg.Role
 				text = flattenContent(msg.Content)
 				if text == "" {
@@ -210,14 +210,14 @@ func flattenContent(raw json.RawMessage) string {
 		return ""
 	}
 	var s string
-	if jsonUnmarshal(raw, &s) == nil {
+	if json.Unmarshal(raw, &s) == nil {
 		return s
 	}
 	var blocks []struct {
 		Type string `json:"type"`
 		Text string `json:"text"`
 	}
-	if jsonUnmarshal(raw, &blocks) != nil {
+	if json.Unmarshal(raw, &blocks) != nil {
 		return ""
 	}
 	parts := make([]string, 0, len(blocks))

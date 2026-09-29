@@ -2,7 +2,6 @@ package terminal
 
 import (
 	"context"
-	"os"
 	"strings"
 	"syscall"
 	"testing"
@@ -159,9 +158,8 @@ func Test关闭后订阅与写入报错(t *testing.T) {
 }
 
 func Test环境变量可覆盖默认shell(t *testing.T) {
-	old := os.Getenv("SHELL")
-	defer os.Setenv("SHELL", old)
-	os.Setenv("SHELL", "/bin/sh")
+	// t.Setenv 自动恢复原值，且禁止该测试并行执行。
+	t.Setenv("SHELL", "/bin/sh")
 	m := NewManager(Defaults())
 	defer m.Close()
 	term, err := m.Open(t.TempDir(), "", 80, 24)

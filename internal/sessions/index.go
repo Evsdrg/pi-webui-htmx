@@ -16,12 +16,6 @@ import (
 	"pi-bridge-go/internal/workspace"
 )
 
-func jsonUnmarshal(b []byte, v any) error { return json.Unmarshal(b, v) }
-
-func newBufReader(f *os.File) *bufio.Reader { return bufio.NewReader(f) }
-
-func fnvNew64a() *fnv64a { return &fnv64a{} }
-
 // fnv64a 是轻量指纹累加器，避免为指纹引入额外依赖。
 type fnv64a struct{ state uint64 }
 
@@ -103,7 +97,7 @@ func NewIndex(root *os.Root, dir string, policy *workspace.Policy, limits Limits
 // fingerprint 只遍历目录项并汇总路径、大小、修改时间，
 // 不打开任何文件；嵌套子目录同样被覆盖。
 func (x *Index) computeFingerprint(ctx context.Context) (string, error) {
-	h := fnvNew64a()
+	h := &fnv64a{}
 	err := walkDir(ctx, x.root, ".", 0, func(path string, size int64, mod time.Time) error {
 		writeFingerprint(h, path, size, mod)
 		return nil
@@ -387,7 +381,7 @@ func readHeader(root *os.Root, path string) (headerInfo, error) {
 	if err != nil || !st.Mode().IsRegular() {
 		return headerInfo{}, protocol.E("invalid_history", "不是普通文件")
 	}
-	b, _, err := jsonl.Read(newBufReader(f), 64<<10)
+	b, _, err := jsonl.Read(bufio.NewReader(f), 64<<10)
 	if err != nil {
 		return headerInfo{}, err
 	}
@@ -399,7 +393,7 @@ func readHeader(root *os.Root, path string) (headerInfo, error) {
 		Name      string `json:"name"`
 		Timestamp string `json:"timestamp"`
 	}
-	if err := jsonUnmarshal(b, &raw); err != nil {
+	if err := json.Unmarshal(b, &raw); err != nil {
 		return headerInfo{}, err
 	}
 	if raw.Type != "session" || !ValidID(raw.ID) {
