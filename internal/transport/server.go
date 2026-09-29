@@ -443,6 +443,10 @@ func (s *Server) serveUI(w http.ResponseWriter, r *http.Request) bool {
 		writeHTML(w, encoding, html)
 		return true
 
+	case path == "/ui/dirs":
+		s.serveDirs(w, r, encoding)
+		return true
+
 	case path == "/ui/git-status":
 		status, gerr := s.files.GitStatus(r.Context(), r.URL.Query().Get("path"))
 		if gerr != nil {
@@ -2064,4 +2068,47 @@ func (s *Server) serveFileImage(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.WriteHeader(200)
 	_, _ = w.Write(body)
+}
+
+// serveDirs 渲染「新建会话」目录选择器的子目录列表。
+//
+// 与 /ui/files 的区别：只列目录，且要给出「上一级」——但上一级不能越出
+// 已配置的工作区根。桥只允许在根内浏览，因此父目录等于根时就不再提供回退，
+// 由前端把按钮禁用掉。
+func (s *Server) serveDirs(w http.ResponseWriter, r *http.Request, encoding string) {
+	path := r.URL.Query().Get("path")
+	if path == "" {
+		roots := s.files.Roots()
+		if len(roots) == 0 {
+			s.fragmentIssue(w, encoding, protocol.E("invalid_params", "尚未配置工作区根"))
+			return
+		}
+		path = roots[0]
+	}
+	entries, truncated, err := s.files.List(path)
+	if err != nil {
+		s.fragmentIssue(w, encoding, err)
+		return
+	}
+	dirs := make([]map[string]string, 0, 16)
+	for _, e := range entries {
+		if e.IsDir {
+			dirs = append(dirs, map[string]string{"name": e.Name, "path": e.Path})
+		}
+	}
+	// 父目录：仍在某个根内才提供。用 Roots 逐个判定，避免把 filepath.Dir
+	// 的结果直接当成可浏览路径（那会越出沙箱）。
+	parent := ""
+	for _, root := range s.files.Roots() {
+		if rel, rerr := filepath.Rel(root, path); rerr == nil && rel != "." && !strings.HasPrefix(rel, "..") {
+			parent = filepath.Dir(path)
+			break
+		}
+	}
+	html, rerr := s.ui.RenderDirs(path, parent, dirs, truncated)
+	if rerr != nil {
+		s.fragmentIssue(w, encoding, rerr)
+		return
+	}
+	writeHTML(w, encoding, html)
 }

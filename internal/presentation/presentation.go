@@ -735,6 +735,36 @@ func (r *Renderer) RenderFiles(root string, entries []map[string]any, truncated 
 	return r.execute("files.html", FilesData{Root: root, Entries: rows, Truncated: truncated})
 }
 
+// DirRow 是目录选择器里的一行。
+type DirRow struct {
+	Name string
+	Path string
+}
+
+// DirsData 驱动「新建会话」的目录选择器。
+//
+// Parent 为空表示当前目录就是某个工作区根，前端据此禁用「上一级」——
+// 桥只允许在根内浏览，越出根没有意义也不安全。
+type DirsData struct {
+	Path      string
+	Parent    string
+	Dirs      []DirRow
+	Truncated bool
+}
+
+// RenderDirs 渲染目录选择器的子目录列表。
+func (r *Renderer) RenderDirs(path, parent string, dirs []map[string]string, truncated bool) (string, error) {
+	rows := make([]DirRow, 0, len(dirs))
+	for _, d := range dirs {
+		row := DirRow{Name: d["name"], Path: d["path"]}
+		if row.Name == "" || row.Path == "" {
+			continue
+		}
+		rows = append(rows, row)
+	}
+	return r.execute("dirs.html", DirsData{Path: path, Parent: parent, Dirs: rows, Truncated: truncated})
+}
+
 // GitFileRow 是「变更」列表的一行。
 type GitFileRow struct {
 	Status string
