@@ -174,7 +174,7 @@ func (r *Renderer) RenderFiles(root string, entries []map[string]any, truncated 
 
 `runtime.MetricsSink`（`manager.go:102`）与 `tunnel.Handler`（`client.go:51`）已经是这个模式，presentation 是例外。
 
-### G10 配额等待用轮询表达（低）
+### G10 配额等待用轮询表达（低） · 已在批次 L 修复，见第 10 节
 
 ```go
 case <-time.After(2 * time.Millisecond):
@@ -583,6 +583,7 @@ dialogs.go:29/76         再把 raw 读出来使用（:113 是重新登记）
 | J | `fa6bc38` | G03 + G29：`Encoding` 具名类型、serveUI 按契约拆三个函数、11 处样板改 `renderFragment` | 顺带修 history 400 → 200 |
 | K1 | `504c1b3` | G01 结构：`dispatchCommon` 按域拆成 8 个 `dispatch*`（`dispatch.go`），60 个 case 纯搬移 | 无 |
 | K2 | `57bdf47` | G01 类型：36 处回执改具名类型（`responses.go` / `runtime/replies.go` / `management.ModelsReply`） | 用户文档与诊断 map 不动 |
+| L | `5b21aae` | G10：出站字节配额由 2ms 轮询改为归还时广播 | 见下（实测数据） |
 
 ### 批次 A
 
@@ -765,3 +766,24 @@ dialogs.go:29/76         再把 raw 读出来使用（:113 是重新登记）
 **验证**：把 36 个方法的键集合与改造前的 map 字面量逐一对照（脚本从旧源码解析键名、与新类型的 json 标签比对），**零差异**；新增 `responses_test.go` 把每个形状的键集合钉在产生它的方法旁边，`protocol.md` 收同一张表（有意重复：测试的职责是独立重述期望）。
 
 桥自建的**事件载荷**（`terminal_closed`、`terminal.output`）也一并类型化，因此分发路径上不再有任何 map 字面量；**Pi 自己的事件保持原样透传**，形状属于 Pi。
+
+### 批次 L（G10）
+
+`enqueueBounded` 以前用 CAS 抢占 + `time.After(2ms)` 轮询等待字节配额，归还的一侧不发通知。改成 `outboundQueue`：
+
+- 检查条件与挂载等待**在同一把锁下**（消除漏唤醒）；
+- 归还时若有人在等，`close` 掉当前代次的信号通道并换新——**广播**，且只在真有竞争时才分配，平稳路径零分配；
+- 单播式唤醒（只叫醒一个）会让其余等待者白等到下一次归还，所以这里是广播而不是单个令牌。
+
+**实测**（同一台机器，两个工作树各跑同一段测量代码）：测「归还瞬间 → 等待者拿到预算」的延迟，20 轮取平均。
+
+| 实现 | 平均唤醒延迟 |
+|---|---|
+| 旧（2ms 轮询） | **1.074 ms** |
+| 新（归还时通知） | **10 µs** |
+
+旧实现的 1.074ms 与「[0, 2ms] 上均匀分布的期望 1ms」一致——这项交叉验证说明测量方法本身没有偏。
+
+**一个失败的测量也记下来**：先试图用 `voluntary_ctxt_switches` 数唤醒次数，结果新旧都是 0 或 1。原因是 Go 的定时器唤醒走 netpoller，多数情况下不产生 OS 线程切换，这个计数器抓不到轮询。它证明不了任何事，已放弃。
+
+**回归**（`send_queue_test.go`）：一次归还唤醒全部等待者（单播实现会失败）、无人等待时归还的空间不丢、等待被取消后不残留唤醒计数、超单帧上限与空帧直接拒绝。
