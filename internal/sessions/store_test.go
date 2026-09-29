@@ -363,3 +363,57 @@ func oldestRole(t *testing.T, page Page) string {
 	}
 	return v.Message.Role
 }
+
+// 页条目的生命周期必须独立于「下一次读取」。
+//
+// 现在整页只用一次分配（各条目是同一块缓冲的子切片，见 History），
+// 这是有意的：条目要活到渲染完。代价是有人可能顺手把这块缓冲也池化，
+// 那会让「读完下一页后上一页内容被覆写」——本仓历史上已经出过一次
+// 同类别名缺陷（FileList / DataTransfer）。这条测试把边界钉住：
+// 拿到的条目在自己被丢弃之前，内容不因后续读取而改变。
+func Test页条目不被后续读取改变(t *testing.T) {
+	cwd := t.TempDir()
+	store, dir := newStore(t, cwd)
+	lines := []string{}
+	parent := ""
+	for turn := 0; turn < 12; turn++ {
+		u := fmt.Sprintf("u%d", turn)
+		lines = append(lines, entryRole(u, parent, "user"))
+		parent = u
+		a := fmt.Sprintf("a%d", turn)
+		lines = append(lines, entryRole(a, parent, "assistant"))
+		parent = a
+	}
+	id := writeSession(t, dir, "life", cwd, lines...)
+	ctx := context.Background()
+
+	first, err := store.History(ctx, id, "", "", 6)
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot := make([]string, len(first.Entries))
+	for i, e := range first.Entries {
+		snapshot[i] = string(e)
+	}
+	// 继续翻页、换叶子读、重复读首页——这些都可能踩到共享缓冲。
+	if _, err := store.History(ctx, id, "", first.OldestEntryID, 6); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.History(ctx, id, "", "", 50); err != nil {
+		t.Fatal(err)
+	}
+	for i, e := range first.Entries {
+		if string(e) != snapshot[i] {
+			t.Fatalf("第 %d 条在后续读取后被改变：\n前 %s\n后 %s", i, snapshot[i], e)
+		}
+	}
+	// 内容本身也必须仍是合法 JSON 且能解出 id。
+	for i, e := range first.Entries {
+		var v struct {
+			ID string `json:"id"`
+		}
+		if err := json.Unmarshal(e, &v); err != nil || v.ID == "" {
+			t.Fatalf("第 %d 条不再是合法条目：%v %s", i, err, e)
+		}
+	}
+}

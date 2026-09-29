@@ -323,7 +323,9 @@ func (s *Store) History(ctx context.Context, id, leaf, before string, limit int)
 		}
 		start = nodes[start].parent
 	}
-	selected := []string{}
+	// 预分配：条目数已知上界（limit），避免 append 逐次增长拷贝。
+	// alignToTurn 可能再多取一些，那时 append 会自行扩容。
+	selected := make([]string, 0, limit)
 	total := 0
 	cursor := start
 	for cursor != "" && len(selected) < limit {
@@ -342,18 +344,33 @@ func (s *Store) History(ctx context.Context, id, leaf, before string, limit int)
 	// 轮边界对齐：见 alignToTurn 的说明。它会向前多取条目，
 	// 因此返回更新后的游标，HasMore 必须用它而不是原 cursor。
 	selected, cursor = s.alignToTurn(nodes, selected, total, cursor)
-	page := Page{SessionID: id, LeafID: leaf, LeafSource: "disk", Entries: []json.RawMessage{}, HasMore: cursor != ""}
+
+	// 整页只分配一次：条目长度之和就是需要的字节数，逐条 ReadAt 填进去。
+	// 以前是每条一次 make([]byte, node.size)——分配次数与条目数同阶，
+	// 而真正必须活下来的只是字节本身（Page.Entries 要留到渲染完）。
+	// 各条目是这块缓冲的子切片，因此它的生命周期由 Entries 决定。
+	//
+	// 长度在这里重算而不是沿用 total：alignToTurn 会追加条目，
+	// 它不再回传累加值（那个值除本处外无人使用）。
+	total = 0
+	for _, id := range selected {
+		total += nodes[id].size
+	}
+	buf := make([]byte, total)
+	page := Page{SessionID: id, LeafID: leaf, LeafSource: "disk", Entries: make([]json.RawMessage, 0, len(selected)), HasMore: cursor != ""}
+	at := 0
 	for i := len(selected) - 1; i >= 0; i-- {
 		node := nodes[selected[i]]
-		b := make([]byte, node.size)
-		if _, err = f.ReadAt(b, node.offset); err != nil {
+		slot := buf[at : at+node.size]
+		if _, err = f.ReadAt(slot, node.offset); err != nil {
 			return Page{}, protocol.E("conflict", "读取期间历史文件发生变化")
 		}
-		b = bytes.TrimSpace(b)
-		if !json.Valid(b) {
+		trimmed := bytes.TrimSpace(slot)
+		if !json.Valid(trimmed) {
 			return Page{}, protocol.E("conflict", "读取期间历史文件发生变化")
 		}
-		page.Entries = append(page.Entries, json.RawMessage(b))
+		page.Entries = append(page.Entries, json.RawMessage(trimmed))
+		at += node.size
 	}
 	if len(selected) > 0 {
 		page.OldestEntryID = selected[len(selected)-1]
