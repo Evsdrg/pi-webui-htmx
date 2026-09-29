@@ -13,14 +13,17 @@ const disposeLayout = mountLayout();
 const app = new Workbench(scroll.bottom);
 app.start();
 
-async function render(root: ParentNode): Promise<void> {
-  if (!root.querySelector('.markdown,.ansi')) return;
-  const { mountMarkdown } = await import('@/modules/markdown');
-  await mountMarkdown(root);
-  if (root.querySelector('pre code')) (await import('@/modules/highlight')).mountHighlight(root);
-  if (root.querySelector('.math, .math-inline, .math-display, .markdown')) (await import('@/modules/math')).mountMath(root);
-  if (root.querySelector('.mermaid, .language-mermaid')) (await import('@/modules/mermaid')).mountMermaid(root);
-  if (root.querySelector('.ansi')) (await import('@/modules/ansi')).mountAnsi(root);
+async function render(root: HTMLElement): Promise<void> {
+  const run = async (selector: string, load: () => Promise<(root: ParentNode) => unknown>) => {
+    if (!root.isConnected || !root.querySelector(selector)) return;
+    const mount = await load();
+    if (root.isConnected) await mount(root);
+  };
+  await run('.markdown', async () => (await import('@/modules/markdown')).mountMarkdown);
+  await run('pre code', async () => (await import('@/modules/highlight')).mountHighlight);
+  await run('.math,.math-inline,.math-display,.markdown', async () => (await import('@/modules/math')).mountMath);
+  await run('.mermaid,.language-mermaid', async () => (await import('@/modules/mermaid')).mountMermaid);
+  await run('.ansi', async () => (await import('@/modules/ansi')).mountAnsi);
 }
 document.addEventListener('htmx:afterSwap', (event) => {
   const root = (event as CustomEvent).detail?.target as HTMLElement | undefined;

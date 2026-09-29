@@ -23,7 +23,7 @@ tests/fixtures/             可控假 Pi
 
 模板、CSS、JS、manifest 归 UI 仓；桥只读加载同一发布版本。旧的 `src/assets/vendor`、`src/client` 布局不再适用。桥没有内嵌 UI 兜底，也不在缺少产物时改走 CDN。
 
-`--ui-dir` 未配置时桥只提供 API；配置后模板/manifest/产物缺失或不兼容应拒绝加载。资源表在启动时快照，重新 build 后需要重启桥；不要让新 manifest 配旧资源。Vite 只构建 JS/CSS，Go 模板仍由桥渲染，Tailwind 使用 `@source` 扫描模板。
+`--ui-dir` 未配置时桥只提供 API；配置后模板/manifest/产物缺失或不兼容应拒绝加载。资源表在启动时快照，重新 build 后需要重启桥；不要让新 manifest 配旧资源。Vite 只构建 JS/CSS，Go 模板仍由桥渲染，Tailwind 仅提供 preflight，不扫描工具类。
 
 ## 2. 模板基本规则
 
@@ -32,7 +32,7 @@ tests/fixtures/             可控假 Pi
 3. 交互脚本放 TypeScript 模块；模板禁止内联脚本和 `hx-on` 求值表达式。当前入口已经设置 `allowEval=false`、`allowScriptTags=false`、`historyCacheSize=0`。外部哈希 script 由 shell 引用。
 4. 动态值不写进 style；样式用 class/设计令牌。富内容库的运行时 style 需要另外核实 CSP，不能把模板禁内联等同浏览器完全禁内联样式。
 5. 读取片段用 htmx；发消息、模型设置、终端、扩展回执等可由模块调用 WS。**不要求所有交互必须带 hx-*，也没有当前可用的 HTTP prompt/model 表单约定。**
-6. 包清单只读，不渲染远程安装、更新、卸载入口。无 Magic Context 等插件专属分支。
+6. 包清单只读，不渲染远程安装、更新、卸载入口。Magic Context 面板是独立的只读SQLite数据源，不是RPC插件UI的模拟实现。
 
 ## 3. 当前模板数据
 
@@ -44,8 +44,8 @@ tests/fixtures/             可控假 Pi
 | sessions / SessionsData | Items、Selected、HasMore、NextOffset |
 | SessionRow | ID、Title、Modified、Cwd |
 | history / HistoryData | SessionID、LeafID、Turns、HasMore、OldestEntryID、HistoricalModel |
-| Turn | ID、EntryIDs、UserText、AssistantText、Steps、HasProcess、Thinking |
-| Step | Kind、Detail、EntryID、Images |
+| Turn | ID、EntryIDs、UserText、UserImages、AssistantText、Steps、HasProcess、Thinking、Error、Usage |
+| Step | Kind、Detail、EntryID、Images、Name、OK、Duration |
 | models / ModelsData | Models、Current；ModelRow 为 ID、Name、Provider |
 | packages / PackagesData | Packages；每行为 Name、Source、Version、Latest、HasUpdate、Disabled、Error |
 | files / FilesData | Root、Entries、Truncated；每行为 Name、Path、IsDir、Size |
@@ -83,6 +83,8 @@ body 的 data-session-id 是当前显示目标，不得在长异步链中反复�
 
 ### 5.2 htmx 与其他读取
 
+2026-09-30已落实到 `fragment-requests.ts`：每个xhr的本地快照、beforeOnLoad守卫与会话切换取消。目录/模型发现使用独立revision。以下是规则，不代表所有RPC快照时序问题也已解决。
+
 1. beforeRequest 把 session generation、面板序号、目标绑定到 xhr。
 2. **beforeOnLoad** 先检查归属，过期则 preventDefault；该钩子早于响应 HX-Trigger/重定向处理。
 3. beforeSwap 再检查目标节点和作用域，包括可能的 OOB 内容；过期不得交换。
@@ -94,7 +96,7 @@ history、branch、fork_messages、gotoLeaf、扩展对话、文件列表/预览
 
 - 草稿与附件按 draft/session 隔离。附件异步读取前预留张数/字节，读取结束核验 scope，失败/取消释放；并发两批不能分别越过全局限制。
 - 目标上传使用受限 HTTP 暂存引用；当前仍是 base64 WS，不能声称已支持超过传输上限的图片。可接受值以桥实际 capabilities 和完整编码预算为准。
-- 模型保存固定 snapshot+revision；保存期间若又编辑，成功回执只更新保存基线，不 reload 覆盖新草稿。revision 冲突必须显示并由用户合并。
+- 当前模型保存固定snapshot、完成不reload，后续编辑留在草稿；节点切换先收集字段。跨浏览器/CLI的revision/CAS仍是目标，当前协议未实现冲突合并。
 - 预览固定容器承载文本或 img，关闭不依赖已被替换的子节点；blob URL、终端、监听、Observer、timer 都有显式 disposer。
 
 ## 6. 队列与状态

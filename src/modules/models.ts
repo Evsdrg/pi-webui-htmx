@@ -40,7 +40,7 @@ interface Selection {
 // parseHeaders 把「每行 name: value」转成对象。
 // 拒绝空名与含控制字符的名/值——否则能注入请求头。
 function parseHeaders(raw: string): Record<string, string> {
-  const out: Record<string, string> = {};
+  const out: Record<string, string> = Object.create(null);
   for (const line of raw.split('\n')) {
     const trimmed = line.trim();
     if (!trimmed) continue;
@@ -65,25 +65,50 @@ const THINKING_LEVELS = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'ma
 
 export class ModelsEditor {
   private loading = false;
+  private saving = false;
+  private initialized = false;
+  private panel = 'empty';
+  private thinkingWired = false;
+  private probeSequence = 0;
   private doc: ModelsDoc = {};
   private selection: Selection = { provider: null, model: null };
-  constructor(private readonly bridge: BridgeClient, private readonly onError: (error: unknown) => void) {}
+  private abort = new AbortController();
+  constructor(private readonly bridge: BridgeClient, private readonly onError: (error: unknown) => void) {
+    const dialog = document.getElementById('models-dialog');
+    dialog?.addEventListener('close', () => this.invalidateProbe(), { signal: this.abort.signal });
+    dialog?.addEventListener('input', () => this.invalidateProbe(), { signal: this.abort.signal });
+  }
+
+  private invalidateProbe(): void {
+    const result = document.getElementById('discover-result');
+    if (result) { result.dataset.requestScope = String(++this.probeSequence); window.htmx?.trigger(result, 'htmx:abort'); }
+  }
+
+  dispose(): void { this.abort.abort(); this.invalidateProbe(); }
 
   async open(): Promise<void> {
     el('models-status').textContent = '';
-    await this.reload();
+    if (!this.initialized) await this.reload();
   }
 
   async reload(): Promise<void> {
-    if (this.loading) return;
+    if (this.loading || this.saving) return;
     this.loading = true;
     try {
       const raw = await this.bridge.request<unknown>('config.models.raw', '', undefined, 30_000);
+      if (this.abort.signal.aborted) return;
       this.doc = (record(raw) as ModelsDoc) ?? {};
+      this.initialized = true;
+      this.panel = 'empty';
       el<HTMLTextAreaElement>('models-editor').value = JSON.stringify(this.doc, null, 2);
       el('models-status').textContent = '';
       this.renderTree();
+      const { provider, model } = this.selection;
+      if (provider && record(this.doc.providers)[provider]) {
+        if (model === null) this.selectProvider(provider); else this.selectModel(provider, model);
+      } else { this.selection = { provider: null, model: null }; this.select('empty'); }
     } catch (error) {
+      if (this.abort.signal.aborted) return;
       this.onError(error);
       el('models-status').textContent = error instanceof Error ? error.message : '读取配置失败';
     } finally {
@@ -109,7 +134,7 @@ export class ModelsEditor {
       body.append(empty);
     }
     for (const [name, entry] of providers) {
-      const active = this.selection.provider === name && this.selection.model === null;
+      const active = this.panel !== 'json' && this.selection.provider === name && this.selection.model === null;
       const row = document.createElement('button');
       row.type = 'button';
       row.className = 'config-side-item';
@@ -123,7 +148,7 @@ export class ModelsEditor {
       body.append(row);
       const models = Array.isArray(entry.models) ? entry.models : [];
       models.forEach((model, index) => {
-        const modelActive = this.selection.provider === name && this.selection.model === index;
+        const modelActive = this.panel !== 'json' && this.selection.provider === name && this.selection.model === index;
         const item = document.createElement('button');
         item.type = 'button';
         item.className = 'config-side-item models-indent';
@@ -186,29 +211,53 @@ export class ModelsEditor {
   // ── 右侧表单 ──────────────────────────────────────────────────────────────
 
   /** 切到某个面板；树里的点击与「JSON 源码」都走这里。 */
+  /** 当前表单只提交到本地草稿；网络保存单独处理。 */
+  private collect(): boolean {
+    try {
+      if (this.panel === 'json') {
+        const parsed: unknown = JSON.parse(el<HTMLTextAreaElement>('models-editor').value);
+        if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed) || !record(parsed).providers || Array.isArray(record(parsed).providers) || typeof record(parsed).providers !== 'object') throw new Error('配置必须包含 providers 对象');
+        this.doc = parsed as ModelsDoc;
+      } else if (this.panel === 'provider') this.commitProvider();
+      else if (this.panel === 'model') this.commitModel();
+      this.renderTree();
+      return true;
+    } catch (error) {
+      el('models-status').textContent = error instanceof SyntaxError ? `不是合法 JSON：${error.message}` : error instanceof Error ? error.message : '表单内容无效';
+      return false;
+    }
+  }
+
   select(panel: string): void {
+    if (panel === 'json') {
+      if (!this.collect()) return;
+      el<HTMLTextAreaElement>('models-editor').value = JSON.stringify(this.doc, null, 2);
+    }
+    this.panel = panel;
     for (const item of document.querySelectorAll<HTMLElement>('[data-models-panel]')) {
       item.hidden = item.dataset.modelsPanel !== panel;
     }
     for (const item of document.querySelectorAll<HTMLElement>('#models-tree [data-models-section]')) {
-      if (item.dataset.modelsPanel === panel) item.setAttribute('aria-current', 'page');
+      if (item.dataset.modelsSection === panel) item.setAttribute('aria-current', 'page');
       else item.removeAttribute('aria-current');
     }
-    if (panel !== 'json') this.syncTreeCurrent();
+    this.syncTreeCurrent();
   }
 
   private syncTreeCurrent(): void {
     for (const item of document.querySelectorAll<HTMLElement>('#models-tree-body [data-models-provider]')) {
       const isModel = item.dataset.modelsModel !== undefined;
-      const active = isModel
+      const active = this.panel !== 'json' && (isModel
         ? this.selection.provider === item.dataset.modelsProvider && this.selection.model === Number(item.dataset.modelsModel)
-        : this.selection.provider === item.dataset.modelsProvider && this.selection.model === null;
+        : this.selection.provider === item.dataset.modelsProvider && this.selection.model === null);
       if (active) item.setAttribute('aria-current', 'page'); else item.removeAttribute('aria-current');
     }
   }
 
   /** 选中一个 provider：把表单填成它的当前值。 */
   selectProvider(name: string): void {
+    if (!this.collect()) return;
+    this.invalidateProbe();
     const entry = record(this.doc.providers)[name] as ProviderEntry | undefined;
     if (!entry) return;
     this.selection = { provider: name, model: null };
@@ -222,6 +271,8 @@ export class ModelsEditor {
 
   /** 选中一个模型。 */
   selectModel(name: string, index: number): void {
+    if (!this.collect()) return;
+    this.invalidateProbe();
     const entry = record(this.doc.providers)[name] as ProviderEntry | undefined;
     const model = Array.isArray(entry?.models) ? entry!.models![index] : undefined;
     if (!model) return;
@@ -251,52 +302,23 @@ export class ModelsEditor {
       const present = Object.prototype.hasOwnProperty.call(current, level);
       const raw = current[level];
       const state = !present ? 'omit' : raw === null ? 'null' : 'string';
-      const row = document.createElement('div');
-      row.className = 'tl-row';
+      const row = (el<HTMLTemplateElement>('thinking-row-template').content.firstElementChild!.cloneNode(true)) as HTMLElement;
       row.dataset.thinkingLevel = level;
       row.dataset.state = state;
-      row.style.setProperty('--tl-color', `var(--tl-${level})`);
-      const id = document.createElement('span');
-      id.className = 'tl-id';
-      const dot = document.createElement('span');
-      dot.className = 'tl-dot';
-      const name = document.createElement('span');
-      name.className = 'tl-name';
-      name.textContent = level;
-      id.append(dot, name);
-      row.append(id);
-      const seg = document.createElement('div');
-      seg.className = 'tl-seg';
-      for (const [value, label] of [['omit', '默认'], ['null', '禁用']] as const) {
-        const button = document.createElement('button');
-        button.type = 'button';
-        button.className = 'tl-btn';
-        button.dataset.tl = value;
-        button.textContent = label;
-        seg.append(button);
-      }
-      row.append(seg);
-      const custom = document.createElement('div');
-      custom.className = 'tl-custom';
-      const customButton = document.createElement('button');
-      customButton.type = 'button';
-      customButton.className = 'tl-btn';
-      customButton.dataset.tl = 'string';
-      customButton.textContent = '自定义';
-      const input = document.createElement('input');
-      input.type = 'text';
-      input.maxLength = 10;
+      row.querySelector('.tl-name')!.textContent = level;
+      const input = row.querySelector('input')!;
       input.placeholder = level;
-      input.spellcheck = false;
       input.value = typeof raw === 'string' ? raw : '';
       // 聚焦输入框即视为选择「自定义」：用户敲字就是想填值，
       // 不该要求他先点一下自定义按钮（Pi Web 的 onFocus 也是这个语义）。
-      input.addEventListener('focus', () => { row.dataset.state = 'string'; });
-      input.addEventListener('input', () => { row.dataset.state = 'string'; });
-      custom.append(customButton, input);
-      row.append(custom);
+      input.setAttribute('aria-label', `${level} 自定义映射`);
+      input.addEventListener('focus', () => { row.dataset.state = 'string'; this.syncThinkingState(row); });
+      input.addEventListener('input', () => { row.dataset.state = 'string'; this.syncThinkingState(row); });
       box.append(row);
+      this.syncThinkingState(row);
     }
+    if (this.thinkingWired) return;
+    this.thinkingWired = true;
     box.addEventListener('click', (event) => {
       const button = (event.target as Element).closest<HTMLElement>('[data-tl]');
       const row2 = button?.closest<HTMLElement>('[data-thinking-level]');
@@ -313,7 +335,12 @@ export class ModelsEditor {
         // 而保存时这一行根本不会被读（Pi Web 同样把 strVal 清掉）。
         input.value = '';
       }
-    });
+      this.syncThinkingState(row2);
+    }, { signal: this.abort.signal });
+  }
+
+  private syncThinkingState(row: HTMLElement): void {
+    for (const button of row.querySelectorAll<HTMLElement>('[data-tl]')) button.setAttribute('aria-pressed', String(button.dataset.tl === row.dataset.state));
   }
 
   /** 把表单当前值写回文档。只在字段真的变过时返回 true。 */
@@ -325,6 +352,7 @@ export class ModelsEditor {
     if (!entry) return false;
     const nextName = el<HTMLInputElement>('mp-name').value.trim();
     if (!nextName) throw new Error('供应商名称不能为空');
+    if (nextName !== name && Object.hasOwn(providers, nextName)) throw new Error('供应商名称已存在');
     const updated: ProviderEntry = { ...entry };
     const base = el<HTMLInputElement>('mp-base').value.trim();
     const key = el<HTMLInputElement>('mp-key').value;
@@ -335,7 +363,8 @@ export class ModelsEditor {
     if (api) updated.api = api; else delete updated.api;
     if (Object.keys(headers).length) updated.headers = headers; else delete updated.headers;
     // 改名要连带移动键：整份文档按名字索引，只改表单不改键会让保存写到别处。
-    const next: Record<string, ProviderEntry> = {};
+    if (nextName !== name && JSON.stringify(updated).includes('"***"')) throw new Error('改名前请明确填写或移除打码凭据；桥不会跨身份迁移秘密');
+    const next: Record<string, ProviderEntry> = Object.create(null);
     for (const [key2, value] of Object.entries(providers)) next[key2 === name ? nextName : key2] = value;
     next[nextName] = updated;
     this.doc = { ...this.doc, providers: next };
@@ -358,13 +387,16 @@ export class ModelsEditor {
       next.id = id;
       const display = el<HTMLInputElement>('mm-name').value.trim();
       if (display) next.name = display; else delete next.name;
-      if (el<HTMLInputElement>('mm-reasoning').checked) next.reasoning = true; else delete next.reasoning;
-      if (el<HTMLInputElement>('mm-image').checked) next.input = ['text', 'image']; else delete next.input;
-      const ctx = Number(el<HTMLInputElement>('mm-ctx').value);
-      if (Number.isFinite(ctx) && ctx > 0) next.contextWindow = ctx; else delete next.contextWindow;
-      const max = Number(el<HTMLInputElement>('mm-max').value);
-      if (Number.isFinite(max) && max > 0) next.maxTokens = max; else delete next.maxTokens;
-      const levels: Record<string, string | null> = {};
+      const reasoning = el<HTMLInputElement>('mm-reasoning').checked;
+      if (reasoning !== (next.reasoning === true)) next.reasoning = reasoning;
+      const image = el<HTMLInputElement>('mm-image').checked;
+      if (image !== (next.input?.includes('image') ?? false)) next.input = image ? [...(next.input ?? ['text']), 'image'] : next.input!.filter((value) => value !== 'image');
+      for (const [field, id] of [['contextWindow', 'mm-ctx'], ['maxTokens', 'mm-max']] as const) {
+        const raw = el<HTMLInputElement>(id).value;
+        if (!raw) delete next[field];
+        else { const n = Number(raw); if (!Number.isSafeInteger(n) || n <= 0) throw new Error('Token 限额必须为正整数'); next[field] = n; }
+      }
+      const levels: Record<string, string | null> = { ...next.thinkingLevelMap };
       for (const row of el('mm-thinking').querySelectorAll<HTMLElement>('[data-thinking-level]')) {
         const level = row.dataset.thinkingLevel!;
         const state = row.dataset.state ?? 'omit';
@@ -372,8 +404,8 @@ export class ModelsEditor {
         else if (state === 'string') {
           const value = (row.querySelector('input')?.value ?? '').trim();
           // 空串没有意义：要么当成没填（省略），要么用户本该选「禁用」。
-          if (value) levels[level] = value;
-        }
+          levels[level] = value;
+        } else delete levels[level];
       }
       // 整表为空时删掉整个字段，与 Pi Web 的 onChange(... : undefined) 一致。
       if (Object.keys(levels).length) next.thinkingLevelMap = levels; else delete next.thinkingLevelMap;
@@ -400,6 +432,8 @@ export class ModelsEditor {
   }
 
   private addModel(provider: string): void {
+    if (!this.collect()) return;
+    this.panel = 'empty';
     const providers = record(this.doc.providers) as Record<string, ProviderEntry>;
     const entry = providers[provider];
     if (!entry) return;
@@ -411,6 +445,8 @@ export class ModelsEditor {
   }
 
   private addProvider(): void {
+    if (!this.collect()) return;
+    this.panel = 'empty';
     const providers = record(this.doc.providers) as Record<string, ProviderEntry>;
     let name = 'new-provider';
     let suffix = 2;
@@ -443,107 +479,42 @@ export class ModelsEditor {
     const models = entry.models.filter((_, i) => i !== index);
     this.doc = { ...this.doc, providers: { ...providers, [name]: { ...entry, models } } };
     this.selection = { provider: name, model: null };
+    this.panel = 'empty';
     this.renderTree();
     this.selectProvider(name);
   }
 
   async save(): Promise<void> {
-    // 两条保存路径：JSON 面板直接保存编辑器内容（逃生门，不要求先选中），
-    // 表单面板先把字段写回文档再保存。少任何一条都会让另一条走不通。
-    const onJson = !(document.querySelector('[data-models-panel=json]') as HTMLElement | null)?.hidden;
-    // JSON 路径解析编辑器内容；表单路径把字段写回 this.doc。
-    // 注意 commit* 是整体替换 this.doc（生成新对象），所以写请求必须在这之后
-    // 才取 this.doc——先取引用会拿到 commit 之前的旧文档，改过的字段全部丢失。
-    let parsed: unknown;
-    if (onJson) {
-      try {
-        parsed = JSON.parse(el<HTMLTextAreaElement>('models-editor').value);
-      } catch (error) {
-        el('models-status').textContent = `不是合法 JSON：${error instanceof Error ? error.message : '解析失败'}`;
-        return;
-      }
-      if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
-        el('models-status').textContent = '配置必须是 JSON 对象';
-        return;
-      }
-    } else if (this.selection.provider) {
-      try {
-        if (this.selection.model === null) this.commitProvider(); else this.commitModel();
-      } catch (error) {
-        el('models-status').textContent = error instanceof Error ? error.message : '表单内容无效';
-        return;
-      }
-    } else {
-      el('models-status').textContent = '请先选择要保存的供应商或模型。';
-      return;
-    }
+    if (this.loading || this.saving || !this.collect()) return;
+    // 发送独立快照；成功后不重读磁盘，用户可能已经继续编辑。
+    const snapshot = structuredClone(this.doc);
+    this.saving = true;
     el('models-status').textContent = '正在保存…';
     try {
-      await this.bridge.request('config.models.write', '', { config: onJson ? parsed : this.doc }, 30_000);
-      el('models-status').textContent = '';
+      await this.bridge.request('config.models.write', '', { config: snapshot }, 30_000);
+      if (this.abort.signal.aborted) return;
+      el('models-status').textContent = '快照已保存；后续编辑仍保留在本页。';
       this.renderTree();
-      await this.reload();
     } catch (error) {
+      if (this.abort.signal.aborted) return;
       this.onError(error);
       el('models-status').textContent = error instanceof Error ? error.message : '保存失败';
-    }
+    } finally { this.saving = false; }
   }
 
-  async discover(): Promise<void> {
+  async discover(): Promise<void> { await this.probe('discover'); }
+  async test(): Promise<void> { await this.probe('test'); }
+
+  private async probe(action: 'discover' | 'test'): Promise<void> {
     const result = el('discover-result');
-    result.textContent = '正在向供应商查询…';
-    try {
-      const entry = record(this.doc.providers)[this.selection.provider ?? ''] as ProviderEntry | undefined;
-      const baseUrl = el<HTMLInputElement>('mp-base').value.trim() || text(entry?.baseUrl) || '';
-      const api = el<HTMLSelectElement>('mp-api').value || text(entry?.api) || '';
-      const apiKey = el<HTMLInputElement>('mp-key').value || text(entry?.apiKey) || '';
-      const headers = parseHeaders(el<HTMLTextAreaElement>('mp-headers').value || formatHeaders(entry?.headers));
-      if (!baseUrl) throw new Error('请先填写 Base URL');
-      const data = await this.bridge.request<unknown>('config.models.discover', '', { baseUrl, api, apiKey, headers }, 30_000);
-      this.renderResult('供应商返回的模型', record(data).models);
-    } catch (error) {
-      this.onError(error);
-      result.textContent = error instanceof Error ? error.message : '发现失败';
-    }
-  }
-
-  async test(): Promise<void> {
-    const result = el('discover-result');
-    result.textContent = '正在测试连通…';
-    try {
-      const entry = record(this.doc.providers)[this.selection.provider ?? ''] as ProviderEntry | undefined;
-      const baseUrl = el<HTMLInputElement>('mp-base').value.trim() || text(entry?.baseUrl) || '';
-      const api = el<HTMLSelectElement>('mp-api').value || text(entry?.api) || '';
-      const apiKey = el<HTMLInputElement>('mp-key').value || text(entry?.apiKey) || '';
-      const headers = parseHeaders(el<HTMLTextAreaElement>('mp-headers').value || formatHeaders(entry?.headers));
-      if (!baseUrl) throw new Error('请先填写 Base URL');
-      const data = record(await this.bridge.request<unknown>('config.models.test', '', { baseUrl, api, apiKey, headers }, 30_000));
-      result.textContent = text(data.message) || (data.ok ? '连通正常' : '连通失败');
-    } catch (error) {
-      this.onError(error);
-      result.textContent = error instanceof Error ? error.message : '测试失败';
-    }
-  }
-
-  // renderResult 只展示供应商返回的 ID 与名称，不渲染任何 HTML。
-  private renderResult(title: string, models: unknown): void {
-    const rows = Array.isArray(models) ? models : [];
-    const box = el('discover-result');
-    box.replaceChildren();
-    const heading = document.createElement('strong');
-    heading.textContent = `${title}（${rows.length}）`;
-    box.append(heading);
-    const list = document.createElement('ul');
-    list.className = 'discover-list';
-    for (const value of rows.slice(0, 200)) {
-      const item = record(value);
-      const row = document.createElement('li');
-      const id = text(item.id) || text(item.modelId);
-      const name = text(item.name) || id;
-      row.textContent = id ? `${name} · ${id}` : name || JSON.stringify(value).slice(0, 120);
-      list.append(row);
-    }
-    box.append(list);
-    if (!rows.length) box.append(document.createTextNode('供应商没有返回模型。'));
+    try { parseHeaders(el<HTMLTextAreaElement>('mp-headers').value); }
+    catch (error) { result.textContent = error instanceof Error ? error.message : '头部无效'; return; }
+    result.dataset.requestScope = String(++this.probeSequence);
+    result.setAttribute('hx-sync', 'this:replace');
+    await window.htmx.ajax('post', `/ui/models/${action}`, {
+      source: result, target: result, swap: 'innerHTML',
+      values: { baseUrl: el<HTMLInputElement>('mp-base').value.trim(), api: el<HTMLSelectElement>('mp-api').value,
+        apiKey: el<HTMLInputElement>('mp-key').value, headers: el<HTMLTextAreaElement>('mp-headers').value },
+    });
   }
 }

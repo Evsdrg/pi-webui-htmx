@@ -1,4 +1,5 @@
 import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest';
+import { readFileSync } from 'node:fs';
 import { Workbench } from '@/modules/workbench';
 import { readDraft, saveDraft } from '@/modules/layout';
 
@@ -43,6 +44,7 @@ function mount() {
 <button data-action=models-edit>编辑</button><button data-action=models-reload>重读</button><button data-action=models-save>保存</button><button data-action=models-discover>发现</button><button data-action=models-test>测试</button></dialog>`;
  for(const id of ['live','conn-state','connection-notice','session-state','session-title','session-cwd','session-list','session-count','turns','older-slot','chat-scroll','welcome','command-menu','ext-status-slot','ext-widgets-before','ext-widgets-after','ext-dialog-slot','usage','toast-root']) {const node=document.createElement('div');node.id=id;document.body.append(node);}
 {for(const id of ['search-query','system-session','tools-session','stats-session','branch-session','files-path','git-path','diff-path']){const node=document.createElement('input');node.type='hidden';node.id=id;document.body.append(node);}}
+ document.body.insertAdjacentHTML('beforeend', readFileSync('src/templates/shell.html', 'utf8').match(/<template id="thinking-row-template">[\s\S]*?<\/template>/)![0]);
  document.body.dataset.sessionId='s1';
  Object.defineProperty(HTMLDialogElement.prototype,'showModal',{configurable:true,value:function(this:HTMLDialogElement){this.open=true;this.dataset.modal='true';}});
  Object.defineProperty(HTMLDialogElement.prototype,'close',{configurable:true,value:function(this:HTMLDialogElement){this.open=false;delete this.dataset.modal;}});
@@ -101,6 +103,18 @@ describe('扩展对话交互回归',()=>{
   expect(document.getElementById('session-state')?.textContent).toBe('就绪');
   expect(document.querySelector('#ext-dialog-slot dialog')).toBeNull();
  });
+});
+
+describe('目录浏览的提交边界', () => {
+  it('错误片段不回填旧路径，也不能提交未成功浏览的目录', () => {
+    document.body.insertAdjacentHTML('beforeend', '<input id="dir-current" value="/ok"><div id="dir-list"><p>无法访问目录</p></div><button id="dir-use"></button>');
+    const input = document.getElementById('cwd-input') as HTMLInputElement; input.value='/missing';
+    document.getElementById('dir-list')!.dispatchEvent(new CustomEvent('htmx:afterSwap', {bubbles:true}));
+    expect(input.value).toBe('/missing');expect((document.getElementById('dir-use') as HTMLButtonElement).disabled).toBe(true);
+    document.getElementById('dir-list')!.innerHTML='<span hidden data-dir-loaded-path="/ok"></span>';
+    document.getElementById('dir-list')!.dispatchEvent(new CustomEvent('htmx:afterSwap', {bubbles:true}));
+    expect(input.value).toBe('/ok');expect((document.getElementById('dir-use') as HTMLButtonElement).disabled).toBe(false);
+  });
 });
 
 describe('排队与压缩设置', () => {
@@ -201,15 +215,15 @@ describe('模型配置编辑器', () => {
     expect(document.getElementById('models-status').textContent).toContain('不是合法 JSON');
   });
 
-  it('保存成功后重新读取，避免用户接着编辑旧快照', async () => {
+  it('保存成功不以磁盘重读覆盖正在编辑的草稿', async () => {
     await (workbench as unknown as { action(a: string, b: HTMLElement): Promise<void> }).action('models-edit', document.createElement('button'));
     await vi.waitFor(() => expect(document.getElementById('models-editor').value).toContain('example.com'));
     openJsonPanel();
     const readsBefore = vi.mocked(fake.request).mock.calls.filter((c) => c[0] === 'config.models.raw').length;
     (document.getElementById('models-editor') as HTMLTextAreaElement).value = '{"providers":{}}';
     await (workbench as unknown as { action(a: string, b: HTMLElement): Promise<void> }).action('models-save', document.createElement('button'));
-    await vi.waitFor(() => expect(vi.mocked(fake.request).mock.calls.filter((c) => c[0] === 'config.models.raw').length).toBeGreaterThan(readsBefore));
-    expect(document.getElementById('models-status').textContent).toBe('');
+    expect(vi.mocked(fake.request).mock.calls.filter((c) => c[0] === 'config.models.raw').length).toBe(readsBefore);
+    expect(document.getElementById('models-status').textContent).toContain('快照已保存');
   });
 
   it('自定义头部按行解析，非法格式被拒绝', async () => {
@@ -221,11 +235,11 @@ describe('模型配置编辑器', () => {
     expect(vi.mocked(fake.request).mock.calls.some((c) => c[0] === 'config.models.discover')).toBe(false);
   });
 
-  it('发现结果按纯文本渲染，不插入 HTML', async () => {
+  it('发现结果通过POST片段由桥渲染，凭据不进入URL', async () => {
     await (workbench as unknown as { action(a: string, b: HTMLElement): Promise<void> }).action('models-edit', document.createElement('button'));
     (document.getElementById('mp-base') as HTMLInputElement).value = 'https://api.example.com/v1';
     await (workbench as unknown as { action(a: string, b: HTMLElement): Promise<void> }).action('models-discover', document.createElement('button'));
-    await vi.waitFor(() => expect(document.getElementById('discover-result').textContent).toContain('GPT X'));
+    expect(window.htmx.ajax).toHaveBeenCalledWith('post', '/ui/models/discover', expect.objectContaining({ values: expect.objectContaining({baseUrl:'https://api.example.com/v1'}) }));
     expect(document.getElementById('discover-result').querySelector('script')).toBeNull();
   });
 });
@@ -869,7 +883,7 @@ describe('上下文用量来自 Pi 统计', () => {
     });
     emit('agent_settled');
     await vi.waitFor(() => expect(node.hidden).toBe(false));
-    expect(node.textContent).toBe('49% · 32K / 66K');
+    expect(node.textContent).toBe('49% · 32k / 66k');
     expect(node.title).toContain('48.8%');
   });
 
@@ -886,7 +900,7 @@ describe('上下文用量来自 Pi 统计', () => {
     });
     emit('agent_settled');
     await vi.waitFor(() => expect(node.hidden).toBe(false));
-    expect(node.textContent).toBe('? / 66K');
+    expect(node.textContent).toBe('? / 66k');
     expect(node.title).toContain('压缩后');
   });
 
@@ -903,7 +917,7 @@ describe('上下文用量来自 Pi 统计', () => {
     });
     emit('agent_settled');
     await vi.waitFor(() => expect(node.hidden).toBe(false));
-    expect(node.textContent).toBe('? / 66K');
+    expect(node.textContent).toBe('? / 66k');
     expect(node.title).toContain('统计不可用');
   });
 

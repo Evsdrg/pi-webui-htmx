@@ -10,7 +10,7 @@
 {{range $turn := .Turns}}
 <article class="turn" data-turn-id="{{$turn.ID}}">
   {{range $turn.EntryIDs}}<span hidden data-search-entry-id="{{.}}"></span>{{end}}
-  {{if or $turn.UserText $turn.UserImages}}<div class="turn-user"><div class="bubble">{{$turn.UserText}}{{range $turn.UserImages}}<div class="user-image-entry"><button class="lazy-block" data-lazy="user-image" data-entry-id="{{.EntryID}}" data-block-index="{{.BlockIndex}}">查看附带图片</button></div>{{end}}</div></div>{{end}}
+  {{if or $turn.UserText $turn.UserImages}}<div class="turn-user"><div class="bubble">{{$turn.UserText}}{{range $turn.UserImages}}<div class="user-image-entry"><button class="lazy-block" data-lazy="user-image" data-entry-id="{{.EntryID}}" data-block-index="{{.BlockIndex}}">查看附带图片</button></div>{{end}}</div>{{if $turn.UserText}}<div class="turn-actions"><button class="icon-btn" data-action="fork" data-entry-id="{{$turn.ID}}" title="以这条消息为终点新建会话，并把原文放进输入框以便改写；当前会话不受影响">编辑并重发</button></div>{{end}}</div>{{end}}
   {{if $turn.HasProcess}}<div class="turn-process">
     {{range $step := $turn.Steps}}<details class="tool-call" data-ok="{{if $step.OK}}true{{else}}false{{end}}" data-entry-id="{{$step.EntryID}}">
       <summary>
@@ -29,11 +29,11 @@
       <span class="thinking-preview">查看思考过程</span>
       {{if .Duration}}<span class="thinking-duration">{{.Duration}}s</span>{{end}}
     </summary>
-    <div class="thinking-body"><button class="lazy-block" data-lazy="thinking" data-entry-id="{{.EntryID}}" data-block-index="{{.BlockIndex}}">载入思考内容</button></div>
+    <div class="thinking-body"><button class="lazy-block" data-lazy="thinking" data-entry-id="{{.EntryID}}" data-block-index="{{.BlockIndex}}" hx-get="/ui/sessions/{{$.SessionID}}/lazy?kind=thinking&amp;format=html&amp;entryId={{.EntryID}}&amp;blockIndex={{.BlockIndex}}" hx-target="this" hx-swap="outerHTML" hx-sync="this:drop" hx-disabled-elt="this">载入思考内容</button></div>
   </details>{{end}}{{end}}
   {{if $turn.AssistantText}}<div class="turn-assistant"><span class="role" role="img" aria-label="Pi 助手">π</span><div class="bubble markdown">{{$turn.AssistantText}}</div></div>{{end}}
   {{if $turn.Error}}<div class="turn-error">{{$turn.Error}}</div>{{end}}
   {{if $turn.Usage}}<div class="turn-usage">{{$turn.Usage.Summary}}</div>{{end}}
-  <div class="turn-actions"><button class="icon-btn" data-action="copy-turn" aria-label="复制此回合内容">复制</button>{{if $turn.UserText}}<button class="icon-btn" data-action="fork" data-entry-id="{{$turn.ID}}" title="以这条消息为终点新建会话，并把原文放进输入框以便改写；当前会话不受影响">编辑并重发</button>{{end}}</div>
+  <div class="turn-actions"><button class="icon-btn" data-action="copy-turn" aria-label="复制此回合内容">复制</button></div>
 </article>
 {{end}}

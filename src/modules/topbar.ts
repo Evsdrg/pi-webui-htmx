@@ -29,7 +29,7 @@ const PANELS = ['panel-info', 'panel-title', 'panel-system', 'panel-tools', 'pan
 // formatCompact 把 token 数压成短标签，供顶栏上下文用量使用。
 function formatCompact(value: number): string {
   if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(1)}M`;
-  if (value >= 1_000) return `${Math.round(value / 1_000)}K`;
+  if (value >= 1_000) return `${Math.round(value / 1_000)}k`;
   return String(value);
 }
 
@@ -95,7 +95,7 @@ export async function saveLocalTitle(host: TopbarHost): Promise<void> {
   if (!host.sessionId()) { host.notify('会话尚未分配，发送第一条消息后再命名', 'warning'); return; }
   try {
     await host.request('session.set_name', { name: title }, host.sessionId());
-    el('session-title').textContent = title;
+    host.setTitle(title);
     host.notify('会话名称已更新。');
     host.refreshState();
   } catch (error) { host.fail(error); }
@@ -157,6 +157,7 @@ export function renderContextUsage(host: TopbarHost, usage: unknown): void {
 export async function renderUsage(host: TopbarHost, sessionId: string): Promise<void> {
   let stats: Record<string, unknown> = {};
   try { stats = record(await host.request('session.stats', undefined, sessionId)); } catch { stats = {}; }
+  if (host.sessionId() !== sessionId) return;
   el('usage').textContent = [typeof stats.totalMessages === 'number' ? `${stats.totalMessages} 条消息` : '', typeof stats.cost === 'number' ? `$${Number(stats.cost).toFixed(4)}` : ''].filter(Boolean).join(' · ');
   renderContextUsage(host, stats.contextUsage ?? (host.contextWindow() > 0 ? { tokens: null, contextWindow: host.contextWindow(), percent: null } : undefined));
 }

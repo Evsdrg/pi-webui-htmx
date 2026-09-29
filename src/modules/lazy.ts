@@ -1,67 +1,83 @@
-// 惰性内容：思考文本、用户附件与工具结果图片。
-//
-// 历史页只渲染占位按钮，正文等点击才向桥取。这样每一页翻迁的带宽
-// 只花在用户当时正在看的内容上——一条带 8 KB 思考 + 20 KB base64
-// 图片的记录，不展开时为 0 字节。
-//
-// 用事件委托而不是给每个按钮绑监听：历史是整块替换的，
-// 逐按钮绑定在每次翻页后都要重做一遍。
-
-
+// 思考正文由 htmx 加载服务端 HTML；图片 Blob 与挂载作用域一起释放。
 function notice(message: string): void {
   document.body.dispatchEvent(new CustomEvent('pi-notify', { detail: { message, kind: 'warning' } }));
 }
 
-// wireLazy 在 shell 就绪后调用一次。
-export function wireLazy(sessionId: () => string): void {
+export function wireLazy(sessionId: () => string, parent?: AbortSignal): () => void {
+  const scope = new AbortController();
+  const pending = new Map<HTMLElement, AbortController>();
+  const images = new Map<HTMLElement, string>();
+  const release = (image: HTMLElement) => {
+    const url = images.get(image);
+    if (url) URL.revokeObjectURL(url);
+    images.delete(image);
+  };
+  const dispose = () => {
+    scope.abort();
+    for (const controller of pending.values()) controller.abort();
+    pending.clear();
+    for (const image of images.keys()) release(image);
+    parent?.removeEventListener('abort', dispose);
+  };
+  if (parent?.aborted) { dispose(); return dispose; }
+  parent?.addEventListener('abort', dispose, { once: true });
+
+  document.addEventListener('htmx:beforeCleanupElement', (event) => {
+    const root = (event as CustomEvent).detail?.elt as HTMLElement | undefined;
+    if (!root) return;
+    for (const [button, controller] of pending) {
+      if (root === button || root.contains(button)) controller.abort();
+    }
+    for (const image of images.keys()) {
+      if (root === image || root.contains(image)) release(image);
+    }
+  }, { signal: scope.signal });
+
   document.addEventListener('click', (event) => {
     const button = (event.target as Element | null)?.closest<HTMLButtonElement>('.lazy-block');
-    if (!button || button.dataset.loaded === '1') return;
+    if (!button || button.dataset.lazy === 'thinking' || button.disabled || pending.has(button)) return;
     event.preventDefault();
-    void load(button, sessionId());
-  });
-}
+    void loadImage(button);
+  }, { signal: scope.signal });
 
-async function load(button: HTMLButtonElement, sessionId: string): Promise<void> {
-  const kind = button.dataset.lazy ?? '';
-  const entryId = button.dataset.entryId ?? '';
-  const blockIndex = button.dataset.blockIndex ?? '';
-  if (!sessionId || !entryId || blockIndex === '') { notice('占位符缺少必要参数'); return; }
-  button.disabled = true;
-  button.textContent = '加载中…';
-  try {
-    if (kind === 'thinking') {
-      const response = await fetch(`/ui/sessions/${encodeURIComponent(sessionId)}/lazy?kind=thinking&entryId=${encodeURIComponent(entryId)}&blockIndex=${encodeURIComponent(blockIndex)}`, { headers: { Accept: 'application/json' } });
-      if (!response.ok) throw new Error(await errorText(response));
-      const data = await response.json() as { thinking?: string };
-      const box = document.createElement('div');
-      box.className = 'lazy-thinking';
-      // textContent 而不是 innerHTML：思考内容是模型输出，按不可信数据处理。
-      box.textContent = data.thinking ?? '（空）';
-      button.replaceWith(box);
+  async function loadImage(button: HTMLButtonElement): Promise<void> {
+    const session = sessionId();
+    const { lazy: kind = '', entryId = '', blockIndex = '' } = button.dataset;
+    if (!session || !entryId || blockIndex === '') {
+      notice('占位符缺少必要参数');
       return;
     }
-    if (kind === 'tool-image' || kind === 'user-image') {
-      const response = await fetch(`/ui/sessions/${encodeURIComponent(sessionId)}/lazy?kind=${kind}&entryId=${encodeURIComponent(entryId)}&blockIndex=${encodeURIComponent(blockIndex)}`);
+    const controller = new AbortController();
+    pending.set(button, controller);
+    button.disabled = true;
+    button.textContent = '加载中…';
+    const alive = () => !scope.signal.aborted && !controller.signal.aborted && button.isConnected && session === sessionId();
+    try {
+      if (kind !== 'tool-image' && kind !== 'user-image') throw new Error(`未知的惰性内容类型: ${kind}`);
+      const query = new URLSearchParams({ kind, entryId, blockIndex });
+      const response = await fetch(`/ui/sessions/${encodeURIComponent(session)}/lazy?${query}`, { signal: controller.signal });
       if (!response.ok) throw new Error(await errorText(response));
       const blob = await response.blob();
+      if (!alive()) return;
       const image = document.createElement('img');
       image.className = 'lazy-image';
       image.alt = kind === 'user-image' ? '用户附带图片' : '工具结果图片';
       const url = URL.createObjectURL(blob);
+      images.set(image, url);
+      image.addEventListener('load', () => release(image), { once: true });
+      image.addEventListener('error', () => release(image), { once: true });
       image.src = url;
-      // blob URL 必须显式释放：否则长会话里每次展开图片都留一份，
-      // 直到整个页面卸载才归还（U07）。
-      image.addEventListener('load', () => URL.revokeObjectURL(url), { once: true });
       button.replaceWith(image);
-      return;
+    } catch (error) {
+      if (!alive()) return;
+      button.disabled = false;
+      button.textContent = '加载失败，点击重试';
+      notice(error instanceof Error ? error.message : '加载失败');
+    } finally {
+      pending.delete(button);
     }
-    notice(`未知的惰性内容类型: ${kind}`);
-  } catch (error) {
-    button.disabled = false;
-    button.textContent = '加载失败，点击重试';
-    notice(error instanceof Error ? error.message : '加载失败');
   }
+  return dispose;
 }
 
 async function errorText(response: Response): Promise<string> {

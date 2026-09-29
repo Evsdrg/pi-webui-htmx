@@ -5,7 +5,7 @@ import { mount } from '../helpers/dom';
 function fixture(): string {
   return `<article class="turn" data-turn-id="u1">
   <div class="turn-user"><div class="bubble">问题</div><button class="lazy-block" data-lazy="user-image" data-entry-id="u1" data-block-index="1">查看附带图片</button></div>
-  <button class="lazy-block" data-lazy="thinking" data-entry-id="a1" data-block-index="0">查看思考过程</button>
+  <button class="lazy-block" data-lazy="thinking" hx-get="/ui/sessions/sess-1/lazy?kind=thinking&amp;format=html&amp;entryId=a1&amp;blockIndex=0" data-entry-id="a1" data-block-index="0">查看思考过程</button>
   <div class="turn-assistant"><div class="bubble markdown">回答</div></div>
   <ol><li><span class="step-kind">工具</span><pre class="step-detail">工具输出</pre>
     <button class="lazy-block" data-lazy="tool-image" data-entry-id="t1" data-block-index="0">查看工具图片</button>
@@ -16,18 +16,15 @@ function fixture(): string {
 describe('惰性内容占位符', () => {
   beforeEach(() => { vi.restoreAllMocks(); });
 
-  it('点思考占位符拉取文本并以 textContent 渲染', async () => {
+  it('思考由声明式片段负责，不再重复走图片fetch委托', async () => {
     const { document, cleanup } = mount(fixture());
-    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ thinking: '这是思考' }), { status: 200, headers: { 'content-type': 'application/json' } }));
-    vi.stubGlobal('fetch', fetchMock);
+    const fetchMock = vi.fn();vi.stubGlobal('fetch', fetchMock);
     const { wireLazy } = await import('@/modules/lazy');
-    wireLazy(() => 'sess-1');
+    const dispose=wireLazy(() => 'sess-1');
     document.querySelector<HTMLButtonElement>('[data-lazy="thinking"]')!.click();
-    await vi.waitFor(() => expect(document.querySelector('.lazy-thinking')).not.toBeNull());
-    expect(document.querySelector('.lazy-thinking')!.textContent).toBe('这是思考');
-    // URL 必须带上会话、条目与块下标。
-    expect(fetchMock.mock.calls[0][0]).toContain('/ui/sessions/sess-1/lazy?kind=thinking&entryId=a1&blockIndex=0');
-    cleanup();
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(document.querySelector('[data-lazy="thinking"]')!.getAttribute('hx-get')).toContain('format=html');
+    dispose();cleanup();
   });
 
   it('点工具图片占位符拉取二进制并换成 img', async () => {
@@ -64,7 +61,7 @@ describe('惰性内容占位符', () => {
     vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ error: { message: '条目不存在' } }), { status: 404, headers: { 'content-type': 'application/json' } })));
     const { wireLazy } = await import('@/modules/lazy');
     wireLazy(() => 'sess-1');
-    const button = document.querySelector<HTMLButtonElement>('[data-lazy="thinking"]')!;
+    const button = document.querySelector<HTMLButtonElement>('[data-lazy="user-image"]')!;
     button.click();
     await vi.waitFor(() => expect(button.textContent).toBe('加载失败，点击重试'));
     expect(button.disabled).toBe(false);
@@ -73,14 +70,14 @@ describe('惰性内容占位符', () => {
 
   it('重复点击已加载的占位符不再发请求', async () => {
     const { document, cleanup } = mount(fixture());
-    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ thinking: 'x' }), { status: 200, headers: { 'content-type': 'application/json' } }));
+    URL.createObjectURL = vi.fn(() => 'blob:once');
+    const fetchMock = vi.fn(async () => new Response('image'));
     vi.stubGlobal('fetch', fetchMock);
     const { wireLazy } = await import('@/modules/lazy');
     wireLazy(() => 'sess-1');
-    document.querySelector<HTMLButtonElement>('[data-lazy="thinking"]')!.click();
-    await vi.waitFor(() => expect(document.querySelector('.lazy-thinking')).not.toBeNull());
-    // 按钮已被替换成 div，再点原位置不应触发新请求。
-    document.querySelector('.lazy-thinking')!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    document.querySelector<HTMLButtonElement>('[data-lazy="user-image"]')!.click();
+    await vi.waitFor(() => expect(document.querySelector('.lazy-image')).not.toBeNull());
+    document.querySelector('.lazy-image')!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
     expect(fetchMock).toHaveBeenCalledTimes(1);
     cleanup();
   });

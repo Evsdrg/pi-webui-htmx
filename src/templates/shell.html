@@ -35,7 +35,7 @@
       </header>
       <div class="sidebar-files-body" id="sidebar-files-body">
         <input type="hidden" id="files-path" name="path" value="">
-        <nav id="file-list" aria-label="文件列表" hx-get="/ui/files" hx-trigger="files-refresh from:body" hx-include="#files-path" hx-swap="innerHTML"><p class="empty-note">连接后显示工作区文件</p></nav>
+        <nav id="file-list" hx-sync="this:replace" aria-label="文件列表" hx-get="/ui/files" hx-trigger="files-refresh from:body" hx-include="#files-path" hx-swap="innerHTML"><p class="empty-note">连接后显示工作区文件</p></nav>
       </div>
     </section>
     <footer class="sidebar-footer"><button class="btn btn-quiet" data-action="settings">⚙ 设置与扩展</button><span id="conn-state" class="state state-offline" role="status">连接中</span></footer>
@@ -70,7 +70,7 @@
     <section id="panel-info" class="top-panel" hidden>
       <button class="icon-btn panel-close" type="button" data-action="panel-info-close" aria-label="关闭会话信息">×</button>
       <input type="hidden" id="stats-session" name="sessionId" value="">
-      <div id="stats-body" hx-get="/ui/stats" hx-trigger="stats-refresh from:body" hx-include="#stats-session" hx-swap="innerHTML"><p class="muted">打开时读取会话详情。</p></div>
+      <div id="stats-body" hx-sync="this:replace" hx-get="/ui/stats" hx-trigger="stats-refresh from:body" hx-include="#stats-session" hx-swap="innerHTML"><p class="muted">打开时读取会话详情。</p></div>
     </section>
     <section id="panel-title" class="top-panel" hidden>
       <header><strong>生成标题</strong><button class="icon-btn" type="button" data-action="panel-title-close" aria-label="关闭生成标题">×</button></header>
@@ -85,7 +85,7 @@
     <section id="panel-system" class="top-panel" hidden>
       <button class="icon-btn panel-close" type="button" data-action="panel-system-close" aria-label="关闭系统面板">×</button>
       <input type="hidden" id="system-session" name="sessionId" value="">
-      <div id="system-body" hx-get="/ui/system" hx-trigger="system-refresh from:body" hx-include="#system-session" hx-swap="innerHTML" title="Pi 的 RPC 不直接暴露系统提示词；此处内容来自一次按需导出的会话快照。"><p class="muted">打开时读取。</p></div>
+      <div id="system-body" hx-sync="this:replace" hx-get="/ui/system" hx-trigger="system-refresh from:body" hx-include="#system-session" hx-swap="innerHTML" title="Pi 的 RPC 不直接暴露系统提示词；此处内容来自一次按需导出的会话快照。"><p class="muted">打开时读取。</p></div>
     </section>
     <section id="panel-mc" class="top-panel" hidden>
       <button class="icon-btn panel-close" type="button" data-action="panel-mc-close" aria-label="关闭记忆面板">×</button>
@@ -106,7 +106,7 @@
     <section id="panel-tools" class="top-panel" hidden>
       <button class="icon-btn panel-close" type="button" data-action="panel-tools-close" aria-label="关闭工具面板">×</button>
       <input type="hidden" id="tools-session" name="sessionId" value="">
-      <div id="tools-body" hx-get="/ui/tools" hx-trigger="tools-refresh from:body" hx-include="#tools-session" hx-swap="innerHTML" title="以下是本次工作进程实际暴露给模型的工具，随启动时的工具预设与已装扩展变化。"><p class="muted">打开时读取。</p></div>
+      <div id="tools-body" hx-sync="this:replace" hx-get="/ui/tools" hx-trigger="tools-refresh from:body" hx-include="#tools-session" hx-swap="innerHTML" title="以下是本次工作进程实际暴露给模型的工具，随启动时的工具预设与已装扩展变化。"><p class="muted">打开时读取。</p></div>
     </section>
     <div id="connection-notice" class="notice" role="status" hidden></div>
     <div id="history-scope" class="history-scope" hidden><span>仅显示所选位置以前的历史；发送仍沿会话当前分支继续。</span><button class="btn-quiet" type="button" data-action="branch-current">返回最新</button></div>
@@ -162,22 +162,20 @@
 </div>
 <button class="sidebar-backdrop" data-action="sidebar" aria-label="收起侧栏" tabindex="-1" hidden></button>
 <dialog id="auth-dialog" class="app-dialog"><form id="auth-form"><h2>连接本地桥</h2><p class="muted">输入桥启动时配置的访问令牌。令牌只用于换取当前浏览器的登录 Cookie。</p><label for="bridge-token">访问令牌</label><input id="bridge-token" type="password" autocomplete="current-password" required><p id="auth-error" class="form-error" role="alert"></p><button class="btn btn-primary" type="submit">连接</button></form></dialog>
-<dialog id="new-dialog" class="app-dialog dir-dialog"><form id="new-form">
+<dialog id="new-dialog" class="app-dialog dir-dialog" hx-sync="this:replace"><form id="new-form">
       <header class="dir-dialog-head"><h2>选择工作目录</h2><button class="icon-btn" type="button" data-close-dialog aria-label="关闭">×</button></header>
       <div class="dir-path-row">
-        <button class="icon-btn" type="button" id="dir-up" aria-label="上一级目录" title="上一级目录">↑</button>
         <label class="sr-only" for="cwd-input">目录路径</label>
         <input id="cwd-input" type="text" name="path" placeholder="/path/to/project" autocomplete="off" spellcheck="false" required>
         <button class="btn btn-quiet" type="button" id="dir-go" title="前往输入的路径">前往</button>
       </div>
-      <!-- 目录列表的当前路径由 #dir-current 承载：片段用带外交换更新它，
-     列表自己再用 hx-include 读它。这样「刷新」不需要 JS 知道路径，
-     而初始打开时它还是空的，由服务端回退到第一个工作区根。 -->
-<input type="hidden" id="dir-current" name="path" value="">
-<div class="dir-list" id="dir-list" hx-get="/ui/dirs" hx-include="#dir-current" hx-trigger="dirs-refresh from:body" hx-swap="innerHTML"><p class="empty-note">正在读取目录…</p></div>
+      <!-- 输入/请求路径与最后成功浏览路径分开，OOB仅更新后者。 -->
+<input type="hidden" id="dir-current" value="">
+<input type="hidden" id="dir-request" name="path" value="">
+<div class="dir-list" id="dir-list" hx-get="/ui/dirs" hx-include="#dir-request" hx-trigger="dirs-refresh from:body" hx-swap="innerHTML"><p class="empty-note">正在读取目录…</p></div>
       <footer class="dir-dialog-foot">
         <p class="muted">浏览页面不会启动 Pi；发送第一条消息时才创建工作进程。只能在工作区根内浏览。</p>
-        <div class="dialog-actions"><button class="btn" type="button" data-close-dialog>取消</button><button class="btn btn-primary" type="submit" id="dir-use">使用此目录</button></div>
+        <div class="dialog-actions"><button class="btn" type="button" data-close-dialog>取消</button><button class="btn btn-primary" type="submit" id="dir-use" disabled>使用此目录</button></div>
       </footer>
     </form></dialog>
 <dialog id="settings-dialog" class="app-dialog config-panel">
@@ -251,7 +249,7 @@
             <div class="config-field"><label for="mp-name">名称</label><input id="mp-name" type="text" class="mono" placeholder="provider-name" spellcheck="false" autocomplete="off"></div>
             <div class="config-field"><label for="mp-base">Base URL</label><input id="mp-base" type="text" class="mono" placeholder="https://api.example.com/v1" spellcheck="false" autocomplete="off"></div>
             <div class="config-field"><label for="mp-key">API Key</label>
-              <div class="config-secret"><input id="mp-key" type="password" class="mono" placeholder="ENV_VAR_NAME, !shell-command, or literal key" spellcheck="false" autocomplete="off"><button class="config-btn" type="button" data-action="models-toggle-secret" aria-label="显示或隐藏密钥">显示</button></div>
+              <div class="config-secret"><input id="mp-key" type="password" class="mono" placeholder="环境变量名或直接密钥" spellcheck="false" autocomplete="off"><button class="config-btn" type="button" data-action="models-toggle-secret" aria-label="显示或隐藏密钥">显示</button></div>
               <span class="hint">以 <code>!</code> 开头表示执行 shell 命令取密钥，也可以直接写环境变量名。</span>
             </div>
             <div class="config-field"><label for="mp-api">API 协议</label>
@@ -263,7 +261,7 @@
             <div class="config-section-sep">
               <div class="config-detail-header"><h3 class="config-detail-title">从上游发现模型</h3></div>
               <div class="config-actions"><button class="config-btn" type="button" data-action="models-discover">发现模型</button><button class="config-btn" type="button" data-action="models-test">测试连通</button></div>
-              <div id="discover-result" class="discover-result" aria-live="polite"></div>
+              <div id="discover-result" hx-sync="this:replace" class="discover-result" aria-live="polite"></div>
             </div>
           </section>
           {{/* ── model 编辑 ── */}}
@@ -288,12 +286,12 @@
             <div class="config-field"><span class="config-label">思考等级映射</span>
               <span class="hint">把界面上的思考强度映射到上游实际收到的参数。<b>默认</b>用 Pi 自己的取值，<b>禁用</b>显式关掉该等级，<b>自定义</b>填上游认识的字符串。</span>
               <div id="mm-thinking"></div>
+              <template id="thinking-row-template"><div class="tl-row"><span class="tl-id"><span class="tl-dot"></span><span class="tl-name"></span></span><div class="tl-seg"><button type="button" class="tl-btn" data-tl="omit">默认</button><button type="button" class="tl-btn" data-tl="null">禁用</button></div><div class="tl-custom"><button type="button" class="tl-btn" data-tl="string">自定义</button><input type="text" spellcheck="false"></div></div></template>
             </div>
           </section>
           {{/* ── JSON 源码 ── */}}
           <section class="config-detail-stack" data-models-panel="json" hidden>
-            <p class="config-note">直接编辑 <code>models.json</code>。密钥字段显示为 <code>***</code>；保存时桥会用磁盘上的真实值还原，不会因为「只改个名字」就把全部密钥写成占位符。</p>
-            <p id="models-status" class="form-error" role="alert"></p>
+            <p class="config-note">直接编辑 <code>models.json</code>。密钥字段显示为 <code>***</code>，桥按原供应商和模型身份保留真实值；重命名时需明确填写或移除打码凭据。</p>
             <div class="config-field"><label for="models-editor">配置 JSON</label><textarea id="models-editor" class="config-editor" rows="18" spellcheck="false" aria-describedby="models-status"></textarea></div>
           </section>
           <section class="config-detail-stack" data-models-panel="empty">
@@ -301,6 +299,7 @@
           </section>
         </div>
       </div>
+      <p id="models-status" class="form-error config-feedback" role="status"></p>
       <footer class="config-footer"><span class="status" id="models-foot">模型与凭据只保存在桥所在的机器。</span>
         <div class="config-actions"><button class="config-btn" type="button" data-action="models-reload">重新读取</button><button class="config-btn is-primary" type="button" data-action="models-save">保存</button></div>
       </footer>

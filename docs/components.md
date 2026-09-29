@@ -1,6 +1,6 @@
 # 组件选型、工具链与资源约束
 
-更新：2026-09-27。依赖版本以 `package.json` 和 `pnpm-lock.yaml` 为准。本页纠正旧 vendor/无构建/无测试描述，不升级依赖。[交互契约](contract.md) 区分当前实现与目标修复。
+更新：2026-09-30。当前实现以本页职责边界和 [F01–F19 落地记录](htmx-css-ts-review.md) 为准；带日期的历史测量不是持续验收结果。依赖版本以 `package.json` 和 `pnpm-lock.yaml` 为准，不升级依赖。[交互契约](contract.md) 区分当前实现与目标修复。
 
 ## 1. 保留现有技术栈
 
@@ -13,7 +13,7 @@
 | Mermaid | ^12.0.0 | 通过 Vite 动态 import 构建，图表出现才加载；不以裸包名绕过构建 |
 | xterm + FitAddon | 6.0.0 / 0.11.0 | 有状态 PTY 字节流；动态加载，关闭/断线/dispose 语义分别处理 |
 | ansi_up | ^6.0.6 | ANSI 转义输出；ANSI 内容不再交给 hljs 二次处理 |
-| Tailwind / Vite 插件 | ^4.3.3 | 扫描 Go 模板的工具类，与 CSS 设计令牌配合 |
+| Tailwind / Vite 插件 | ^4.3.3 | 仅使用 preflight 复位；当前组件使用自定义类，不扫描模板生成工具类 |
 | Vite / TypeScript | ^8.3.1 / ^7.0.2 | JS/CSS 代码分割、哈希与严格类型检查；不编译 Go 模板 |
 | Vitest / jsdom | 5.0.2 / 30.1.1 | 真实模块行为测试，补充 Go 模板测试 |
 | pnpm | 11.22.0 | 锁文件安装与脚本入口 |
@@ -45,15 +45,15 @@ pnpm build
 pnpm check
 ```
 
-Vite 处理 JS/CSS；Tailwind 扫描 `src/templates`；Go 在运行时加载模板。桥通过 `dist/.vite/manifest.json` 解析哈希资源。发布时模板、manifest 和 dist 必须是同一构建，重建 UI 后重启桥。
+Vite 处理 JS/CSS；Tailwind 提供复位；Go 在运行时加载模板。桥通过 `dist/.vite/manifest.json` 解析哈希资源。发布时模板、manifest 和 dist 必须是同一构建，重建 UI 后重启桥。
 
-- 首屏预算拆为两个都强制执行的数字：总预算 `build.firstLoadBudgetGzipKB`（**42 KiB gzip**）与自有代码预算 `build.firstLoadOwnBudgetGzipKB`（**24 KiB gzip**）。`build.vendorChunks` 声明哪些分块算供应商代码。
+- 首屏预算拆为两个都强制执行的数字：总预算 `build.firstLoadBudgetGzipKB`（**50 KiB gzip**）与自有代码预算 `build.firstLoadOwnBudgetGzipKB`（**30 KiB gzip**）。`build.vendorChunks` 声明哪些分块算供应商代码。
 - 统计入口的全部静态依赖闭包；动态内容库不计入初始入口预算，但在第一次使用时仍真实消耗网络/内存。
 - 2026-09-28 实测构成：自有代码 **22.65 KiB**（JS 15.66 + CSS 7.00）+ 供应商 htmx **17.59 KiB** = **40.24 KiB**。
 - htmx 体积已对着包核实（2.0.11）：官方 `dist/htmx.min.js` 为 52,182 B / gzip 16,861 B；npm 包的 `main` 指向未压缩的 `dist/htmx.esm.js`（171,382 B），所以打包后 gzip 17.59 KiB，比官方压缩版多约 0.73 KiB（Vite 的压缩略弱于官方 terser 产物）。htmx 本身不是胖库，这一块属于换不掉的固定成本，因此单列。
 - htmx 由 `vite.config.ts` 的 `manualChunks` 单独成块，桥在 shell 里为它输出 `modulepreload`：拆分不会多一个往返，同时我们改自己的代码不会顶掉它的缓存。
 - 历史测量“页面+首次数据 brotli 34.9 KB”属于另一构建/资源集合，不能拿来当本次首屏新测量。也不把旧 Pi Web 资源数字当公平的持续性能对照。
-- 不能为通过预算而只改数字；先检查静态依赖误入首屏、重复模块和不必要初始化，再决定范围。本轮核查过一次全量 CSS（154 个 class/id 选择器）没有真正的死代码：未在源码里直接出现的 `.toast-*`、`.state-*`、`.diff-*` 分别是模板字符串、条件拼接和桥的 Go 模板生成的类名。
+- 不能为通过预算而只改数字；先检查静态依赖误入首屏、重复模块和不必要初始化，再决定范围。历史“无死代码”结论不作为长期保证；2026-09-30 再次清理模型旧样式和文件项重复规则，见 F12/F13。
 
 ## 3.1 职责边界：谁负责生成 HTML
 
@@ -61,9 +61,8 @@ htmx 侧重 HTML 与后端，因此边界按「数据 → HTML 归桥，瞬时�
 
 **归桥（服务端渲染片段 + `hx-*` 属性）**——凡是「把已有数据结构排版成 HTML」都属此类。
 片段端点：`/ui/sessions`、`/ui/search`、`/ui/sessions/{id}/history`、`/ui/models`、`/ui/packages`、
-`/ui/files`、`/ui/git-status`、`/ui/diff`、`/ui/branch`、`/ui/extensions/*`。
-刷新一律走「隐藏输入带参数 + `hx-trigger` 自定义事件 + `hx-include`」，
-前端不再拼 URL、不再用 `createElement` 搭列表。
+`/ui/files`、`/ui/git-status`、`/ui/diff`、`/ui/branch`、`/ui/extensions/*`、`/ui/dirs`、`/ui/mc`、`/ui/mc/content`。
+发现模型/测试连通使用认证 POST `/ui/models/discover`、`/ui/models/test`，结果由桥渲染，凭据不进入 URL。思考正文用原 lazy 路径的 `format=html` 变体。模板声明动作、目标与同步域；需调用 JS 时使用隐藏输入或 `htmx.ajax`，不再在 TS 中生成这些结果列表。
 
 **顶栏面板的布局**（2026-09-28 对齐 Pi Web 源码）：
 
@@ -71,7 +70,7 @@ htmx 侧重 HTML 与后端，因此边界按「数据 → HTML 归桥，瞬时�
 |---|---|---|
 | 系统 | `.system-prompt-panel`：flex 列、高度 `min(600px,75dvh)`、内容 `flex:1` 滚动；正文 mono 12px、`pre-wrap`、不套边框盒子 | 同 |
 | 工具 | `.tool-definitions-panel`：`grid-template-columns: clamp(112px,26%,220px) minmax(0,1fr)`；左栏工具名按钮（38px 行高、选中项 `inset 2px 0 var(--accent)`），右栏「描述 / 参数 / 提示词规则」三段，参数字段两列 `minmax(88px,.75fr) minmax(0,1.5fr)` | 同（少「提示词规则」段：`export_html` 的 tools 只带 `name/description/parameters`，不含 `promptGuidelines`） |
-| 会话 | 三栏 `minmax(360px,1.7fr) minmax(140px,.55fr) minmax(190px,.75fr)`：左栏「会话信息 + 项目信息」（行带复制按钮），中栏消息，右栏 Token 与用量（右对齐、紧凑）；整块 mono 12px | 同（左栏多一组「运行」：模型/思考强度/工具预设） |
+| 会话 | 三栏 `minmax(360px,1.7fr) minmax(140px,.55fr) minmax(190px,.75fr)`：左栏「会话信息 + 项目信息」（行带复制按钮），中栏消息，右栏 Token 与用量（右对齐、紧凑）；整块 mono 12px | 同分组，运行控件仍在输入栏，不重复一组 |
 | 外层 | `position:fixed` 下拉，锚在顶栏下沿（`topBarRect.bottom`），`maxHeight: calc(100dvh - top)`，覆盖对话区 | 同语义的绝对定位 + `--topbar-h`；高度由 `ResizeObserver` 校正 |
 
 **面板内没有标题行**（2026-09-29 对齐）。Pi Web 的这三个面板都是「内容直接铺满」，关闭靠再点一次工具栏按钮。因此：
@@ -117,12 +116,10 @@ htmx 侧重 HTML 与后端，因此边界按「数据 → HTML 归桥，瞬时�
 
 **已迁完**：`/ui/git-status`、`/ui/search`、`/ui/branch`（2026-09-28），随后是 `/ui/system`、`/ui/tools`、`/ui/stats`。
 
-**片段端点的状态机约定**：htmx 换入的片段端点一律返回 200 + 可读 HTML，包括「worker 未启动」这类前置状态。原因是 htmx 默认不交换 4xx/5xx，按错误码返回会让面板停在旧内容上且没有解释（真机复现过）。由服务端渲染状态（`RenderNote`）是 htmx 的用法本意。`/ui/file-text`、`/ui/file-image`、lazy 加载、`/ui/exports/*` 不是 htmx 交换目标，保留真实状态码。`branch.ts` 从 7.1 KB / 11 处 DOM 降到 3.4 KB / 1 处。
+**片段端点的状态机约定**：htmx 换入的片段端点一律返回 200 + 可读 HTML，包括「worker 未启动」这类前置状态。原因是 htmx 默认不交换 4xx/5xx，按错误码返回会让面板停在旧内容上且没有解释（真机复现过）。由服务端渲染状态（`RenderNote`）是 htmx 的用法本意。`/ui/file-text`、`/ui/file-image`、lazy 加载、`/ui/exports/*` 保留真实状态码；lazy 的 `format=html` 现在由 htmx 交换，读取失败也保留真实码，由全局错误提示反馈，不把失败 HTML 当成功正文。`branch.ts` 从 7.1 KB / 11 处 DOM 降到 3.4 KB / 1 处。
 
-**同一条判据下还剩这些候选**（尚未迁）：`topbar.ts` 的「会话信息 / 系统」事实表（来自 `session.state` 与 `session.stats`）、
-`models.ts` 的「发现模型」结果列表（来自 `config.models.discover`）、`workbench.ts` 的思考等级下拉与工作目录 datalist、
-`workspace.ts` 的文件预览容器。`workbench.ts` 里的扩展 widget 与附件缩略图**不迁**——前者是 WS 推送的活跃状态，
-后者是尚未上传的本地 `File`，服务端没有权威版本。
+**已迁移后的边界**：顶栏事实表、目录/记忆导航、模型发现结果、思考正文归 Go 模板；模型配置保有单一浏览器草稿，其树是未提交文档的本地投影，属于明确例外。固定三态行来自 HTML template。思考等级下拉反映当前 WS 会话状态；文件预览只承担内容增强和容器交互。
+扩展 widget 与附件缩略图保留浏览器：前者是 WS 推送的活跃状态，后者是尚未上传的本地 File。
 
 **留浏览器**——只有转瞬即逝的交互状态，没有服务端等价物：
 按键驱动的补全与斜杠菜单、滚动锚定、WS 流式增量、textarea 自适应高度、
@@ -231,6 +228,6 @@ xterm 终端、未上传的本地附件缩略图、markdown/高亮/KaTeX/ANSI �
 
 ## 6. 测试分层
 
-当前 `tests/unit` 有 11 个文件、72 项基线测试。TypeScript 管类型，Go 管模板/投影，契约脚本管结构与产物，Vitest 管异步/状态/生命周期，真实浏览器管交换/滚动/富内容行为。
+测试文件和数量以 `pnpm test` 输出为准（本轮新增草稿、xhr 归属、目录失败、预览关闭和 Blob 释放反例）。TypeScript 管类型，Go 管模板/投影，契约脚本管结构与产物，Vitest 管异步/状态/生命周期，真实浏览器管交换/滚动/富内容行为。
 
 新修复优先补：每个 await 点切换目标、beforeOnLoad 阻止旧响应副作用、并发附件预留、保存时继续编辑、深树迭代、组件重复挂载/卸载。基线绿不能替代这些反例；两仓独立 CI 已配置，本地联测通过；托管运行待接入远程，缺少配套 UI 的独立桥测试不算跨仓验收。

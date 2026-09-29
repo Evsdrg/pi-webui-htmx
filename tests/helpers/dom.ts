@@ -8,7 +8,7 @@ export function mount(html: string): { window: Window & typeof globalThis; docum
   const { window } = dom;
   const globals = globalThis as unknown as Record<string, unknown>;
   const saved: [string, PropertyDescriptor | undefined][] = [];
-  for (const key of ['document', 'HTMLElement', 'Element', 'Node', 'DragEvent', 'DataTransfer', 'ClipboardEvent', 'FileReader', 'File']) {
+  for (const key of ['document', 'HTMLElement', 'Element', 'Node', 'DragEvent', 'DataTransfer', 'ClipboardEvent', 'FileReader', 'File', 'AbortController', 'AbortSignal']) {
     saved.push([key, Object.getOwnPropertyDescriptor(globals, key)]);
     Object.defineProperty(globals, key, { value: (window as unknown as Record<string, unknown>)[key], configurable: true, writable: true });
   }

@@ -6,6 +6,7 @@ import type { Attachment } from './attachments';
 import type { Capabilities, EventMessage, Message, Method, WorkerInfo } from '@/types/protocol';
 import type { TopbarHost } from './topbar';
 import { closeDialog, el, openDialog } from './dom';
+import { mountFragmentRequests } from './fragment-requests';
 import { SessionScope } from './scope';
 import type { Scope } from './scope';
 
@@ -68,6 +69,8 @@ export class Workbench {
   private subscribed = '';
   private dialogsLoading = false;
   private dialogsDirty = false;
+  private cancelSessionFragments = () => {};
+  private dirRequest: XMLHttpRequest | undefined;
   private workspace: import('./workspace').Workspace | undefined;
   private models: import('./models').ModelsEditor | undefined;
   private branch: import('./branch').BranchNavigator | undefined;
@@ -89,10 +92,12 @@ export class Workbench {
     // 那之前侧栏里的目录点击没有任何监听。仍是动态 import：它拉进 highlight、
     // ansi、terminal 等只在用到时才需要的依赖，首屏预算不受影响。
     void import('./workspace').then(({ Workspace }) => {
+      if (this.abort.signal.aborted) return;
       this.workspace = new Workspace(this.bridge, (err) => this.fail(err));
       if (this.cwd) this.workspace.setCwd(this.cwd);
     }).catch((err) => this.fail(err));
     const signal = this.abort.signal;
+    this.cancelSessionFragments = mountFragmentRequests(() => this.scope.epoch, signal);
     this.bridge.addEventListener('connected', () => { this.setConnection(true); void this.reconcile().catch((err) => this.fail(err)); }, { signal });
     this.bridge.addEventListener('disconnected', () => { this.subscribed = ''; this.setConnection(false); this.notice('连接已断开，正在重连。已提交的任务继续在本地运行；不会自动重发命令。'); }, { signal });
     this.bridge.addEventListener('message', (event) => this.onMessage((event as CustomEvent<Message>).detail), { signal });
@@ -125,11 +130,27 @@ export class Workbench {
     }, { signal });
     // 目录选择器是 shell 的一部分，但精简的测试夹具可能不渲染它；
     // 缺元素时静默跳过，不让整个工作台起不来。
+    document.addEventListener('htmx:beforeRequest', (event) => {
+      const detail = (event as CustomEvent).detail;
+      if (detail?.target?.id === 'dir-list') { this.dirRequest = detail.xhr; this.updateDirUse(); }
+    }, { signal });
+    document.addEventListener('htmx:afterRequest', (event) => {
+      if ((event as CustomEvent).detail?.xhr === this.dirRequest) { this.dirRequest = undefined; this.updateDirUse(); }
+    }, { signal });
+    const dirInput = document.getElementById('cwd-input') as HTMLInputElement | null;
+    dirInput?.addEventListener('input', () => {
+      const list = document.getElementById('dir-list');
+      if (list) list.dataset.requestScope = String(Number(list.dataset.requestScope || '0') + 1);
+      this.updateDirUse();
+    }, { signal });
     const dirGo = document.getElementById('dir-go');
     dirGo?.addEventListener('click', () => {
       const path = el<HTMLInputElement>('cwd-input').value.trim();
       if (!path) return;
-      el<HTMLInputElement>('dir-current').value = path;
+      const requested = document.getElementById('dir-request') as HTMLInputElement | null;
+      if (requested) requested.value = path;
+      const use = document.getElementById('dir-use') as HTMLButtonElement | null;
+      if (use) use.disabled = true;
       window.htmx.trigger(document.body, 'dirs-refresh');
     }, { signal });
     // 两个配置面板共用一套「左栏导航 → 右栏内容」的切换逻辑，
@@ -150,9 +171,12 @@ export class Workbench {
     // 扩展分节的内容按需拉取：只在第一次切到它时请求。
     // 之前只在打开设置为 general 时触发过一次，点「扩展」永远停在占位文字上。
     let packagesLoaded = false;
+    document.addEventListener('htmx:afterSwap', (event) => {
+      const detail = (event as CustomEvent).detail;
+      if (detail?.target?.id === 'packages-slot') packagesLoaded = detail.xhr?.status === 200 && !!detail.target.querySelector('[data-packages-loaded]');
+    }, { signal });
     wireConfigNav('data-settings-section', 'data-settings-panel', (section) => {
       if (section !== 'extensions' || packagesLoaded) return;
-      packagesLoaded = true;
       window.htmx.trigger(document.body, 'packages-refresh');
     });
     // 模型配置的树点击先问编辑器：命中树节点就由它切面板，
@@ -169,7 +193,7 @@ export class Workbench {
     }, { signal });
     el('new-form').addEventListener('submit', (event) => {
       event.preventDefault(); const cwd = el<HTMLInputElement>('cwd-input').value.trim();
-      if (!cwd) return;
+      if (!cwd || !this.directoryReady()) return;
       const firstDirectory = !this.sessionId && !this.cwd;
       const input = el<HTMLTextAreaElement>('prompt');
       const draft = firstDirectory ? input.value : '';
@@ -241,42 +265,7 @@ export class Workbench {
         this.updateControls();
       }, { signal });
     }
-    // 记忆面板（magic-context）的分区切换、筛选与翻页。
-    // 全部走 htmx 声明式请求：四个隐藏字段各自带自己的 name，
-    // 由 hx-include 一起带上去，JS 不拼 URL。
-    //
-    // 曾经这里用一个 name="params" 的输入、值里塞整串查询串，htmx 于是发出
-    // params=offset%3D50 这一个参数，服务端看到的 offset 永远是默认值——
-    // 翻页看起来点了没反应。
-    const mcField = (id: string) => el<HTMLInputElement>(id);
-    const mcRequest = () => window.htmx.trigger(document.body, 'mc-refresh');
-    document.getElementById('mc-body')?.addEventListener('click', (event) => {
-      const target = event.target as Element;
-      const kind = target.closest<HTMLElement>('[data-mc-kind-btn]');
-      if (kind) {
-        mcField('mc-kind').value = kind.dataset.mcKindBtn ?? 'memories';
-        // 换分区必须回到第一页，否则可能落在超出新分区总数的 offset 上。
-        mcField('mc-offset').value = '0';
-        mcField('mc-category').value = '';
-        mcField('mc-project').value = '';
-        mcRequest();
-        return;
-      }
-      const more = target.closest<HTMLElement>('[data-mc-more]');
-      if (more) {
-        mcField('mc-offset').value = String(Number(more.dataset.mcMore ?? '0') + 50);
-        mcRequest();
-      }
-    }, { signal });
-    // 下拉框用 change：点击监听捕不到 select 的 change 事件。
-    document.getElementById('mc-body')?.addEventListener('change', (event) => {
-      const filter = (event.target as Element).closest<HTMLElement>('[data-mc-filter]');
-      if (!filter) return;
-      mcField(`mc-${filter.dataset.mcFilter ?? 'category'}`).value = (filter as HTMLSelectElement).value;
-      // 换筛选同样回到第一页。
-      mcField('mc-offset').value = '0';
-      mcRequest();
-    }, { signal });
+    // 记忆分区、筛选与分页动作由 mc.html 声明。
     document.addEventListener('click', (event) => this.onClick(event), { signal });
     document.addEventListener('keydown', (event) => { if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'k') { event.preventDefault(); void this.newSession().catch((err) => this.fail(err)); } }, { signal });
     // Escape 关闭已打开的顶栏面板（同时只开一个）。
@@ -399,6 +388,7 @@ export class Workbench {
       // Pi 分配新 ID 是本次发送自身的身份迁移；旧 scope 失效后必须
       // 交给新代次继续执行，不能误判为用户主动切换会话。
       this.scope.switchTo(info.sessionId);
+      this.cancelSessionFragments();
       activeScope = this.scope.current$();
       this.sessionId = info.sessionId; this.cwd = info.cwd;
       if (queueChoice) this.queueChoiceBySession.set(info.sessionId, queueChoice);
@@ -484,6 +474,7 @@ export class Workbench {
     // 请求」的归属，切换会话后代次已变，迟到的旧响应会被 beforeSwap 拒绝；
     // 若在这里改写成当前值，就识别不出「切换前发起、切换后才到达」的响应。
     this.saveCurrentDraft(); const previous = this.sessionId; this.scope.switchTo(id);
+    this.cancelSessionFragments();
     this.searchFocus = entryId ? { sessionId: id, entryId, epoch: this.scope.epoch } : undefined;
     if (previous && this.bridge.connected) void this.request('session.unsubscribe', undefined, previous).catch(() => {});
     this.sessionId = id; this.subscribed = ''; this.cwd = cwd; this.diskSession = !!id && persisted; this.cursor.reset(); this.live.clear();
@@ -566,7 +557,10 @@ export class Workbench {
     // 顺序反了就会拿到上一次的路径。
     el<HTMLInputElement>('cwd-input').value = start;
     const current = document.getElementById('dir-current') as HTMLInputElement | null;
-    if (current) current.value = start;
+    if (current) current.value = '';
+    const requested = document.getElementById('dir-request') as HTMLInputElement | null;
+    if (requested) requested.value = start;
+    this.updateDirUse();
     openDialog('new-dialog');
     // hx-trigger 上的 load 只在元素首次插入 DOM 时触发，第二次打开对话框
     // 不会重新请求，所以这里显式触发一次。
@@ -579,7 +573,21 @@ export class Workbench {
       * 用户改完输入框再刷新会读到旧路径。 */
   private syncDirInput(): void {
     const current = document.getElementById('dir-current') as HTMLInputElement | null;
-    if (current?.value) el<HTMLInputElement>('cwd-input').value = current.value;
+    const loaded = document.querySelector<HTMLElement>('#dir-list [data-dir-loaded-path]');
+    if (current && loaded && current.value === loaded.dataset.dirLoadedPath) el<HTMLInputElement>('cwd-input').value = current.value;
+    this.updateDirUse();
+  }
+
+  private directoryReady(): boolean {
+    const current = document.getElementById('dir-current') as HTMLInputElement | null;
+    if (!current) return true; // 精简嵌入页没有目录浏览器。
+    const loaded = document.querySelector<HTMLElement>('#dir-list [data-dir-loaded-path]');
+    return !this.dirRequest && !!current.value && current.value === loaded?.dataset.dirLoadedPath && current.value === el<HTMLInputElement>('cwd-input').value.trim();
+  }
+
+  private updateDirUse(): void {
+    const use = document.getElementById('dir-use') as HTMLButtonElement | null;
+    if (use) use.disabled = !this.directoryReady();
   }
 
   /** 侧栏按钮上的路径展示。家目录缩写不在客户端做：桥没有暴露 home，
@@ -937,7 +945,8 @@ export class Workbench {
       case 'branch': {
         if (!this.branch) {
           const { BranchNavigator } = await import('./branch');
-          this.branch = new BranchNavigator(this.bridge, (err) => this.fail(err), (leafId) => this.gotoLeaf(leafId), (entryId) => void this.forkFrom(entryId), () => this.sessionId);
+          if (this.abort.signal.aborted) return;
+          this.branch ??= new BranchNavigator(this.bridge, (err) => this.fail(err), (leafId) => this.gotoLeaf(leafId), (entryId) => void this.forkFrom(entryId), () => this.sessionId);
         }
         openDialog('branch-dialog');
         await this.branch.open();
@@ -946,9 +955,8 @@ export class Workbench {
       case 'branch-refresh': await this.branch?.refresh(); break;
       case 'branch-current': this.gotoLeaf(''); break;
       case 'models-edit': {
-        if (!this.models) { const { ModelsEditor } = await import('./models'); this.models = new ModelsEditor(this.bridge, (err) => this.fail(err)); }
+        if (!this.models) { const { ModelsEditor } = await import('./models'); if (this.abort.signal.aborted) return; this.models ??= new ModelsEditor(this.bridge, (err) => this.fail(err)); }
         openDialog('models-dialog');
-        this.models.select('empty');
         await this.models.open();
         break;
       }
@@ -1057,7 +1065,7 @@ export class Workbench {
   private async wireLazy(): Promise<void> {
     try {
       const { wireLazy } = await import('./lazy');
-      wireLazy(() => this.sessionId);
+      wireLazy(() => this.sessionId, this.abort.signal);
     } catch (error) { console.warn('惰性内容接线失败', error); }
   }
 
@@ -1140,5 +1148,5 @@ export class Workbench {
   private notice(message: string): void { el('connection-notice').textContent = message; el('connection-notice').hidden = !message; }
   private notify(message: string, kind = 'info'): void { void import('./toast').then(({showToast}) => showToast(message, kind === 'error' ? 'error' : kind === 'warning' ? 'warning' : 'info')); }
   private fail(error: unknown): void { const message = error instanceof Error ? error.message : '操作失败'; this.notify(message, 'error'); this.notice(message); }
-  dispose(): void { this.saveCurrentDraft(); this.abort.abort(); clearInterval(this.poll); clearTimeout(this.searchTimer); this.live.dispose(); this.workspace?.dispose(); this.bridge.dispose(); }
+  dispose(): void { this.saveCurrentDraft(); this.abort.abort(); clearInterval(this.poll); clearTimeout(this.searchTimer); this.live.dispose(); this.models?.dispose(); this.workspace?.dispose(); this.bridge.dispose(); }
 }

@@ -1,72 +1,21 @@
-{{/* magic-context 面板。数据来自本机 magic-context 的 SQLite 库（context.db），
-      与 Pi 的会话文件无关——它是跨会话记忆，magic-context 官方面板
-      （packages/dashboard）读的是同一个库。
-
-      这个库由 magic-context 插件持续写入，所以这里只读、且不缓存：
-      每次打开都重新查，让用户看到的是当下真实状态。 */}}
-<div class="mc-panel" data-mc-kind="{{.Kind}}">
-  <div class="mc-head">
-    <div class="mc-title">Magic Context</div>
-    {{if .Status.Available}}
-    <div class="mc-source" title="{{.Status.Source}}">本机存储 · {{.Status.Counts.memories}} 条记忆 · {{.Status.Counts.compartments}} 个分段</div>
-    {{else}}
-    <div class="mc-source is-off">未检测到</div>
-    {{end}}
-  </div>
-
-  {{if not .Status.Available}}
-  <p class="mc-empty">{{.Notice}}</p>
-  {{else}}
-  <nav class="mc-kinds" aria-label="记忆分区">
-    {{range .Kinds}}<button class="mc-kind" type="button" data-mc-kind-btn="{{.Key}}" title="{{.Hint}}"{{if .Current}} aria-current="page"{{end}}>{{.Label}}</button>{{end}}
-  </nav>
-
-  {{if eq .Kind "memories"}}
-  <div class="mc-filters">
-    <label class="mc-filter"><span>分类</span>
-      <select data-mc-filter="category">
-        <option value="">全部</option>
-        {{range .Categories}}<option value="{{.Name}}"{{if .Current}} selected{{end}}>{{.Name}}（{{.Count}}）</option>{{end}}
-      </select>
-    </label>
-    <label class="mc-filter"><span>项目</span>
-      <select data-mc-filter="project">
-        <option value="">全部</option>
-        {{range .Projects}}<option value="{{.Key}}"{{if .Current}} selected{{end}}>{{.Key}}（{{.Count}}）</option>{{end}}
-      </select>
-    </label>
-  </div>
-  {{end}}
-
-  {{if .Notice}}<p class="mc-empty">{{.Notice}}</p>{{end}}
-
-  <div class="mc-rows" id="mc-rows">
-    {{range .Rows}}
-    <details class="mc-row">
-      <summary>
-        {{/* 主标题是这一行的内容本身（已截断），分类只作标签——
-             两者用同一个字段会让每行都显示两遍分类。 */}}
-        <span class="mc-row-title">{{.Title}}</span>
-        {{if .Category}}<span class="mc-tag">{{.Category}}</span>{{end}}
-        {{if .Status}}<span class="mc-tag is-{{.Status}}">{{.Status}}</span>{{end}}
-        {{if .Scope}}<span class="mc-scope">{{.Scope}}</span>{{end}}
-        <span class="mc-when">{{.When}}</span>
-      </summary>
-      {{/* 展开后才给完整正文：整份记忆可能几千字符，
-           一次渲染几百行完整正文会把片段响应撑大，也没有可读性。 */}}
-      <p class="mc-preview">{{.Preview}}{{if gt .FullLen 240}}…{{end}}</p>
-      {{if .Extra}}<dl class="mc-extra">{{range .Extra}}<dt>{{.Label}}</dt><dd>{{.Value}}</dd>{{end}}</dl>{{end}}
-    </details>
-    {{else}}
-    <p class="mc-empty">这个分区暂时没有内容。</p>
-    {{end}}
-  </div>
-
-  {{if gt (len .Rows) 0}}
-  <div class="mc-foot">
-    <span class="mc-count">本页 {{len .Rows}} 条{{if .Total}} · 分区共 {{.Total}} 条{{end}}</span>
-    <button class="mc-more" type="button" data-mc-more="{{.Offset}}">加载更多</button>
-  </div>
-  {{end}}
-  {{end}}
-</div>
+{{define "mc-rows"}}{{range .Rows}}
+<details class="mc-row"><summary><span class="mc-row-title">{{.Title}}</span>{{if .Category}}<span class="mc-tag">{{.Category}}</span>{{end}}{{if .Status}}<span class="mc-tag is-{{.Status}}">{{.Status}}</span>{{end}}<span class="mc-when">{{.When}}</span></summary>
+<div class="mc-preview">{{.Preview}}{{if gt .FullLen 240}}…{{end}}
+{{if gt .FullLen 240}}<button type="button" class="btn" hx-get="/ui/mc/content?kind={{.Kind}}&amp;id={{.ID}}" hx-include="unset" hx-target="closest .mc-preview" hx-swap="innerHTML" hx-sync="this:drop">读取完整正文</button>{{end}}</div>
+{{if .Extra}}<dl class="mc-extra">{{range .Extra}}<dt>{{.Label}}</dt><dd>{{.Value}}</dd>{{end}}</dl>{{end}}</details>
+{{else}}<p class="mc-empty">这个分区暂时没有内容。</p>{{end}}{{end}}
+{{define "mc-more"}}<div class="mc-foot" id="mc-more"><span class="mc-count">本页 {{len .Rows}} 条 · 分区共 {{.Total}} 条</span>{{if .MoreURL}}<button type="button" class="mc-more" hx-get="{{.MoreURL}}" hx-include="unset" hx-target="#mc-more" hx-swap="outerHTML" hx-disabled-elt="this">加载更多</button>{{end}}</div>{{end}}
+{{if .Append}}
+{{if .Notice}}<div id="mc-more" class="mc-empty">{{.Notice}}</div>{{else}}
+<div hx-swap-oob="beforeend:#mc-rows">{{template "mc-rows" .}}</div>{{template "mc-more" .}}{{end}}
+{{else}}
+<div class="mc-panel" data-mc-kind="{{.Kind}}" hx-sync="#mc-body:replace">
+<div class="mc-head"><div class="mc-title">Magic Context</div><div class="mc-source" title="{{.Status.Source}}">本机存储 · {{.Status.Counts.memories}} 条记忆</div></div>
+{{if not .Status.Available}}<p class="mc-empty">{{.Notice}}</p>{{else}}
+<nav class="mc-kinds" aria-label="记忆分区">{{range .Kinds}}<button type="button" class="mc-kind" hx-get="/ui/mc?kind={{.Key}}" hx-include="unset" hx-target="#mc-body" hx-swap="innerHTML"{{if .Current}} aria-current="page"{{end}}>{{.Label}}</button>{{end}}</nav>
+{{if eq .Kind "memories"}}<form class="mc-filters" hx-get="/ui/mc" hx-trigger="change" hx-include="this" hx-target="#mc-body" hx-swap="innerHTML"><input type="hidden" name="kind" value="memories">
+<label class="mc-filter">分类<select name="category"><option value="">全部</option>{{range .Categories}}<option value="{{.Name}}"{{if .Current}} selected{{end}}>{{.Name}}（{{.Count}}）</option>{{end}}</select></label>
+<label class="mc-filter">项目<select name="project"><option value="">全部</option>{{range .Projects}}<option value="{{.Key}}"{{if .Current}} selected{{end}}>{{.Key}}（{{.Count}}）</option>{{end}}</select></label></form>{{end}}
+{{if .Notice}}<p class="mc-empty">{{.Notice}}</p>{{end}}
+<div class="mc-rows" id="mc-rows">{{template "mc-rows" .}}</div>{{template "mc-more" .}}
+{{end}}</div>{{end}}

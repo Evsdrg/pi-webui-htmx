@@ -14,6 +14,7 @@ export class Workspace {
   private cwd = '';
   private path = '';
   private generation = 0;
+  private previewRequest: AbortController | undefined;
   private terminal: import('./terminal').TerminalView | undefined;
   private abort = new AbortController();
   constructor(private readonly bridge: BridgeClient, private readonly onError: (error: unknown) => void) {
@@ -69,7 +70,7 @@ export class Workspace {
   }
   setCwd(cwd: string): void {
     if (cwd === this.cwd) return;
-    this.generation++; this.cwd = cwd; this.path = cwd;
+    this.generation++; this.previewRequest?.abort(); this.cwd = cwd; this.path = cwd;
     el('file-list').replaceChildren(); el('git-status').replaceChildren(); el('git-diff').replaceChildren();
     if (this.terminal) void this.terminal.close().catch(this.onError);
     // 文件树常驻侧栏，它的 hx-trigger="load" 只在页面加载时触发过一次。
@@ -105,9 +106,9 @@ export class Workspace {
     // 分隔条拖动的是两区高度比例，写进 CSS 变量；
     // 与侧栏宽度同一手法——拖动期间由 layout.ts 加 data-resizing 抑制过渡。
     if (splitter) {
-      let drag: { y: number; start: number } | null = null;
-      const height = () => section.getBoundingClientRect().height;
+      let drag: { y: number; start: number; total: number } | null = null;
       const setRatio = (value: number) => {
+        value = Number.isFinite(value) ? Math.min(0.8, Math.max(0.15, value)) : 0.45;
         section.style.setProperty('--files-ratio', String(value));
         splitter.setAttribute('aria-valuenow', String(Math.round(value * 100)));
       };
@@ -118,20 +119,26 @@ export class Workspace {
       setRatio(Number(readPref('sidebar-files-ratio')) || 0.45);
       splitter.setAttribute('aria-valuemin', '15');
       splitter.setAttribute('aria-valuemax', '80');
-      splitter.addEventListener('pointerdown', (event) => { drag = { y: event.clientY, start: currentRatio() }; splitter.setPointerCapture(event.pointerId); }, { signal: this.abort.signal });
+      splitter.addEventListener('pointerdown', (event) => {
+        const parent = section.parentElement!;
+        const style = getComputedStyle(parent);
+        const total = parent.clientHeight - parseFloat(style.paddingTop) - parseFloat(style.paddingBottom);
+        drag = { y: event.clientY, start: currentRatio(), total };
+        splitter.setPointerCapture(event.pointerId);
+      }, { signal: this.abort.signal });
       splitter.addEventListener('pointermove', (event) => {
         if (!drag) return;
-        const total = height();
-        if (total <= 0) return;
-        setRatio(Math.min(0.8, Math.max(0.15, drag.start + (event.clientY - drag.y) / total)));
+        if (drag.total <= 0) return;
+        setRatio(drag.start - (event.clientY - drag.y) / drag.total);
       }, { signal: this.abort.signal });
       const end = () => { if (!drag) return; drag = null; writePref('sidebar-files-ratio', String(currentRatio())); };
       splitter.addEventListener('pointerup', end, { signal: this.abort.signal });
       splitter.addEventListener('pointercancel', end, { signal: this.abort.signal });
+      splitter.addEventListener('lostpointercapture', end, { signal: this.abort.signal });
       splitter.addEventListener('keydown', (event) => {
         if (event.key !== 'ArrowUp' && event.key !== 'ArrowDown') return;
         event.preventDefault();
-        const next = Math.min(0.8, Math.max(0.15, currentRatio() + (event.key === 'ArrowUp' ? -0.05 : 0.05)));
+        const next = Math.min(0.8, Math.max(0.15, currentRatio() + (event.key === 'ArrowUp' ? 0.05 : -0.05)));
         setRatio(next); writePref('sidebar-files-ratio', String(next));
       }, { signal: this.abort.signal });
     }
@@ -151,7 +158,8 @@ export class Workspace {
   private async list(path: string): Promise<void> {
     // 更新动作全部交给 htmx：参数放在隐藏输入里，由 hx-include 带上去，
     // JS 不再拼 URL，也不再直接写 #file-list。
-    this.generation++; this.path = path;
+    this.generation++; this.previewRequest?.abort(); this.path = path;
+    el('file-list').dataset.requestScope = String(this.generation);
     el<HTMLInputElement>('files-path').value = path;
     window.htmx.trigger(document.body, 'files-refresh');
   }
@@ -161,9 +169,12 @@ export class Workspace {
   // 而且 files.read 现在会明确拒绝二进制，不会再像以前那样把 PNG 的
   // 字节转成 UTF-8 乱码返回。
   private async read(path: string): Promise<void> {
+    this.previewRequest?.abort();
+    const controller = new AbortController(); this.previewRequest = controller;
     const generation = ++this.generation;
+    const alive = () => !this.abort.signal.aborted && !controller.signal.aborted && generation === this.generation;
     const image = await this.bridge.request<{mime:string;data:string}>('files.image', '', { path }).catch(() => null);
-    if (generation !== this.generation) return;
+    if (!alive()) return;
     const name = path.split('/').pop() ?? path;
     el('file-name').textContent = name; el('file-name').title = path;
     if (image && image.data) {
@@ -178,20 +189,23 @@ export class Workspace {
     // 完整内容走 HTTP：WS 是控制通道，单帧有上限，整份文本会把连接撑断（B07）。
     // HTTP 端点带压缩，大文件也更划算；只有它整体失败时才退回 WS 的截断预览。
     try {
-      const response = await fetch(`/ui/file-text?path=${encodeURIComponent(path)}`, { credentials: 'same-origin' });
+      const response = await fetch(`/ui/file-text?path=${encodeURIComponent(path)}`, { credentials: 'same-origin', signal: controller.signal });
       if (!response.ok) throw new Error((await response.json().catch(() => null))?.error?.message ?? `读取失败（${response.status}）`);
       text = await response.text();
       if (response.headers.get('X-Truncated')) text += '\n[预览已截断]';
     } catch {
+      if (!alive()) return;
       try {
         const data = await this.bridge.request<{text:string;truncated:boolean}>('files.read', '', { path });
         text = data.text + (data.truncated ? '\n[预览已截断]' : '');
       } catch (error) {
         // 二进制文件：桥会给一句可读的原因，直接展示比静默失败好。
+        if (!alive()) return;
         this.showPreview(this.note(error instanceof Error ? error.message : '无法读取文件'));
         return;
       }
     }
+    if (!alive()) return;
     const code = document.createElement('code');
     code.id = 'file-content';
     code.textContent = text;
@@ -241,6 +255,7 @@ export class Workspace {
   private async mountAnsi(): Promise<void> {
     try {
       const { mountAnsi } = await import('./ansi');
+      if (this.abort.signal.aborted) return;
       mountAnsi(el('panel-preview'));
     } catch (error) { console.warn('ANSI 渲染失败', error); }
   }
@@ -264,16 +279,17 @@ export class Workspace {
       case 'files-up': { const parent = '/' + this.path.split('/').filter(Boolean).slice(0, -1).join('/'); await this.list(parent); break; }
       case 'files-refresh': await this.list(this.path || this.cwd); break;
       case 'file-close':
+        this.generation++; this.previewRequest?.abort();
         // 图片预览用 <img> 顶掉了 #file-content，此时它已不在 DOM 里；
         // 直接 replaceChildren 会抛异常，关闭按钮就此失效（U12）。
         el('panel-preview').hidden = true;
         elOrNull('file-content')?.replaceChildren();
         break;
       case 'git-refresh': await this.git(); break;
-      case 'terminal-open': if (!this.terminal) { const { TerminalView } = await import('./terminal'); this.terminal = new TerminalView(this.bridge, this.onError); } await this.terminal.open(this.cwd); break;
+      case 'terminal-open': if (!this.terminal) { const { TerminalView } = await import('./terminal'); if (this.abort.signal.aborted) return; this.terminal = new TerminalView(this.bridge, this.onError); } await this.terminal.open(this.cwd); break;
       case 'terminal-close': await this.terminal?.close(); break;
     }
   }
   event(message: Message): void { if (message.kind !== 'response') this.terminal?.event(message.event, record(message.data)); }
-  dispose(): void { this.abort.abort(); this.terminal?.dispose(); }
+  dispose(): void { this.generation++; this.previewRequest?.abort(); this.abort.abort(); this.terminal?.dispose(); }
 }
