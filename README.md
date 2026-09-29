@@ -9,7 +9,8 @@ Pi Bridge 的 HTMX 工作台。模板、TypeScript 与样式归本仓；桥负�
 ## 文档
 
 - [UI 包与交互契约](docs/contract.md)：当前模板字段、版本、构建与目标 SessionScope/交换守卫。
-- [组件选型](docs/components.md)：实际依赖、40 KiB 预算、测试和资源释放。
+- [组件选型](docs/components.md)：依赖、样式组织与资源释放（其中历史预算/测试数的漂移见下方复核）。
+- [前端改动复核](docs/htmx-css-ts-review.md)：逐条核对 htmx 职责、TypeScript 草稿与异步归属、CSS 级联；含 F01–F19、隔离探针及三个视口的计算样式。
 - [整体实施规划](../pi-bridge-go/docs/repair-plan.md)：P0–P7、影响矩阵、作用域边界、配套发布与状态迁移。
 - [桥的架构与修复决策](../pi-bridge-go/docs/architecture.md)：S01–S12、技术取舍和验收条件。
 - [审查台账](../pi-bridge-go/docs/code-audit.md)：未解决问题及逐项方案归属。
