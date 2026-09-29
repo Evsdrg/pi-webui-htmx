@@ -49,13 +49,11 @@ func buildPage(tb testing.TB, turns int) sessions.Page {
 	lines := []string{`{"type":"session","version":3,"id":"p","timestamp":"2026-01-01T00:00:00.000Z","cwd":"` + cwd + `"}`}
 	parent := "null"
 	for i := 0; i < turns; i++ {
-		for _, e := range []string{
-			`{"type":"message","id":"u` + fmt.Sprint(i) + `","parentId":` + parent + `,"timestamp":"t","message":{"role":"user","content":"第 ` + fmt.Sprint(i) + ` 轮问题"}}`,
-			`{"type":"message","id":"a` + fmt.Sprint(i) + `","parentId":"u` + fmt.Sprint(i) + `","timestamp":"t","message":{"role":"assistant","content":[{"type":"text","text":"第 ` + fmt.Sprint(i) + ` 轮回答，包含一些说明文字。"}]}}`,
-			`{"type":"message","id":"r` + fmt.Sprint(i) + `","parentId":"a` + fmt.Sprint(i) + `","timestamp":"t","message":{"role":"toolResult","content":[{"type":"text","text":"` + strings.Repeat("工具输出 ", 30) + `"}]}}`,
-		} {
-			lines = append(lines, e)
-		}
+		lines = append(lines,
+			`{"type":"message","id":"u`+fmt.Sprint(i)+`","parentId":`+parent+`,"timestamp":"t","message":{"role":"user","content":"第 `+fmt.Sprint(i)+` 轮问题"}}`,
+			`{"type":"message","id":"a`+fmt.Sprint(i)+`","parentId":"u`+fmt.Sprint(i)+`","timestamp":"t","message":{"role":"assistant","content":[{"type":"text","text":"第 `+fmt.Sprint(i)+` 轮回答，包含一些说明文字。"}]}}`,
+			`{"type":"message","id":"r`+fmt.Sprint(i)+`","parentId":"a`+fmt.Sprint(i)+`","timestamp":"t","message":{"role":"toolResult","content":[{"type":"text","text":"`+strings.Repeat("工具输出 ", 30)+`"}]}}`,
+		)
 		parent = `"r` + fmt.Sprint(i) + `"`
 	}
 	path := filepath.Join(sessionDir, "p.jsonl")

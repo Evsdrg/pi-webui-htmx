@@ -357,19 +357,6 @@ func Test同worker重复绑定目标不冲突(t *testing.T) {
 	}
 }
 
-// writeTestSession 在管理器的会话目录里写一个最小会话文件，供按 ID 恢复使用。
-func writeTestSession(t *testing.T, m *Manager, cwd, id string) {
-	t.Helper()
-	if err := os.MkdirAll(m.cfg.Store.Dir(), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	body := `{"type":"session","version":3,"id":"` + id + `","timestamp":"2026-01-01T00:00:00.000Z","cwd":"` + cwd + `"}` + "\n" +
-		`{"type":"message","id":"a","parentId":null,"timestamp":"2026-01-01T00:00:01.000Z","message":{"role":"user","content":"hi"}}` + "\n"
-	if err := os.WriteFile(filepath.Join(m.cfg.Store.Dir(), id+".jsonl"), []byte(body), 0o644); err != nil {
-		t.Fatal(err)
-	}
-}
-
 // Test会话文件名解析标准命名 覆盖 B09：
 // Pi 的会话文件是 timestamp_ID.jsonl，旧实现直接取 basename，
 // 时间戳前缀会让后续按 ID 的查找必然失败。

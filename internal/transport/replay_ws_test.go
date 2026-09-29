@@ -72,7 +72,7 @@ func TestWS批量补发后连接仍可用(t *testing.T) {
 
 	send("replay-burst", "session.subscribe", map[string]any{"epoch": initial.Epoch, "afterSeq": initial.Seq})
 	var count int
-	var last uint64 = initial.Seq
+	last := initial.Seq
 	confirmed := false
 	for count < 122 || !confirmed {
 		message := read()

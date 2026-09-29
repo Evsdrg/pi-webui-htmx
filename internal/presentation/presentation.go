@@ -995,7 +995,7 @@ func formatSize(n int) string {
 //
 // 摊平必须用显式栈而不是递归：长会话的分支树可能是上万层的线性链，
 // 递归会直接栈溢出（U08）。这里与前端原先的实现保持同样的前序顺序。
-func BranchRows(tree, forks map[string]any, leafId string) ([]BranchRow, []BranchFork) {
+func BranchRows(tree, forks map[string]any, leafID string) ([]BranchRow, []BranchFork) {
 	type frame struct {
 		node  map[string]any
 		depth int
@@ -1048,7 +1048,7 @@ func BranchRows(tree, forks map[string]any, leafId string) ([]BranchRow, []Branc
 			Summary: summary,
 			EntryID: id,
 			Level:   level,
-			Current: id != "" && id == leafId,
+			Current: id != "" && id == leafID,
 		})
 		for i := len(children) - 1; i >= 0; i-- {
 			stack = append(stack, frame{node: recordOf(children[i]), depth: item.depth + 1})

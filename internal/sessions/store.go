@@ -336,7 +336,7 @@ func (s *Store) History(ctx context.Context, id, leaf, before string, limit int)
 
 	// 轮边界对齐：见 alignToTurn 的说明。它会向前多取条目，
 	// 因此返回更新后的游标，HasMore 必须用它而不是原 cursor。
-	selected, total, cursor = s.alignToTurn(f, nodes, selected, total, cursor)
+	selected, cursor = s.alignToTurn(f, nodes, selected, total, cursor)
 	page := Page{SessionID: id, LeafID: leaf, LeafSource: "disk", Entries: []json.RawMessage{}, HasMore: cursor != ""}
 	for i := len(selected) - 1; i >= 0; i-- {
 		node := nodes[selected[i]]
@@ -426,14 +426,14 @@ func historicalModel(ctx context.Context, f *os.File, nodes map[string]node, lea
 //   - 读取失败：保留原切片
 //
 // 这一层是切片策略，不是正确性要求——前端本就能渲染孤儿条目。
-func (s *Store) alignToTurn(f *os.File, nodes map[string]node, selected []string, total int, cursor string) ([]string, int, string) {
+func (s *Store) alignToTurn(f *os.File, nodes map[string]node, selected []string, total int, cursor string) ([]string, string) {
 	if len(selected) == 0 {
-		return selected, total, cursor
+		return selected, cursor
 	}
 	// 先看本页最旧一条是否已经是 user——是则无需对齐。
 	// 注意 selected 是从新到旧排列的，末位是最旧。
 	if kind := entryKind(s.readEntry(f, nodes, selected[len(selected)-1])); kind == KindUser {
-		return selected, total, cursor
+		return selected, cursor
 	}
 	// 否则向前多取，直到把某个完整轮的 user 锚点包含进来。
 	// 从 selected 末位的父亲继续向前——调用方传进来的 cursor 正是它。
@@ -458,7 +458,7 @@ func (s *Store) alignToTurn(f *os.File, nodes map[string]node, selected []string
 			break
 		}
 	}
-	return selected, total, cursor
+	return selected, cursor
 }
 
 // readEntry 读取某条原始记录；失败返回 nil。

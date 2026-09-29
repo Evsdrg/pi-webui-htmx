@@ -179,12 +179,12 @@ func (s *Server) authorized(r *http.Request) bool {
 }
 
 // ServeHTTP 统一做 Host、Origin、鉴权与限额检查，再分发到具体端点。
-// handleUiResponse 处理扩展对话回执。
+// handleUIResponse 处理扩展对话回执。
 //
 // 表单提交（application/x-www-form-urlencoded）或 JSON 都可以。
 // 三种语义互斥，优先级 cancelled > confirmed > value，
 // 与 Pi 的 parseResponse 一致。
-func (s *Server) handleUiResponse(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleUIResponse(w http.ResponseWriter, r *http.Request) {
 	encoding := presentation.PickEncoding(r.Header.Get("Accept-Encoding"))
 	rest := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/ui/sessions/"), "/ui-response")
 	sessionID := rest
@@ -731,7 +731,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			writeError(w, encoding, 404, protocol.E("not_found", "未配置 UI 包"))
 			return
 		}
-		s.handleUiResponse(w, r)
+		s.handleUIResponse(w, r)
 		return
 	}
 

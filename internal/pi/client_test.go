@@ -31,17 +31,6 @@ type fakePipe struct {
 
 func newFakePipe() *fakePipe { return &fakePipe{ready: make(chan struct{}, 1)} }
 
-// firstLine 返回已写入的第一行，用于验证写入顺序。
-// 记录发生在 gate 放行之后、追加到 written 之前，因此能反映真实落盘顺序。
-func (f *fakePipe) firstLine() string {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	if len(f.order) == 0 {
-		return ""
-	}
-	return f.order[0]
-}
-
 // blockWrites 让后续写入阻塞，直到 releaseWrites 被调用。
 func (f *fakePipe) blockWrites() {
 	f.mu.Lock()

@@ -19,8 +19,6 @@ var errStopWalk = errors.New("stop walk")
 
 func isStopWalk(err error) bool { return errors.Is(err, errStopWalk) }
 
-func isEOF(err error) bool { return errors.Is(err, io.EOF) }
-
 // SearchLimits 约束全文搜索的规模，避免一次搜索拖垮桥。
 type SearchLimits struct {
 	MaxFiles     int

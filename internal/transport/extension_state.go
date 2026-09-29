@@ -36,6 +36,11 @@ func newExtensionState(maxKeys int) *extensionState {
 }
 
 // update 记录某个 key 的最新文本。text 为空表示该插件清除了状态。
+//
+// key 由插件提供，**不按会话命名空间隔离**：同一插件的状态在全桥只有一份。
+// 因此快照表不是「每个会话的状态」，而是一张有上限的展示缓存——
+// 桥重启（或插件显式清空）之前不会自行消失。前端在切会话时清自己的副本，
+// 这也是会话之间看起来不串的原因。
 func (e *extensionState) update(key, text string) {
 	if key == "" || len(key) > 128 || len(text) > 4096 {
 		return
@@ -68,9 +73,6 @@ func (e *extensionState) snapshot() []extensionStatus {
 	}
 	return out
 }
-
-// forget 清空某个会话相关的前缀状态。会话停止时调用。
-func (e *extensionState) forget(key string) { e.update(key, "") }
 
 // evictOldestLocked 淘汰最早插入的一项。map 无序，用 key 排序取最小的，
 // 行为确定即可，不需要严格 FIFI。

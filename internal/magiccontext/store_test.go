@@ -294,7 +294,7 @@ func TestListFiltersByCategoryAndProject(t *testing.T) {
 	if total != 1 {
 		t.Errorf("筛选后总数应为 1，得到 %d", total)
 	}
-	rows, total, err = store.List(context.Background(), KindMemories, 0, 50, Filter{Project: "dir:aaaaaaaaaaaa"})
+	_, total, err = store.List(context.Background(), KindMemories, 0, 50, Filter{Project: "dir:aaaaaaaaaaaa"})
 	if err != nil {
 		t.Fatalf("按项目筛选失败：%v", err)
 	}

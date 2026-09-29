@@ -51,10 +51,6 @@ const maxRows = 200
 // MaxPageRows 是单页行数的硬上限，供传输层校验入参。
 const MaxPageRows = maxRows
 
-// maxContentBytes 限制单行正文长度。记忆正文可以很长（几千字符），
-// 列表视图只需要开头，全文放在折叠区里由模板决定要不要展示。
-const maxContentBytes = 4000
-
 // ErrUnavailable 表示这台机器上读不到 magic-context 的存储。
 // 调用方应把它呈现成一句可读的说明，而不是一个错误码。
 var ErrUnavailable = errors.New("magic_context_unavailable")
