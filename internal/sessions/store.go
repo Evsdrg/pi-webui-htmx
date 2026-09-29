@@ -262,6 +262,11 @@ type node struct {
 	offset      int64
 	size        int
 	lastModelID string
+	// isUser 在这条记录是不是 user 消息（即轮边界对齐要找的锚点）。
+	// 它在扫描时顺手记下（见 parseEntryHead）：alignToTurn 以前为了
+	// 这一个布尔值把整条记录读回来做一次完整投影，在首页基准里
+	// 占约 31KB/op。
+	isUser bool
 }
 
 // History 读取所选分支上的一页历史。
@@ -336,7 +341,7 @@ func (s *Store) History(ctx context.Context, id, leaf, before string, limit int)
 
 	// 轮边界对齐：见 alignToTurn 的说明。它会向前多取条目，
 	// 因此返回更新后的游标，HasMore 必须用它而不是原 cursor。
-	selected, cursor = s.alignToTurn(f, nodes, selected, total, cursor)
+	selected, cursor = s.alignToTurn(nodes, selected, total, cursor)
 	page := Page{SessionID: id, LeafID: leaf, LeafSource: "disk", Entries: []json.RawMessage{}, HasMore: cursor != ""}
 	for i := len(selected) - 1; i >= 0; i-- {
 		node := nodes[selected[i]]
@@ -420,19 +425,23 @@ func historicalModel(ctx context.Context, f *os.File, nodes map[string]node, lea
 // user 消息，使本页以「某个完整轮的结尾」收尾。向前多取的部分不计入
 // limit（那是 UI 层面的预算），但仍受单页体积与条目数硬上限约束。
 //
+// 判定只看扫描期就记好的 node.isUser，因此这里既不读盘也不反序列化。
+// 代价是「读期间文件变化」不再在这一层被发现：被多取的条目仍会进入
+// 页循环逐条 ReadAt + json.Valid，那里失败会报 conflict，而不是静默缩短。
+//
 // 边界情况：
 //   - 一直取到会话开头都没遇到 user 消息：保留原切片，不强行扩大
-//   - 体积超限：停在超限前，宁可留孤儿也不返回错误
-//   - 读取失败：保留原切片
+//   - 体积或条目数超限：停在超限前，宁可留孤儿也不返回错误
 //
 // 这一层是切片策略，不是正确性要求——前端本就能渲染孤儿条目。
-func (s *Store) alignToTurn(f *os.File, nodes map[string]node, selected []string, total int, cursor string) ([]string, string) {
+func (s *Store) alignToTurn(nodes map[string]node, selected []string, total int, cursor string) ([]string, string) {
 	if len(selected) == 0 {
 		return selected, cursor
 	}
 	// 先看本页最旧一条是否已经是 user——是则无需对齐。
 	// 注意 selected 是从新到旧排列的，末位是最旧。
-	if kind := entryKind(s.readEntry(f, nodes, selected[len(selected)-1])); kind == KindUser {
+	// 判定用扫描期记下的 isUser：不再读盘、不再解析整条记录。
+	if nodes[selected[len(selected)-1]].isUser {
 		return selected, cursor
 	}
 	// 否则向前多取，直到把某个完整轮的 user 锚点包含进来。
@@ -445,42 +454,15 @@ func (s *Store) alignToTurn(f *os.File, nodes map[string]node, selected []string
 		if len(selected) >= s.limits.Entries {
 			break
 		}
-		b := s.readEntry(f, nodes, cursor)
-		if !json.Valid(b) {
-			break
-		}
 		selected = append(selected, cursor)
 		total += node.size
-		isUser := entryKind(b) == KindUser
 		cursor = node.parent
 		// 遇到 user 锚点说明已覆盖完整一轮，停止。
-		if isUser {
+		if node.isUser {
 			break
 		}
 	}
 	return selected, cursor
-}
-
-// readEntry 读取某条原始记录；失败返回 nil。
-func (s *Store) readEntry(f *os.File, nodes map[string]node, id string) []byte {
-	node, ok := nodes[id]
-	if !ok {
-		return nil
-	}
-	b := make([]byte, node.size)
-	if _, err := f.ReadAt(b, node.offset); err != nil {
-		return nil
-	}
-	return bytes.TrimSpace(b)
-}
-
-// entryKind 判断一条原始记录的角色类别，用于轮边界对齐。
-func entryKind(b []byte) EntryKind {
-	entries := ProjectEntries([]json.RawMessage{json.RawMessage(b)})
-	if len(entries) == 0 {
-		return KindOther
-	}
-	return entries[0].Kind
 }
 
 // Usage 是一条 assistant 消息的 token 与费用。零值表示「没有记录」，

@@ -191,12 +191,31 @@ func BenchmarkProjectAndGroup(b *testing.B) {
 	}
 }
 
-// BenchmarkEntryKind 单独测 alignToTurn 里被反复调用的那个函数。
-func BenchmarkEntryKind(b *testing.B) {
-	raw := json.RawMessage(`{"type":"message","id":"u1","parentId":null,"timestamp":"2026-01-01T00:00:01.000Z","message":{"role":"user","content":"问题"}}`)
-	b.ReportAllocs()
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		_ = entryKind(raw)
+// BenchmarkEntryHeadIsUser 单独测扫描期取「是不是 user 锚点」的那一步。
+//
+// 它取代了旧的 BenchmarkEntryKind：旧实现要先完整投影一条记录
+// （ProjectEntries → json.Unmarshal）才能回答同一个问题，
+// 而问题已经不在那条路径上了。这里的数字用于确认快路径
+// 没有因为多取 role 而変重，以及大行不因此多付代价。
+func BenchmarkEntryHeadIsUser(b *testing.B) {
+	for _, c := range []struct {
+		name string
+		line string
+	}{
+		{"小行", `{"type":"message","id":"u1","parentId":null,"timestamp":"2026-01-01T00:00:01.000Z","message":{"role":"user","content":"问题"}}`},
+		{"112KB行", `{"type":"message","id":"a1","parentId":"u1","timestamp":"2026-01-01T00:00:02.000Z","message":{"role":"assistant","content":"` + strings.Repeat("文本", 19000) + `"}}`},
+	} {
+		raw := []byte(c.line)
+		b.Run(c.name, func(b *testing.B) {
+			b.ReportAllocs()
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				head, ok := parseEntryHead(raw)
+				if !ok {
+					b.Fatal("快路径应命中")
+				}
+				_ = head.IsUser
+			}
+		})
 	}
 }

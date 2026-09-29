@@ -316,7 +316,7 @@ CI（`.github/workflows/check.yml`）只跑 `gofmt -l`、`go vet ./...`、`go te
 
 ### 5.3 逐项
 
-**G20 只为判断 kind 的整条读盘与投影（高）**
+**G20 只为判断 kind 的整条读盘与投影（高）** —— 已在批次 F 修复，见第 10 节。
 
 `alignToTurn`（`store.go:429`）把本页最旧一条以及向前补取的每一条都交给 `readEntry` + `entryKind`；`entryKind` 又调 `ProjectEntries`（完整 `json.Unmarshal` 成 `Entry`）——而它只想知道「这条是不是 user」。同一信息，`scanFile` 扫描时**已经解析过行首**（`type`/`id`/`parentId` 的快路径，见 `sessions/scan.go:20`）。
 
@@ -628,3 +628,23 @@ dialogs.go:29/76         再把 raw 读出来使用（:113 是重新登记）
 顺带被 staticcheck 指出的两个死函数（`boolField`、`intField`）随废弃的 map 路径一起删除；`stringField`/`recordOf`/`anyList` 仍被模型面板、统计与分支树使用，保留。
 
 `events.Ring.Stats()` 保持 `map[string]any`：它只用于测试与诊断，不跨渲染边界，类型化收益有限。
+
+### 批次 F
+
+扫描阶段本来已经读了每行的行首（`type`/`id`/`parentId`），现在顺手把「这条是不是 user 消息」记进 `node`，`alignToTurn` 直接查表。`readEntry` 与 `entryKind` 随之删除。
+
+`IsUser` 的取法：走到 `message` 成员时不读它的值，只降一级看它的第一个成员是不是 `role`（真机 3964/3964 条 `role` 都是 `message` 的首成员）。大行因此不付代价——`BenchmarkEntryHeadIsUser` 里 112 KB 行 354 ns / 32 B/op，与小行（330 ns / 24 B/op）几乎无差。**刻意不用「在整行里搜 `"role":"user"`」**：正文里出现这段文本就会判错，回归用例 `Test正文里的role文本不影响判定` 专门钉住这一点。
+
+**契约收紧**：`role` 不是 `message` 首成员、`message` 不是对象、`message` 成员缺失，这三类现在放弃快路径、交慢路径裁决（结果仍正确，只是慢）。慢路径的单次解析里顺带取出 `role`（`Message struct{ Role string }`），因此它对 iso-late 的顺序也一致。
+
+实测（`BenchmarkHistory首页/100轮/0.7MB`）：
+
+| 指标 | 改前 | 改后 |
+|---|---|---|
+| 时间 | 299 µs | **179 µs**（−40%） |
+| 分配字节 | 138087 B/op | **106461 B/op**（−23%） |
+| 分配次数 | 124 allocs/op | **83 allocs/op** |
+
+**行为等价性验证**：把一份真机 63 MB 会话（17042 条）冻成副本，用「改动前的 HEAD 工作树」与「改动后」各跑一遍逐页翻到开头，**41 页 / 6195 条的首末条目 ID 与 HasMore 完全一致**；同时对全部条目比对 `node.isUser` 与完整投影的 `KindUser`，17042 条零不一致。这两项验证是一次性的（真机会话不进仓库），脚本已删除。
+
+**缓存估算**：`node` 变大一个 bool；`scanCache.put` 的估算本来就是 `len(nodes) * 64`（注释写明实际约 40 字节），加上 bool 后仍在同一量级，因此没有改估算公式，只在该注释里点明了这一点。

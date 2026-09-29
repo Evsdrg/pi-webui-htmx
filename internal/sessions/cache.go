@@ -42,8 +42,8 @@ type scanCache struct {
 // 所以缓存到这么大已经没有意义。
 const maxCachedNodes = 100000
 
-// maxCachedBytes 是缓存的内存上界。一个 node 约 40 字节实际占用，
-// 100000 条约 4 MB；这里给到 16 MB，留足 map 开销余量。
+// maxCachedBytes 是缓存的内存上界。一个 node 约 40 字节实际占用
+// （含 isUser 那个 bool），100000 条约 4 MB；这里给到 16 MB，留足 map 开销余量。
 const maxCachedBytes = 16 << 20
 
 // get 返回缓存的扫描结果。路径、大小、mtime 与文件身份全部匹配才算命中。

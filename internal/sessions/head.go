@@ -23,6 +23,9 @@ type entryHead struct {
 	ParentNull bool
 	// Parent 是已解引用的父条目 ID；ParentNull 或 HasParent 为假时为空。
 	Parent string
+	// IsUser 表示这是一条 user 消息，即轮边界对齐要找的锚点。
+	// 只看 message.role，不解析正文。
+	IsUser bool
 }
 
 // headDecoder 把解码器与它的字节读器配成一对，便于整对入池复用。
@@ -43,10 +46,15 @@ var headPool = sync.Pool{New: func() any {
 // parseEntryHead 只读一条记录的行首字段，不解析整行。
 //
 // 为什么值得单独写：History 每次请求都要扫整个会话文件，而扫描阶段
-// 只需要 type/id/parentId。实测真实会话单行最大 112 KB（一条带长思考块的
-// assistant 消息），整体 Unmarshal 到结构体仍要把这 112 KB 的字符串完整
-// 扫过去——剖析显示 59.9% 的 CPU 花在 json.Unmarshal，其中近一半是
-// ConsumeStringResumable。这三字段通常在行首约 120 字节内。
+// 只需要 type/id/parentId 与「是不是 user 锚点」。实测真实会话单行最大
+// 112 KB（一条带长思考块的 assistant 消息），整体 Unmarshal 到结构体仍要把
+// 这 112 KB 的字符串完整扫过去——剖析显示 59.9% 的 CPU 花在 json.Unmarshal，
+// 其中近一半是 ConsumeStringResumable。这些字段通常在行首约 120 字节内。
+//
+// IsUser 的取法：走到 "message" 成员时不读它的值，只降一级看第一个成员
+// 是不是 "role"（Pi 写的顺序固定如此，真机 3964/3964 条为首成员）。
+// 这样就不必把正文读进内存；成员顺序不同则放弃快路径，由慢路径裁决。
+// 不能改用「在整行里搜 \"role\":\"user\"」：正文里出现这段文本就会判错。
 //
 // 返回 ok=false 表示这条记录不适合快路径（字段没找齐、类型不对、JSON 异常），
 // 调用方应回退到完整 Unmarshal，由它给出权威结果与错误。
@@ -73,6 +81,20 @@ func parseEntryHead(b []byte) (entryHead, bool) {
 			return entryHead{}, false
 		}
 		key := name.String() // Token 会被后续调用作废，必须立即取出
+		// message 成员：不读它的值（可能是上百 KB 的正文），
+		// 只降一级看它的第一个成员是不是 role。
+		if key == "message" && head.Type == "message" {
+			if !(haveType && haveID && head.HasParent) {
+				// 成员顺序异常：此刻已在对象内部，不能继续扫外层，交给慢路径。
+				return entryHead{}, false
+			}
+			role, ok := firstMemberString(dec, "role")
+			if !ok {
+				return entryHead{}, false
+			}
+			head.IsUser = role == "user"
+			return head, true
+		}
 		value, err := dec.ReadValue()
 		if err != nil {
 			return entryHead{}, false
@@ -106,8 +128,9 @@ func parseEntryHead(b []byte) (entryHead, bool) {
 			// 那会跳到下一个成员去，把整个解析搅乱。
 			_ = value
 		}
-		// 三个都拿到就停。剩下的（通常是巨大的 message）不再扫描。
-		if haveType && haveID && head.HasParent {
+		// 三个行首字段齐了就能停——但 message 记录还得知道 role，
+		// 否则调用方会把 user 消息当普通条目，轮边界对齐就失效了。
+		if haveType && haveID && head.HasParent && head.Type != "message" {
 			return head, true
 		}
 	}
@@ -115,7 +138,39 @@ func parseEntryHead(b []byte) (entryHead, bool) {
 	if !haveType || !haveID || !head.HasParent {
 		return entryHead{}, false
 	}
+	if head.Type == "message" {
+		// 是 message 记录却始终没看到 message 成员：慢路径才能给出权威结果。
+		return entryHead{}, false
+	}
 	return head, true
+}
+
+// firstMemberString 在对象里读第一个成员：键名等于 want 且值是字符串时返回它。
+//
+// 只处理「首个成员就是想要的键」这一种形状；其余一律返回 false，
+// 由调用方回退到完整解析。这样就不必跳过可能是上百 KB 的后续值。
+func firstMemberString(dec *jsontext.Decoder, want string) (string, bool) {
+	if dec.PeekKind() != '{' {
+		return "", false
+	}
+	if _, err := dec.ReadToken(); err != nil { // 进入对象
+		return "", false
+	}
+	if kind := dec.PeekKind(); kind == 0 || kind == '}' {
+		return "", false
+	}
+	name, err := dec.ReadToken()
+	if err != nil {
+		return "", false
+	}
+	if name.String() != want {
+		return "", false
+	}
+	value, err := dec.ReadValue()
+	if err != nil || value.Kind() != '"' {
+		return "", false
+	}
+	return unquoteJSON(value.String()), true
 }
 
 // unquoteJSON 去掉 JSON 字符串 token 的引号并还原转义。

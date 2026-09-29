@@ -22,50 +22,65 @@ func TestParseEntryHead边界(t *testing.T) {
 	}{
 		{
 			name: "标准形状",
-			line: `{"type":"message","id":"u1","parentId":"p1","message":{"x":1}}`,
-			want: entryHead{Type: "message", ID: "u1", HasParent: true, Parent: "p1"},
+			line: `{"type":"message","id":"u1","parentId":"p1","message":{"role":"user","x":1}}`,
+			want: entryHead{Type: "message", ID: "u1", HasParent: true, Parent: "p1", IsUser: true},
 			ok:   true,
 		},
 		{
 			name: "parentId 为 null",
-			line: `{"type":"message","id":"u1","parentId":null,"message":{}}`,
+			line: `{"type":"message","id":"u1","parentId":null,"message":{"role":"assistant","x":1}}`,
 			want: entryHead{Type: "message", ID: "u1", HasParent: true, ParentNull: true},
 			ok:   true,
 		},
 		{
 			name: "字段顺序颠倒",
-			line: `{"message":{"x":1},"parentId":"p1","id":"u1","type":"message"}`,
-			want: entryHead{Type: "message", ID: "u1", HasParent: true, Parent: "p1"},
+			line: `{"message":{"role":"user","x":1},"parentId":"p1","id":"u1","type":"message"}`,
+			ok:   false, // message 在 id/parentId 之前：不猜，交慢路径
+		},
+		{
+			name: "message 记录缺 role",
+			line: `{"type":"message","id":"u1","parentId":null,"message":{"content":"x"}}`,
+			ok:   false, // 拿不到 role 就不敢判定锚点，交慢路径
+		},
+		{
+			name: "message 成员缺失",
+			line: `{"type":"message","id":"u1","parentId":null,"timestamp":"t"}`,
+			ok:   false,
+		},
+		{
+			name: "非 message 记录无需 role",
+			line: `{"type":"model_change","id":"m1","parentId":"u1","provider":"p","modelId":"x"}`,
+			want: entryHead{Type: "model_change", ID: "m1", HasParent: true, Parent: "u1"},
 			ok:   true,
 		},
 		{
 			name: "嵌套对象里有同名字段",
-			line: `{"type":"message","id":"u1","parentId":"p1","message":{"type":"other","id":"nested","parentId":"deep"}}`,
-			want: entryHead{Type: "message", ID: "u1", HasParent: true, Parent: "p1"},
+			line: `{"type":"message","id":"u1","parentId":"p1","message":{"role":"user","type":"other","id":"nested","parentId":"deep"}}`,
+			want: entryHead{Type: "message", ID: "u1", HasParent: true, Parent: "p1", IsUser: true},
 			ok:   true,
 		},
 		{
+			// message 不是对象：取不到 role，交慢路径裁决。
 			name: "嵌套数组里有同名字段",
-			line: `{"type":"message","id":"u1","parentId":"p1","message":[{"id":"a"},{"id":"b"}]}`,
-			want: entryHead{Type: "message", ID: "u1", HasParent: true, Parent: "p1"},
-			ok:   true,
+			line: `{"type":"message","id":"u1","parentId":"p1","message":[{"role":"user"},{"id":"b"}]}`,
+			ok:   false,
 		},
 		{
 			name: "大字段在后面（真实 Pi 的顺序）",
-			line: `{"type":"message","id":"u1","parentId":null,"timestamp":"t","message":{"content":"` + strings.Repeat("x", 5000) + `"}}`,
+			line: `{"type":"message","id":"u1","parentId":null,"timestamp":"t","message":{"role":"assistant","content":"` + strings.Repeat("x", 5000) + `"}}`,
 			want: entryHead{Type: "message", ID: "u1", HasParent: true, ParentNull: true},
 			ok:   true,
 		},
 		{
 			name: "ID 含转义",
-			line: `{"type":"message","id":"a\"b","parentId":"p\\1"}`,
-			want: entryHead{Type: "message", ID: `a"b`, HasParent: true, Parent: `p\1`},
+			line: `{"type":"message","id":"a\"b","parentId":"p\\1","message":{"role":"user"}}`,
+			want: entryHead{Type: "message", ID: `a"b`, HasParent: true, Parent: `p\1`, IsUser: true},
 			ok:   true,
 		},
 		{
 			name: "ID 含 unicode 转义",
-			line: `{"type":"message","id":"\u00e9","parentId":null}`,
-			want: entryHead{Type: "message", ID: "é", HasParent: true, ParentNull: true},
+			line: `{"type":"message","id":"\u00e9","parentId":null,"message":{"role":"user"}}`,
+			want: entryHead{Type: "message", ID: "é", HasParent: true, ParentNull: true, IsUser: true},
 			ok:   true,
 		},
 		{

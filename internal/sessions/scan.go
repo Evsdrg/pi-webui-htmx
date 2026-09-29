@@ -56,6 +56,11 @@ func (s *Store) scanFile(ctx context.Context, f *os.File, size int64, id, cwd st
 				Type   string          `json:"type"`
 				ID     string          `json:"id"`
 				Parent json.RawMessage `json:"parentId"`
+				// Role 随同一次解析取出：message 的其余成员（可能是上百 KB
+				// 的正文）会被跳过而不复制。
+				Message struct {
+					Role string `json:"role"`
+				} `json:"message"`
 			}
 			if json.Unmarshal(b, &item) != nil || item.Type == "" || item.Type == "session" || !ValidID(item.ID) || len(item.Parent) == 0 {
 				return nil, "", protocol.E("invalid_history", "完整的历史记录格式错误")
@@ -84,7 +89,7 @@ func (s *Store) scanFile(ctx context.Context, f *os.File, size int64, id, cwd st
 			if item.Type == "model_change" {
 				modelID = item.ID
 			}
-			nodes[item.ID] = node{parent: parent, offset: offset, size: n, lastModelID: modelID}
+			nodes[item.ID] = node{parent: parent, offset: offset, size: n, lastModelID: modelID, isUser: item.Type == "message" && item.Message.Role == "user"}
 			last = item.ID
 			offset += int64(n)
 			continue
@@ -118,7 +123,7 @@ func (s *Store) scanFile(ctx context.Context, f *os.File, size int64, id, cwd st
 		if head.Type == "model_change" {
 			modelID = head.ID
 		}
-		nodes[head.ID] = node{parent: parent, offset: offset, size: n, lastModelID: modelID}
+		nodes[head.ID] = node{parent: parent, offset: offset, size: n, lastModelID: modelID, isUser: head.IsUser}
 		last = head.ID
 		offset += int64(n)
 	}
