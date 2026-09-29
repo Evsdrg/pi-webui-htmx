@@ -389,7 +389,7 @@ func toAnyMaps(v any) []map[string]any {
 
 建议：**优先选零跨仓的修法**——删掉自定义覆盖，直接用内置 `printf`（`%s/%s` 行为一致）。改名成 `joinSlash`/`key` 属于跨仓原子改动，顺序要求与陷阱见 §6.5。
 
-**G29 serveUI 的重复样板（中）**
+**G29 serveUI 的重复样板（中）** · 已在批次 J 修复，助手名为 `renderFragment`（见第 10 节）
 
 `serveUI`（381 行）里 `s.fragmentIssue(w, encoding, …)` 出现 25 次、`writeHTML(w, encoding, html)` 16 次，同一段「渲染 → 失败渲染说明 → 写回 → `return true`」重复 16 次。抽一个 `serveFragment(w, encoding, func() (string, error)) bool` 就能消掉，同时把 `serveUI` 从 381 行降下来。与 G03 是同处代码的两个视角，一起做。
 
