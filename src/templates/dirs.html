@@ -1,0 +1,8 @@
+{{/* 目录选择器的子目录列表。点一项就带着新路径重新请求本片段，
+     目标仍是 #dir-list，于是列表自身完成导航；当前路径用带外交换写到
+     #dir-current，供「使用此目录」与路径输入框读取。 */}}
+<input type="hidden" id="dir-current" name="path" value="{{.Path}}" hx-swap-oob="true">
+{{if .Parent}}<button type="button" class="dir-row dir-up" hx-get="/ui/dirs?path={{.Parent}}" hx-target="#dir-list" hx-swap="innerHTML" title="返回上一级">↑ ..</button>{{end}}
+{{range .Dirs}}<button type="button" class="dir-row" hx-get="/ui/dirs?path={{.Path}}" hx-target="#dir-list" hx-swap="innerHTML" title="{{.Path}}">{{.Name}}</button>{{end}}
+{{if .Truncated}}<p class="empty-note">目录过多，仅显示前一部分。</p>{{end}}
+{{if not .Dirs}}<p class="empty-note">此目录下没有子目录。</p>{{end}}

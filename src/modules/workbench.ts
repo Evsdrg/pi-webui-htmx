@@ -112,6 +112,19 @@ export class Workbench {
       try { this.mention?.refresh(); } catch (error) { console.warn('@ 补全刷新失败', error); }
       this.updateControls();
     }, { signal });
+    // 目录列表每次换页后回显路径；用 htmx 自己的事件而不是轮询。
+    document.body.addEventListener('htmx:afterSwap', (event) => {
+      if ((event.target as HTMLElement).id === 'dir-list') this.syncDirInput();
+    }, { signal });
+    // 目录选择器是 shell 的一部分，但精简的测试夹具可能不渲染它；
+    // 缺元素时静默跳过，不让整个工作台起不来。
+    const dirGo = document.getElementById('dir-go');
+    dirGo?.addEventListener('click', () => {
+      const path = el<HTMLInputElement>('cwd-input').value.trim();
+      if (!path) return;
+      el<HTMLInputElement>('dir-current').value = path;
+      window.htmx.trigger(document.body, 'dirs-refresh');
+    }, { signal });
     el('new-form').addEventListener('submit', (event) => {
       event.preventDefault(); const cwd = el<HTMLInputElement>('cwd-input').value.trim();
       if (!cwd) return;
@@ -427,12 +440,46 @@ export class Workbench {
     if (id && this.diskSession) void this.refreshHistory(entryId);
     if (this.bridge.connected) void this.reconcile().catch((err) => this.fail(err));
     this.workspace?.setCwd(cwd);
+    this.syncNewSessionButton();
   }
   private async newSession(): Promise<void> {
     const response = await this.request<{ roots: string[] }>('files.roots', undefined, '');
-    el('workspace-roots').replaceChildren(...response.roots.map((path) => new Option(path, path)));
-    el<HTMLInputElement>('cwd-input').value = this.cwd || response.roots[0] || '';
+    const start = this.cwd || response.roots[0] || '';
+    el<HTMLInputElement>('cwd-input').value = start;
+    // 路径输入框先于列表刷新填好：列表用 hx-include 读它，
+    // 顺序反了就会拿到上一次的路径。
+    el<HTMLInputElement>('cwd-input').value = start;
+    const current = document.getElementById('dir-current') as HTMLInputElement | null;
+    if (current) current.value = start;
     openDialog('new-dialog');
+    // hx-trigger 上的 load 只在元素首次插入 DOM 时触发，第二次打开对话框
+    // 不会重新请求，所以这里显式触发一次。
+    window.htmx.trigger(document.body, 'dirs-refresh');
+    this.syncNewSessionButton();
+  }
+
+  /** 目录列表换页后把新路径回显到输入框。当前路径由片段的带外交换写进
+      * #dir-current，输入框只是它的可见形态——两者不保持一致的话，
+      * 用户改完输入框再刷新会读到旧路径。 */
+  private syncDirInput(): void {
+    const current = document.getElementById('dir-current') as HTMLInputElement | null;
+    if (current?.value) el<HTMLInputElement>('cwd-input').value = current.value;
+  }
+
+  /** 侧栏按钮上的路径展示。家目录缩写不在客户端做：桥没有暴露 home，
+      * 而猜一个前缀会把别人的路径改错。超长路径由 CSS 做左省略，
+      * 保留最有信息量的尾部（与 Pi Web 的 PathLabel 同一手法）。 */
+  private displayPath(path: string): string {
+    return path || '新建会话';
+  }
+
+  /** 侧栏「新建会话」按钮显示当前工作目录。 */
+  private syncNewSessionButton(): void {
+    const label = document.getElementById('new-session-cwd');
+    const button = document.getElementById('new-session-btn');
+    if (!label || !button) return;
+    label.textContent = this.displayPath(this.cwd);
+    button.title = this.cwd || '新建会话';
   }
   private async send(): Promise<void> {
     const input = el<HTMLTextAreaElement>('prompt'); const message = input.value.trim();

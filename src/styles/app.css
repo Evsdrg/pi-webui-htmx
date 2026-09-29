@@ -172,6 +172,28 @@ kbd { font-size:10px; color:var(--text-dim); margin-left:auto; }
 #ext-status-slot { flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .ext-widgets { font-size:12px; max-height:160px; overflow:auto; }
 .ext-widget { white-space:pre-wrap; border:1px solid var(--border); padding:8px; margin:6px 0; border-radius:8px; }
+/* ── 新建会话：目录选择器（对齐 Pi Web 的 DirectoryPicker）── */
+.dir-dialog { display:flex; flex-direction:column; width:min(520px,calc(100vw - 16px)); height:min(620px,calc(100dvh - 16px)); max-height:calc(100dvh - 16px); padding:0; overflow:hidden; }
+.dir-dialog-head { display:flex; align-items:center; justify-content:space-between; flex:0 0 auto; padding:12px 18px; border-bottom:1px solid var(--border); }
+.dir-dialog-head h2 { margin:0; font-size:15px; font-weight:700; }
+.dir-path-row { display:flex; align-items:center; gap:8px; flex:0 0 auto; padding:10px 14px; border-bottom:1px solid var(--border); }
+.dir-path-row input { flex:1 1 auto; min-width:0; height:36px; padding:0 10px; border:1px solid var(--border); border-radius:6px; background:var(--bg); color:var(--text); font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:12px; }
+.dir-list { flex:1 1 auto; min-height:0; overflow:auto; padding:8px 10px; }
+.dir-row { display:flex; align-items:center; gap:7px; width:100%; min-height:30px; padding:5px 8px; border:0; border-radius:5px; background:none; color:var(--text-muted); cursor:pointer; text-align:left; font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:11px; transition:background .12s,color .12s; }
+.dir-row:hover,.dir-row:focus-visible { background:var(--bg-hover); color:var(--text); }
+.dir-row span { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.dir-up { color:var(--text-dim); }
+.dir-dialog-foot { flex:0 0 auto; display:flex; flex-direction:column; gap:10px; padding:10px 18px; border-top:1px solid var(--border); }
+.dir-dialog-foot .muted { margin:0; }
+.dir-dialog-foot .dialog-actions { justify-content:flex-end; }
+
+/* 新建会话按钮里的路径：左省略而不是右省略。路径的信息量在尾部
+   （项目名），开头的工作区前缀反而人人皆知。做法与 Pi Web 的 PathLabel
+   相同——容器 direction:rtl 把省略号推到左边，内层再隔离成纯左到右，
+   否则路径里的斜杠和点会被 bidi 重排。 */
+.new-session-cwd { display:block; min-width:0; max-width:150px; overflow:hidden; direction:rtl; text-overflow:ellipsis; white-space:nowrap; unicode-bidi:isolate; }
+@media (max-width:760px) { .new-session-cwd { max-width:90px; } }
+
 /* ==== 通用控件与对话框 =============================================================== */
 .btn,.icon-btn { display:inline-flex; align-items:center; justify-content:center; gap:6px; border:1px solid var(--border); border-radius:7px; background:var(--bg); color:var(--text); padding:6px 11px; font-size:12px; line-height:1.5; }
 .btn:hover,.icon-btn:hover { background:var(--bg-hover); }
