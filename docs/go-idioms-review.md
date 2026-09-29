@@ -98,7 +98,7 @@ func New(manager *run.Manager, store *sessions.Store, …, token, host string, p
 
 建议方向：引入 `transport.Config`，字段名与 `runtime.Config` 保持一致；`cmd/pi-bridge/main.go` 是唯一调用点（`main.go:179`），改动面小。
 
-### G03 超长 HTTP 处理函数与字符串编码参数（中）
+### G03 超长 HTTP 处理函数与字符串编码参数（中） · 已在批次 J 修复（见第 10 节）
 
 `serveUI`（`server.go:245`）381 行，把路由匹配、内容协商、鉴权后处理、片段渲染写在一个函数里；`ServeHTTP`（`:677`）126 行。同时 `encoding string` 作为参数穿过 11 个函数：
 
@@ -580,6 +580,7 @@ dialogs.go:29/76         再把 raw 读出来使用（:113 是重新登记）
 | G2 | `025e94d` | G23：`jsonl.Reusable` 复用缓冲，三个安全调用点切换 | `lazy.go` 经核对不安全，未切 |
 | H | `acf5ad0` | G28：删除对内置 `printf` 的覆盖 | 无 |
 | I | `a00615a` | G02 `transport.Options` + G07 具名状态与具名布尔 + G12 nil 约定统一 | 两个协议布尔保留原名 |
+| J | `fa6bc38` | G03 + G29：`Encoding` 具名类型、serveUI 按契约拆三个函数、11 处样板改 `renderFragment` | 顺带修 history 400 → 200 |
 
 ### 批次 A
 
@@ -714,3 +715,15 @@ dialogs.go:29/76         再把 raw 读出来使用（:113 是重新登记）
 - **未改**：`Bash(…, excludeFromContext bool)` 与 `Worker.Stop(force bool)`。两者的布尔直接对应协议字段（`bash.run` 的 `excludeFromContext`、`session.stop` 的 `force`），调用点就是把解码出的同名字段传进去；为它们造包装类型只会让协议字段与 Go 标识符之间多一层映射。
 
 **G12**：约定统一为「Renderer 非 nil，禁用 UI 由外层决定」。删除 `SetMagicContext` 的 nil 接收者容错（它曾是全仓唯一一处 nil 安全方法，等于把「记得判空」的责任推给每个人），`transport.New` 改为条件注入；`fragmentIssue` 补上自己的守卫，使将来新增的片段调用点不会踩到 panic。
+
+### 批次 J（G03 + G29）
+
+**`Encoding` 具名类型**：`EncNone`/`EncBrotli`/`EncGzip`，`PickEncoding` 返回它，压缩、资产缓存与 HTTP 写回三层都改。协商结果仍然**显式传参**而不是塞进 context：它决定响应头，藏起来只会让头的判断更难跟。
+
+**serveUI 按契约拆成三个函数**：`serveUI`（分发）→ `serveUIAssets`（`/`、`/assets/`，真实状态码 + 缓存语义）/ `serveUIFragments`（`/ui/*`，一律 200 + 可读 HTML）。行数 381 → 27 / 39 / 271，两个相反的错误约定再也不会被写进同一个 switch。
+
+**`renderFragment`** 取代 11 处「渲染→报错→写回→return true」样板；它把取数与渲染收进一个闭包，两个出口都固定为 200，调用点做不到「只做一半」（例如渲染失败回状态码）。文档注明**只给 htmx 交换的片段端点用**。
+
+**顺带修掉一个真缺陷**：`/ui/sessions/{id}/history` 对「会话已不存在」回 400 —— 这是状态类失败，htmx 不交换，界面于是停在旧会话的历史上、没有任何提示。改为按片段约定渲染说明；模板缺失这类程序性故障仍回 500。浏览器实测：`#turns` 里出现「会话不存在」。
+
+**新增三层回归**（`status_contract_test.go`）：15 个片段端点的状态类失败必须 200 + HTML；非片段端点（资源 404、越界路径 400、非法会话 ID 400）保留真实状态码；扩展端点的 204/400 信号不动；外壳能渲染且 br 协商仍生效（具名类型最容易坏在这里）。
