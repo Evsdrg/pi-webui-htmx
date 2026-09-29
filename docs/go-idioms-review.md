@@ -326,7 +326,7 @@ CI（`.github/workflows/check.yml`）只跑 `gofmt -l`、`go vet ./...`、`go te
 2. 「扫描期顺手存派生信息」已有先例：`node.lastModelID` 就是这么来的（`scan.go:82-87`、`:116-121`）。
 3. 去掉读盘**不会**丢掉「读期间文件变化」的检测（页循环仍逐条 `ReadAt` + `json.Valid`），但失败形态会从「页更短」变成 `conflict`；另外 `node` 变大后 `maxCachedBytes`（16MB）的估算要重算。
 
-**G21 用失败做类型判断（中）**
+**G21 用失败做类型判断（中）** —— 已在批次 D 修复，见第 10 节。
 
 ```55:55:internal/sessions/lazy.go
 	if json.Unmarshal(msg.Content, &blocks) != nil {
@@ -370,7 +370,7 @@ func toAnyMaps(v any) []map[string]any {
 
 `wsReadLimit = 8 × 12MiB + 1MiB ≈ 97MiB`（为容纳 8 张附件的 base64）。`coder/websocket` 会为整条消息分配缓冲，所以**单连接最坏约 97MiB**，连接槽上限 8 → 最坏约 776MiB。这是显式取舍（附件必须能过），但值得写进文档，避免以后有人以为是 KB 级。
 
-**G27 嵌套深度（低，结论偏正面）**
+**G27 嵌套深度（低，结论偏正面）** —— 两处 7 层已在批次 D 处理，见第 10 节。
 
 ≤2 层占 89.1%、≤3 层占 97.1%，且 `} else {` 全仓仅 22 处 / 16.7k 行——早返回风格是贯彻了的。真正值得动的只有两处 7 层：`funcMap` 的手写 printf（G28）与 `titleForPage` 的「先试字符串再试数组」（与 G21 同源，一起改最划算）。其余 5 层多为「并发任务归类」的合理结构，不建议为降层数而重构。
 
@@ -572,7 +572,8 @@ dialogs.go:29/76         再把 raw 读出来使用（:113 是重新登记）
 |---|---|---|---|
 | A | `b59f747` | G13/G14/G15/G16/G30 + `t.Setenv` | 无 |
 | B | `7103f6a` | G18：接入 staticcheck v0.8.1、清理基线 | 见下 |
-| C | 本次 | G04 能力 + G05 + G06 | 见下 |
+| C | `eb70488` | G04 能力 + G05 + G06 | 见下 |
+| D | 本次 | G21：三处「拿失败当形状判断」统一为首字节判定 | 无 |
 
 ### 批次 A
 
@@ -593,3 +594,20 @@ dialogs.go:29/76         再把 raw 读出来使用（:113 是重新登记）
 **G05/G06**：`Record` 现在把写盘/轮转失败向上返回（内存索引照旧更新，进程内去重不受影响），「未启用」改用 `storage.ErrNotEnabled` 而不是借用 `os.ErrClosed`。传输层新增 `storeReceipt` 统一落盘并统计失败：`ErrNotEnabled` 是配置事实、不计入失败；真实写失败计入 `receiptFailures` 指标，`/healthz` 与 `receipts.degraded` 都能看到。
 
 **一个仍需拍板的取舍**：intent 写失败目前仍然继续派发（fail-open），只计数与暴露降级。严格的做法是 fail-closed——写不进 intent 就拒绝有副作用的命令——否则「结果未知不重发」的承诺在重启后没有依据。改成 fail-closed 会改变对外行为（存储不可用时全部写命令被拒），因此留给明确决策，不在本批单方面改。
+
+### 批次 D
+
+三个调用点（`lazy.go`、`search.go` 的 `flattenContent`、`metadata.go` 的标题回落）原本都靠「试一次、失败再试另一种」判断 `content` 是字符串还是块数组。现在统一用 `shapeOf` 看首个非空白字节。
+
+实测（`BenchmarkRenderHistory`，各 3000 次采样）：
+
+| 指标 | 改前 | 改后 |
+|---|---|---|
+| 时间 | 323 µs | 276 µs（−14.5%） |
+| 分配字节 | 154310 B/op | 142710 B/op（−7.5%） |
+| 分配次数 | 1664 allocs/op | 1511 allocs/op（−9.2%） |
+| 错误对象构造（`transformUnmarshalError` + `newUnmarshalErrorAfter`） | 约 9KB/op | 已从 profile 中消失 |
+
+同一个提交顺带消掉了第 5.2 节记录的两处最深嵌套（`metadata.go` 由 7 层降到 3 层）。
+
+新增回归：形状判定本身（含前导空白、`null`、空值）、`flattenContent` 与 `scanLazyBlocks` 在字符串/数组/null/对象四种输入下的行为。

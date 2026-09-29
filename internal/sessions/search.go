@@ -203,28 +203,34 @@ func (s *Store) searchFile(path, needle string, limits SearchLimits, out *Search
 }
 
 // flattenContent 把字符串或内容块数组压成一段纯文本，用于生成摘要片段。
+// 形状由首字节判断，不走「先试字符串、失败再试数组」那条试错路径。
 func flattenContent(raw json.RawMessage) string {
-	if len(raw) == 0 {
-		return ""
-	}
-	var s string
-	if json.Unmarshal(raw, &s) == nil {
-		return s
-	}
-	var blocks []struct {
-		Type string `json:"type"`
-		Text string `json:"text"`
-	}
-	if json.Unmarshal(raw, &blocks) != nil {
-		return ""
-	}
-	parts := make([]string, 0, len(blocks))
-	for _, b := range blocks {
-		if b.Text != "" {
-			parts = append(parts, b.Text)
+	switch shapeOf(raw) {
+	case shapeString:
+		var s string
+		if json.Unmarshal(raw, &s) != nil {
+			return ""
 		}
+		return s
+	case shapeArray:
+		var blocks []struct {
+			Type string `json:"type"`
+			Text string `json:"text"`
+		}
+		if json.Unmarshal(raw, &blocks) != nil {
+			return ""
+		}
+		parts := make([]string, 0, len(blocks))
+		for _, b := range blocks {
+			if b.Text != "" {
+				parts = append(parts, b.Text)
+			}
+		}
+		return strings.Join(parts, " ")
+	default:
+		// 空值、null、对象等形状都没有可压的文本。
+		return ""
 	}
-	return strings.Join(parts, " ")
 }
 
 // snippet 截取命中位置附近的文本，控制在固定长度内。

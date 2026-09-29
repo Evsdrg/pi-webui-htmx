@@ -49,6 +49,10 @@ func scanLazyBlocks(message json.RawMessage) []LazyBlock {
 		return nil
 	}
 	// content 可能是字符串（纯文本消息），那种情况没有可延后加载的块。
+	// 用首字节判断形状，不靠 unmarshal 失败去试错。
+	if shapeOf(msg.Content) != shapeArray {
+		return nil
+	}
 	var blocks []struct {
 		Type string `json:"type"`
 	}

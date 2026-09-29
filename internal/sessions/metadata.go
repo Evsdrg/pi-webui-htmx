@@ -54,21 +54,26 @@ func (x *Index) titleForPage(ctx context.Context, e indexEntry) (indexEntry, err
 			e.name = shortTitle(row.Name, 160)
 		}
 		if firstText == "" && row.Type == "message" && row.Message.Role == "user" {
-			var text string
-			if json.Unmarshal(row.Message.Content, &text) == nil {
-				firstText = shortTitle(text, 80)
-			} else {
+			// 形状由首字节判断：不再靠 unmarshal 失败去区分字符串/块数组。
+			switch shapeOf(row.Message.Content) {
+			case shapeString:
+				var text string
+				if json.Unmarshal(row.Message.Content, &text) == nil {
+					firstText = shortTitle(text, 80)
+				}
+			case shapeArray:
 				var parts []struct {
 					Type string `json:"type"`
 					Text string `json:"text"`
 				}
 				if json.Unmarshal(row.Message.Content, &parts) == nil {
 					for _, part := range parts {
-						if part.Type == "text" {
-							firstText = shortTitle(part.Text, 80)
-							if firstText != "" {
-								break
-							}
+						if part.Type != "text" {
+							continue
+						}
+						firstText = shortTitle(part.Text, 80)
+						if firstText != "" {
+							break
 						}
 					}
 				}
