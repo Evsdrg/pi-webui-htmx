@@ -21,6 +21,23 @@
     <label class="search-box"><span aria-hidden="true">⌕</span><input id="session-search" type="search" placeholder="搜索会话" aria-label="搜索会话" autocomplete="off"></label>
     <div class="section-label">会话 <span id="session-count"></span><button class="icon-btn" data-action="refresh-sessions" aria-label="刷新会话">↻</button></div>
     <input type="hidden" id="search-query" name="q" value=""><span hidden hx-get="/ui/search" hx-trigger="search-refresh from:body" hx-target="#session-list" hx-swap="innerHTML" hx-include="#search-query"></span><nav id="session-list" aria-label="会话列表" hx-get="/ui/sessions" hx-trigger="sessions-refresh from:body" hx-swap="innerHTML"><p class="empty-note">连接后显示本地会话</p></nav>
+    <!-- 文件浏览器常驻侧栏下半，与会话列表同属一个 landmark。
+         分隔条可拖动调整两区高度；折叠态只留一行标题栏，
+         点一下展开——不占会话列表的空间。 -->
+    <section class="sidebar-files" id="sidebar-files" aria-label="工作区文件">
+      <div class="sidebar-splitter" role="separator" aria-label="调整会话列表与文件浏览器高度" aria-orientation="horizontal" tabindex="0"></div>
+      <header class="sidebar-files-head">
+        <span class="section-label">文件</span>
+        <span class="sidebar-files-path" id="sidebar-file-path"></span>
+        <button class="icon-btn" type="button" data-action="files-up" aria-label="上一级目录" title="上一级目录">↑</button>
+        <button class="icon-btn" type="button" data-action="files-refresh" aria-label="刷新文件" title="刷新文件">↻</button>
+        <button class="icon-btn" type="button" id="files-collapse" data-action="files-collapse" aria-label="折叠文件浏览器" aria-expanded="true" aria-controls="sidebar-files-body" title="折叠">▾</button>
+      </header>
+      <div class="sidebar-files-body" id="sidebar-files-body">
+        <input type="hidden" id="files-path" name="path" value="">
+        <nav id="file-list" aria-label="文件列表" hx-get="/ui/files" hx-trigger="load, files-refresh from:body" hx-include="#files-path" hx-swap="innerHTML"><p class="empty-note">连接后显示工作区文件</p></nav>
+      </div>
+    </section>
     <footer class="sidebar-footer"><button class="btn btn-quiet" data-action="settings">⚙ 设置与扩展</button><span id="conn-state" class="state state-offline" role="status">连接中</span></footer>
   </aside>
   <div class="sidebar-resizer" role="separator" aria-label="调整侧栏宽度" aria-orientation="vertical" tabindex="0"></div>
@@ -110,8 +127,11 @@
   </main>
   <aside id="workspace-panel" class="workspace-panel" aria-label="工作区面板" hidden>
     <header class="panel-header"><strong>工作区</strong><button class="icon-btn" data-action="workspace" aria-label="关闭工作区面板">×</button></header>
-    <div class="panel-tabs" role="tablist" aria-label="工作区内容"><button role="tab" id="tab-files" aria-controls="panel-files" aria-selected="true" data-panel="files">文件</button><button role="tab" id="tab-git" aria-controls="panel-git" aria-selected="false" data-panel="git">变更</button><button role="tab" id="tab-terminal" aria-controls="panel-terminal" aria-selected="false" data-panel="terminal">终端</button></div>
-    <section id="panel-files" role="tabpanel" aria-labelledby="tab-files"><input type="hidden" id="files-path" name="path" value=""><div class="path-bar"><button class="icon-btn" data-action="files-up" aria-label="上一级目录">↑</button><span id="file-path"></span><button class="icon-btn" data-action="files-refresh" aria-label="刷新文件">↻</button></div><div id="file-list" hx-get="/ui/files" hx-trigger="files-refresh from:body" hx-include="#files-path" hx-swap="innerHTML"></div><div id="file-preview" hidden><div class="panel-header"><strong id="file-name"></strong><button class="icon-btn" data-action="file-close" aria-label="关闭文件">×</button></div><pre><code id="file-content"></code></pre></div></section>
+    <div class="panel-tabs" role="tablist" aria-label="工作区内容">{{/* 文件树已移到侧栏常驻；右面板留给「从侧栏点开的文件」与变更、终端。
+         预览 tab 在没有打开任何文件时是 hidden——它不是一个空页面，
+         而是「有东西可看时才出现」的那一个。 */}}<button role="tab" id="tab-preview" aria-controls="panel-preview" aria-selected="false" data-panel="preview" hidden>预览</button><button role="tab" id="tab-git" aria-controls="panel-git" aria-selected="true" data-panel="git">变更</button><button role="tab" id="tab-terminal" aria-controls="panel-terminal" aria-selected="false" data-panel="terminal">终端</button></div>
+    <section id="panel-preview" role="tabpanel" aria-labelledby="tab-preview" hidden><div class="panel-header"><strong id="file-name"></strong><button class="icon-btn" data-action="file-close" aria-label="关闭文件">×</button></div><pre><code id="file-content"></code></pre></section>
+    
     <section id="panel-git" role="tabpanel" aria-labelledby="tab-git" hidden><input type="hidden" id="git-path" name="path" value=""><input type="hidden" id="diff-path" name="path" value=""><button class="btn" data-action="git-refresh">刷新变更</button><div id="git-status" hx-get="/ui/git-status" hx-trigger="git-status-refresh from:body" hx-include="#git-path" hx-swap="innerHTML"></div><div id="git-diff" hx-get="/ui/diff" hx-trigger="diff-refresh from:body" hx-include="#diff-path" hx-swap="innerHTML"></div></section>
     <section id="panel-terminal" role="tabpanel" aria-labelledby="tab-terminal" hidden><div class="terminal-actions"><button class="btn" data-action="terminal-open">启动终端</button><button class="btn" data-action="terminal-close">关闭终端</button></div><p id="terminal-notice" class="empty-note">终端仅在启动后占用资源。</p><div id="terminal-mount"></div></section>
   </aside>

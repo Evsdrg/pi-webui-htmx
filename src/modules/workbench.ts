@@ -85,6 +85,13 @@ export class Workbench {
 
   constructor(private readonly bottom: () => void) {}
   start(): void {
+    // 文件浏览器已常驻侧栏下半，Workspace 不能再等右面板第一次打开才装载——
+    // 那之前侧栏里的目录点击没有任何监听。仍是动态 import：它拉进 highlight、
+    // ansi、terminal 等只在用到时才需要的依赖，首屏预算不受影响。
+    void import('./workspace').then(({ Workspace }) => {
+      this.workspace = new Workspace(this.bridge, (err) => this.fail(err));
+      if (this.cwd) this.workspace.setCwd(this.cwd);
+    }).catch((err) => this.fail(err));
     const signal = this.abort.signal;
     this.bridge.addEventListener('connected', () => { this.setConnection(true); void this.reconcile().catch((err) => this.fail(err)); }, { signal });
     this.bridge.addEventListener('disconnected', () => { this.subscribed = ''; this.setConnection(false); this.notice('连接已断开，正在重连。已提交的任务继续在本地运行；不会自动重发命令。'); }, { signal });
@@ -440,6 +447,12 @@ export class Workbench {
     if (id && this.diskSession) void this.refreshHistory(entryId);
     if (this.bridge.connected) void this.reconcile().catch((err) => this.fail(err));
     this.workspace?.setCwd(cwd);
+    // 文件树常驻侧栏，但 Workspace 是懒加载的：从没打开过右面板时它还不存在，
+    // setCwd 便无从调用，树会停在空路径上（服务端回退到第一个根）。
+    // 这里由 workbench 直接把新目录交给片段，不依赖 Workspace 是否已装载。
+    const filesPath = document.getElementById('files-path') as HTMLInputElement | null;
+    if (filesPath) filesPath.value = cwd;
+    window.htmx.trigger(document.body, 'files-refresh');
     this.syncNewSessionButton();
   }
   private async newSession(): Promise<void> {
@@ -872,7 +885,7 @@ export class Workbench {
       case 'workspace': {
         const panel = el('workspace-panel'); panel.hidden = !panel.hidden; el('workbench').dataset.rightPanel = panel.hidden ? 'closed' : 'open';
         document.querySelector<HTMLElement>('[aria-controls="workspace-panel"]')?.setAttribute('aria-expanded', String(!panel.hidden));
-        if (!panel.hidden) { if (!this.workspace) { const { Workspace } = await import('./workspace'); this.workspace = new Workspace(this.bridge, (err) => this.fail(err)); } this.workspace.setCwd(this.cwd); await this.workspace.open(); } break;
+        if (!panel.hidden) { this.workspace?.setCwd(this.cwd); await this.workspace?.open(); } break;
       }
     }
   }

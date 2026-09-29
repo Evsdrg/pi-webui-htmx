@@ -35,6 +35,26 @@ a { color:var(--accent); }
 .sidebar-column { display:grid; grid-template-columns:minmax(0,1fr) 4px; min-width:0; overflow:hidden; }
 .app-shell[data-sidebar=closed] .sidebar-column { grid-template-columns:0 0; }
 .sidebar { min-width:0; display:flex; flex-direction:column; background:var(--bg-panel); padding:18px 12px 10px; overflow:hidden; }
+/* 会话列表吃掉剩余高度，文件区按比例占一份；
+   两者都在同一个 flex 列里，分隔条只是视觉上的抓手。 */
+#session-list { flex:1 1 auto; min-height:60px; overflow-y:auto; }
+.sidebar-files { --files-ratio:0.45; flex:0 0 auto; height:calc(var(--files-ratio) * 100%); min-height:0; display:flex; flex-direction:column; overflow:hidden; }
+.sidebar-files.is-collapsed { height:auto; }
+.sidebar-files-head { display:flex; align-items:center; gap:4px; flex:0 0 auto; padding:6px 2px 4px; border-top:1px solid var(--border); }
+.sidebar-files-head .section-label { flex:0 0 auto; margin:0; }
+.sidebar-files-path { flex:1 1 auto; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--text-dim); font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:10px; }
+.sidebar-files-body { flex:1 1 auto; min-height:0; display:flex; flex-direction:column; overflow:hidden; }
+#file-list { flex:1 1 auto; min-height:0; overflow-y:auto; }
+#file-preview { flex:1 1 auto; min-height:0; overflow:auto; }
+.sidebar-splitter { flex:0 0 auto; height:6px; margin:2px 0; cursor:row-resize; background:transparent; touch-action:none; }
+.sidebar-splitter:hover,.sidebar-splitter:focus { background:var(--accent); }
+.sidebar-splitter:hover,.sidebar-splitter:focus-visible { background:var(--accent); }
+/* 文件项：比右面板版更紧凑，侧栏宽度只有 260px 上下。 */
+.file-item { display:flex; align-items:center; gap:6px; width:100%; min-width:0; padding:3px 6px; border:0; border-radius:5px; background:none; color:var(--text-muted); cursor:pointer; text-align:left; font-size:11px; transition:background .12s,color .12s; }
+.file-item:hover,.file-item:focus-visible { background:var(--bg-hover); color:var(--text); }
+.file-item > span:nth-child(2) { flex:1 1 auto; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.file-item .muted { flex:0 0 auto; font-size:10px; }
+.file-image { max-width:100%; height:auto; }
 .sidebar-brand { display:flex; align-items:center; gap:9px; padding:0 10px 20px; }
 .brand-name { font:inherit; font-size:19px; font-weight:700; letter-spacing:-.7px; margin:0; }
 .brand-mark { font:28px/1 Georgia,serif; color:var(--accent); }
@@ -237,7 +257,7 @@ input,select,textarea { background:var(--bg); border:1px solid var(--border); bo
 .file-item { display:flex; width:100%; padding:6px 8px; gap:8px; background:transparent; border:0; text-align:left; font-size:12px; border-radius:5px; }
 .file-item:hover { background:var(--bg-hover); }
 .file-item .muted { margin-left:auto; }
-#file-preview pre,#git-diff pre { font:12px/1.7 ui-monospace,monospace; overflow:auto; tab-size:2; }
+#file-preview pre,#git-diff pre { margin:0; font:11px/1.7 ui-monospace,monospace; overflow:auto; tab-size:2; }
 #file-name { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .terminal-actions { display:flex; gap:8px; margin-bottom:12px; }
 #terminal-mount { height:calc(100% - 55px); min-height:240px; background:var(--terminal-bg); border-radius:6px; padding:5px; }

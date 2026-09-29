@@ -10,7 +10,16 @@ let workspace: Workspace | undefined;
 afterEach(() => { workspace?.dispose(); vi.unstubAllGlobals(); document.body.replaceChildren(); });
 
 function mountWorkspace(): { bridge: BridgeClient; triggers: string[]; onError: ReturnType<typeof vi.fn> } {
+  // 文件树已从右面板移到侧栏常驻（对齐 Pi Web：会话列表在上、文件浏览器在下）。
+  // 夹具要照这个结构搭，否则挂不上点击监听，测的就是不存在的那条路径。
   document.body.innerHTML = `
+    <aside id="sidebar">
+      <section id="sidebar-files">
+        <div class="sidebar-splitter" role="separator" aria-orientation="horizontal"></div>
+        <header class="sidebar-files-head"><span id="sidebar-file-path"></span></header>
+        <div id="sidebar-files-body"></div>
+      </section>
+    </aside>
     <aside id="workspace-panel"><button data-panel="git">Git</button></aside>
     <input id="files-path" type="hidden"><input id="git-path" type="hidden"><input id="diff-path" type="hidden">
     <div id="file-list"></div><div id="git-status"></div><div id="git-diff"></div>
@@ -30,8 +39,7 @@ function mountWorkspace(): { bridge: BridgeClient; triggers: string[]; onError: 
 
 test('进入目录时写隐藏输入并触发片段刷新，而不是自己拼 URL 写 DOM', async () => {
   const { triggers } = mountWorkspace();
-  const panel = document.getElementById('workspace-panel')!;
-  panel.insertAdjacentHTML('beforeend', '<button data-file-path="/repo/src" data-directory="true">src</button>');
+  document.getElementById('sidebar-files-body')!.insertAdjacentHTML('beforeend', '<button data-file-path="/repo/src" data-directory="true">src</button>');
   document.querySelector<HTMLButtonElement>('[data-file-path]')!.click();
   expect(document.getElementById('files-path')!.getAttribute('value')).toBe('/repo/src');
   expect(triggers).toContain('files-refresh');
@@ -51,7 +59,7 @@ test('切换「变更」标签把路径交给两个声明式片段请求', async
 test('迟到的文件列表响应被拒绝交换（按当前目录判定）', async () => {
   mountWorkspace();
   const panel = document.getElementById('workspace-panel')!;
-  panel.insertAdjacentHTML('beforeend', '<button data-file-path="/repo/a" data-directory="true">a</button><button data-file-path="/repo/b" data-directory="true">b</button>');
+  document.getElementById('sidebar-files-body')!.insertAdjacentHTML('beforeend', '<button data-file-path="/repo/a" data-directory="true">a</button><button data-file-path="/repo/b" data-directory="true">b</button>');
   const [a, b] = Array.from(document.querySelectorAll<HTMLButtonElement>('[data-file-path]'));
   a!.click();
   b!.click();
