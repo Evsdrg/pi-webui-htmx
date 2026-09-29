@@ -132,6 +132,30 @@ export class Workbench {
       el<HTMLInputElement>('dir-current').value = path;
       window.htmx.trigger(document.body, 'dirs-refresh');
     }, { signal });
+    // 两个配置面板共用一套「左栏导航 → 右栏内容」的切换逻辑，
+    // 差别只在 data 属性前缀。写成一个函数避免两处漂移。
+    const wireConfigNav = (navAttr: string, panelAttr: string, onActivate?: (section: string) => void) => {
+      document.addEventListener('click', (event) => {
+        const item = (event.target as Element).closest<HTMLElement>(`[${navAttr}]`);
+        if (!item) return;
+        const section = item.dataset[navAttr === 'data-settings-section' ? 'settingsSection' : 'modelsSection'] ?? '';
+        if (!section) return;
+        for (const other of document.querySelectorAll<HTMLElement>(`[${navAttr}]`)) {
+          if (other === item) other.setAttribute('aria-current', 'page'); else other.removeAttribute('aria-current');
+        }
+        for (const panel of document.querySelectorAll<HTMLElement>(`[${panelAttr}]`)) panel.hidden = panel.dataset[panelAttr === 'data-settings-panel' ? 'settingsPanel' : 'modelsPanel'] !== section;
+        onActivate?.(section);
+      }, { signal });
+    };
+    // 扩展分节的内容按需拉取：只在第一次切到它时请求。
+    // 之前只在打开设置为 general 时触发过一次，点「扩展」永远停在占位文字上。
+    let packagesLoaded = false;
+    wireConfigNav('data-settings-section', 'data-settings-panel', (section) => {
+      if (section !== 'extensions' || packagesLoaded) return;
+      packagesLoaded = true;
+      window.htmx.trigger(document.body, 'packages-refresh');
+    });
+    wireConfigNav('data-models-section', 'data-models-panel');
     el('new-form').addEventListener('submit', (event) => {
       event.preventDefault(); const cwd = el<HTMLInputElement>('cwd-input').value.trim();
       if (!cwd) return;
@@ -454,7 +478,39 @@ export class Workbench {
     if (filesPath) filesPath.value = cwd;
     window.htmx.trigger(document.body, 'files-refresh');
     this.syncNewSessionButton();
+    // 连上之后补一次：页面可能在 ?session= 之外打开，也可能一个会话都没选。
+    // 没有 cwd 时列表保持空提示，那是对的——没有项目就没什么可列。
+    void this.reconcile().then(() => {
+      if (!(document.getElementById('files-path') as HTMLInputElement | null)?.value) {
+        void this.bridge.request<{ roots: string[] }>('files.roots', undefined, '').then((data) => {
+          const first = data.roots[0] ?? '';
+          if (first && !(document.getElementById('files-path') as HTMLInputElement | null)?.value) {
+            const input = document.getElementById('files-path') as HTMLInputElement | null;
+            if (input) input.value = first;
+            window.htmx.trigger(document.body, 'files-refresh');
+          }
+        }).catch(() => { /* 读不到根时留空提示，不打扰用户 */ });
+      }
+    }).catch(() => { /* reconcile 自己会报错 */ });
   }
+  /** 打开「设置与扩展」并切换到指定分节。模型配置不在这里：它由顶栏与
+      * 输入框下方的模型选择器负责，设置面板只管本机外观与已装扩展。 */
+  private openSettings(section: string): void {
+    const dialog = document.getElementById('settings-dialog') as HTMLDialogElement | null;
+    if (!dialog) return;
+    for (const item of document.querySelectorAll<HTMLElement>('[data-settings-section]')) {
+      const active = item.dataset.settingsSection === section;
+      if (active) item.setAttribute('aria-current', 'page'); else item.removeAttribute('aria-current');
+    }
+    for (const panel of document.querySelectorAll<HTMLElement>('[data-settings-panel]')) {
+      panel.hidden = panel.dataset.settingsPanel !== section;
+    }
+    const sub = document.getElementById('settings-sub');
+    if (sub) sub.textContent = section === 'extensions' ? '已安装的包' : '外观与对话';
+    openDialog('settings-dialog');
+    if (section === 'extensions') window.htmx.trigger(document.body, 'packages-refresh');
+  }
+
   private async newSession(): Promise<void> {
     const response = await this.request<{ roots: string[] }>('files.roots', undefined, '');
     const start = this.cwd || response.roots[0] || '';
@@ -830,7 +886,7 @@ export class Workbench {
       case 'latest': this.bottom(); break;
       case 'refresh-sessions': this.refreshSessions(); break;
       case 'models-refresh': window.htmx.trigger(document.body, 'models-refresh'); break;
-      case 'settings': openDialog('settings-dialog'); window.htmx.trigger(document.body, 'packages-refresh'); break;
+      case 'settings': this.openSettings('general'); break;
       case 'branch': {
         if (!this.branch) {
           const { BranchNavigator } = await import('./branch');

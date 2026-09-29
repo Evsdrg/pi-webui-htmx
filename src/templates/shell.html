@@ -35,7 +35,7 @@
       </header>
       <div class="sidebar-files-body" id="sidebar-files-body">
         <input type="hidden" id="files-path" name="path" value="">
-        <nav id="file-list" aria-label="文件列表" hx-get="/ui/files" hx-trigger="load, files-refresh from:body" hx-include="#files-path" hx-swap="innerHTML"><p class="empty-note">连接后显示工作区文件</p></nav>
+        <nav id="file-list" aria-label="文件列表" hx-get="/ui/files" hx-trigger="files-refresh from:body" hx-include="#files-path" hx-swap="innerHTML"><p class="empty-note">连接后显示工作区文件</p></nav>
       </div>
     </section>
     <footer class="sidebar-footer"><button class="btn btn-quiet" data-action="settings">⚙ 设置与扩展</button><span id="conn-state" class="state state-offline" role="status">连接中</span></footer>
@@ -114,6 +114,9 @@
         <div class="composer-actions">
           <button class="icon-btn" type="button" data-action="attach" aria-label="添加图片附件" title="添加图片附件">＋</button><input id="attach-input" type="file" accept="image/png,image/jpeg,image/gif,image/webp" multiple hidden>
           <label class="select-label model-control"><span class="sr-only">模型</span><select id="model-select" name="model" aria-label="模型" hx-get="/ui/models" hx-trigger="models-refresh from:body"><option value="">Pi 默认模型</option></select></label>
+          {{/* 模型配置的入口。它刻意不在「设置与扩展」里：那里面是本机外观与已装扩展，
+               模型是随会话切换的东西，放在选它的地方旁边才不会找错地方。 */}}
+          <button class="icon-btn" type="button" data-action="models-edit" aria-label="编辑模型配置" title="编辑模型配置（models.json）"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M16 18l6-6-6-6M8 6l-6 6 6 6"/></svg></button>
           <div class="spacer"></div>
           <label class="select-label"><span class="sr-only">思考强度</span><select id="thinking-select" aria-label="思考强度" disabled><option value="">自动</option></select></label>
           <button class="icon-btn" type="button" data-action="commands" aria-label="查看斜杠命令" title="查看斜杠命令">/</button>
@@ -150,24 +153,90 @@
      列表自己再用 hx-include 读它。这样「刷新」不需要 JS 知道路径，
      而初始打开时它还是空的，由服务端回退到第一个工作区根。 -->
 <input type="hidden" id="dir-current" name="path" value="">
-<div class="dir-list" id="dir-list" hx-get="/ui/dirs" hx-include="#dir-current" hx-trigger="load, dirs-refresh from:body" hx-swap="innerHTML"><p class="empty-note">正在读取目录…</p></div>
+<div class="dir-list" id="dir-list" hx-get="/ui/dirs" hx-include="#dir-current" hx-trigger="dirs-refresh from:body" hx-swap="innerHTML"><p class="empty-note">正在读取目录…</p></div>
       <footer class="dir-dialog-foot">
         <p class="muted">浏览页面不会启动 Pi；发送第一条消息时才创建工作进程。只能在工作区根内浏览。</p>
         <div class="dialog-actions"><button class="btn" type="button" data-close-dialog>取消</button><button class="btn btn-primary" type="submit" id="dir-use">使用此目录</button></div>
       </footer>
     </form></dialog>
-<dialog id="settings-dialog" class="app-dialog settings-dialog"><header class="panel-header"><h2>设置与扩展</h2><button class="icon-btn" data-close-dialog aria-label="关闭设置">×</button></header><label for="theme-select">外观</label><select id="theme-select"><option value="system">跟随系统</option><option value="light">浅色</option><option value="dark">深色</option><option value="mist">雾蓝</option><option value="rose">蔷薇</option><option value="pine">松绿</option></select><h3>模型配置</h3><p class="muted">模型和凭据保留在桥所在的机器。切换当前模型使用输入框下方的选择器。</p><div class="session-action-grid"><button class="btn" data-action="models-refresh">重新读取模型</button><button class="btn" data-action="models-edit">编辑配置…</button></div><h3>插件与技能包</h3><div id="packages-slot" hx-get="/ui/packages" hx-trigger="packages-refresh from:body">打开时读取已安装清单。</div></dialog>
+<dialog id="settings-dialog" class="app-dialog config-panel">
+      <header class="config-panel-head"><h2>设置与扩展</h2><code class="config-panel-sub" id="settings-sub"></code><button class="config-close" type="button" data-close-dialog aria-label="关闭设置">×</button></header>
+      <div class="config-split">
+        <aside class="config-side">
+          <div class="config-side-list" id="settings-nav">
+            <div class="config-side-group">
+              <div class="config-side-group-label">本机</div>
+              <button class="config-side-item" type="button" data-settings-section="general" aria-current="page"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 7h-9M14 17H5"/><circle cx="7" cy="7" r="3"/><circle cx="17" cy="17" r="3"/></svg><span class="config-side-text">常规</span></button>
+              <button class="config-side-item" type="button" data-settings-section="extensions"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.8-3.8a6 6 0 0 1-7.9 7.9l-6.9 6.9a2.1 2.1 0 0 1-3-3l6.9-6.9a6 6 0 0 1 7.9-7.9z"/></svg><span class="config-side-text">扩展</span></button>
+            </div>
+            {{/* Pi Web 的设置面板还有「技能」与「智能体」两段，两者都要求先选定项目目录。
+                 我们桥侧没有对应的只读面，因此不放出这两个入口——放出来点开是空的，
+                 比不放更糟。模型配置也不在这一面板里：它由顶栏与输入框下方的选择器负责。 */}}
+          </div>
+        </aside>
+        <div class="config-detail" id="settings-detail">
+          {{/* 常规 */}}
+          <section class="config-detail-stack" data-settings-panel="general">
+            <div class="config-detail-header"><h3 class="config-detail-title">外观</h3></div>
+            <div class="config-field"><label for="theme-select">主题</label>
+              <select id="theme-select"><option value="system">跟随系统</option><option value="light">浅色</option><option value="dark">深色</option><option value="mist">雾蓝</option><option value="rose">蔷薇</option><option value="pine">松绿</option></select>
+              <span class="hint">深色为深蓝基调；「跟随系统」在系统切换明暗时同步。</span>
+            </div>
+            <div class="config-detail-header"><h3 class="config-detail-title">对话</h3></div>
+            <div class="config-field"><label for="chat-font-size">正文字号 <span id="chat-font-size-value"></span></label>
+              <input id="chat-font-size" type="range" min="-1" max="4" step="1" value="0">
+              <span class="hint">在基准字号上增减，代码块与工具块一起跟随。</span>
+            </div>
+            <div class="config-field"><label for="chat-width">内容宽度 <span id="chat-width-value"></span></label>
+              <input id="chat-width" type="range" min="640" max="1400" step="20" value="820">
+              <span class="hint">限制对话正文的行宽，宽屏下更容易阅读。</span>
+            </div>
+          </section>
+          {{/* 扩展 */}}
+          <section class="config-detail-stack" data-settings-panel="extensions" hidden>
+            <div class="config-detail-header"><h3 class="config-detail-title">已安装的包</h3>
+              <div class="config-actions"><button class="config-btn" type="button" data-action="packages-refresh">重新读取</button></div>
+            </div>
+            <p class="config-note">清单来自桥所在机器的 Pi 配置。包由 Pi 自己加载，这里只做展示；安装与卸载请直接改 <code>settings.json</code> 的 <code>packages</code>。</p>
+            <div id="packages-slot" hx-get="/ui/packages" hx-trigger="packages-refresh from:body"><p class="config-empty">正在读取已安装清单…</p></div>
+          </section>
+        </div>
+      </div>
+    </dialog>
 <dialog id="session-dialog" class="app-dialog"><header class="panel-header"><h2>会话操作</h2><button class="icon-btn" data-close-dialog aria-label="关闭会话操作">×</button></header><label for="session-name">会话名称</label><input id="session-name" type="text" maxlength="200"><div class="session-action-grid"><button class="btn" data-action="rename">保存名称</button><button class="btn" data-action="compact">压缩上下文</button><button class="btn" data-action="clone">克隆会话</button><button class="btn" data-action="export">导出 HTML</button><button class="btn" data-action="branch">分支导航…</button><button class="btn" data-action="stop">释放工作进程</button><button class="btn danger" data-action="delete">删除会话…</button></div><h3>排队与压缩</h3><div class="switch-grid"><label class="switch"><input type="checkbox" id="auto-compaction"><span>自动压缩上下文</span></label><label class="switch"><input type="checkbox" id="auto-retry"><span>自动重试</span></label></div><p class="muted">自动压缩状态由 Pi 读回；自动重试没有对应的读回字段，这里是按会话记住的本机偏好，不代表 Pi 的实时状态。</p><div class="session-action-grid"><button class="btn" data-action="abort-retry">中止重试</button></div><fieldset class="queue-modes"><legend>运行中发送方式</legend><label class="switch"><input type="radio" name="queue-kind" value="steering" checked><span>插入指令（本轮结束后立即执行）</span></label><label class="switch"><input type="radio" name="queue-kind" value="followUp"><span>完成后追加（排到队列末尾）</span></label></fieldset></dialog>
-<dialog id="models-dialog" class="app-dialog models-dialog"><header class="panel-header"><h2>模型配置</h2><button class="icon-btn" data-close-dialog aria-label="关闭模型配置">×</button></header>
-<p class="muted">直接编辑 <code>models.json</code>。密钥字段显示为 <code>***</code>；保存时桥会用磁盘上的真实值还原，不会因为「只改个名字」就把全部密钥写成占位符。</p>
-<div class="config-actions"><button class="btn" data-action="models-reload">重新读取</button><button class="btn btn-primary" data-action="models-save">保存</button></div>
-<p id="models-status" class="form-error" role="alert"></p>
-<label for="models-editor">配置 JSON</label><textarea id="models-editor" class="config-editor" spellcheck="false" aria-describedby="models-status"></textarea>
-<h3>发现与连通</h3>
-<div class="discover-grid"><label for="discover-url">baseURL<input id="discover-url" type="url" placeholder="https://api.example.com/v1"></label><label for="discover-api">api 协议<input id="discover-api" placeholder="openai-completions"></label><label for="discover-key">apiKey<input id="discover-key" type="password" autocomplete="off"></label><label for="discover-headers">自定义头部（每行 name: value）<textarea id="discover-headers" rows="2" spellcheck="false"></textarea></label></div>
-<div class="config-actions"><button class="btn" data-action="models-discover">发现模型</button><button class="btn" data-action="models-test">测试连通</button></div>
-<div id="discover-result" class="discover-result" aria-live="polite"></div>
-</dialog>
+<dialog id="models-dialog" class="app-dialog config-panel">
+      <header class="config-panel-head"><h2>模型配置</h2><code class="config-panel-sub" id="models-sub">models.json</code><button class="config-close" type="button" data-close-dialog aria-label="关闭模型配置">×</button></header>
+      <div class="config-split">
+        <aside class="config-side">
+          <div class="config-side-list">
+            <div class="config-side-group">
+              <div class="config-side-group-label">配置</div>
+              <button class="config-side-item" type="button" data-models-section="editor" aria-current="page"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M16 18l6-6-6-6M8 6l-6 6 6 6"/></svg><span class="config-side-text">编辑</span></button>
+              <button class="config-side-item" type="button" data-models-section="discover"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg><span class="config-side-text">发现与连通</span></button>
+            </div>
+          </div>
+        </aside>
+        <div class="config-detail">
+          <section class="config-detail-stack" data-models-panel="editor">
+            <p class="config-note">直接编辑 <code>models.json</code>。密钥字段显示为 <code>***</code>；保存时桥会用磁盘上的真实值还原，不会因为「只改个名字」就把全部密钥写成占位符。</p>
+            <p id="models-status" class="form-error" role="alert"></p>
+            <div class="config-field"><label for="models-editor">配置 JSON</label><textarea id="models-editor" class="config-editor" rows="18" spellcheck="false" aria-describedby="models-status"></textarea></div>
+          </section>
+          <section class="config-detail-stack" data-models-panel="discover" hidden>
+            <div class="config-detail-header"><h3 class="config-detail-title">从上游发现模型</h3></div>
+            <div class="config-field"><label for="discover-url">baseURL</label><input id="discover-url" type="url" placeholder="https://api.example.com/v1"></div>
+            <div class="config-field"><label for="discover-api">api 协议</label><input id="discover-api" placeholder="openai-completions"></div>
+            <div class="config-field"><label for="discover-key">apiKey</label><input id="discover-key" type="password" autocomplete="off"></div>
+            <div class="config-field"><label for="discover-headers">自定义头部（每行 name: value）</label><textarea id="discover-headers" rows="2" spellcheck="false"></textarea></div>
+            <div class="config-actions"><button class="config-btn" type="button" data-action="models-discover">发现模型</button><button class="config-btn" type="button" data-action="models-test">测试连通</button></div>
+            <div id="discover-result" class="discover-result" aria-live="polite"></div>
+          </section>
+        </div>
+      </div>
+      <footer class="config-footer"><span class="status" id="models-foot">模型与凭据只保存在桥所在的机器。</span>
+        <div class="config-actions"><button class="config-btn" type="button" data-action="models-reload">重新读取</button><button class="config-btn is-primary" type="button" data-action="models-save">保存</button></div>
+      </footer>
+    </dialog>
 <dialog id="branch-dialog" class="app-dialog branch-dialog"><header class="panel-header"><h2>分支导航</h2><button class="icon-btn" data-close-dialog aria-label="关闭分支导航">×</button></header>
 <p class="muted">选择任一叶子查看该分支的历史；「从此处分支」会基于所选条目创建新会话。</p>
 <div class="config-actions"><button class="btn" data-action="branch-refresh">刷新</button><button class="btn" data-action="branch-current">回到当前分支</button></div>
