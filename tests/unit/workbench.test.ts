@@ -35,7 +35,12 @@ function mount() {
  <header class=topbar><nav class=topbar-tools aria-label=功能区><button data-action=full-history>完整历史</button><button data-action=panel-title aria-controls=panel-title aria-expanded=false>生成标题</button><button data-action=panel-system aria-controls=panel-system aria-expanded=false>系统</button><button data-action=panel-tools aria-controls=panel-tools aria-expanded=false>工具</button></nav><button id=context-usage data-action=panel-info aria-controls=panel-info aria-expanded=false hidden></button><span id=session-state class=state>就绪</span></header>
  <section id=panel-info hidden><button data-action=panel-info-close></button><dl id=session-facts></dl></section>
  <section id=panel-title hidden><button data-action=panel-title-close></button><form id=title-form><input id=local-title></form></section><section id=panel-system hidden><button data-action=panel-system-close></button><div id=system-body></div></section><section id=panel-tools hidden><button data-action=panel-tools-close></button><div id=tools-body></div></section>
- <dialog id=models-dialog><p id=models-status></p><textarea id=models-editor></textarea><input id=discover-url><input id=discover-api><input id=discover-key><textarea id=discover-headers></textarea><div id=discover-result></div><button data-action=models-edit>编辑</button><button data-action=models-reload>重读</button><button data-action=models-save>保存</button><button data-action=models-discover>发现</button><button data-action=models-test>测试</button></dialog>`;
+ <dialog id=models-dialog><p id=models-status></p><textarea id=models-editor></textarea>
+<input id=mp-name><input id=mp-base><input id=mp-key type=password><select id=mp-api><option value=""></option><option value="openai-completions">openai-completions</option><option value="openai-responses">openai-responses</option></select><textarea id=mp-headers></textarea>
+<input id=mm-id><input id=mm-name><input type=checkbox id=mm-reasoning><input type=checkbox id=mm-image><input id=mm-ctx><input id=mm-max><div id=mm-thinking></div>
+<div id=discover-result></div><aside class=config-side><div class=config-side-list id=models-tree><div id=models-tree-body></div></div></aside>
+<section data-models-panel=provider hidden></section><section data-models-panel=model hidden></section><section data-models-panel=json hidden></section><section data-models-panel=empty hidden></section>
+<button data-action=models-edit>编辑</button><button data-action=models-reload>重读</button><button data-action=models-save>保存</button><button data-action=models-discover>发现</button><button data-action=models-test>测试</button></dialog>`;
  for(const id of ['live','conn-state','connection-notice','session-state','session-title','session-cwd','session-list','session-count','turns','older-slot','chat-scroll','welcome','command-menu','ext-status-slot','ext-widgets-before','ext-widgets-after','ext-dialog-slot','usage','toast-root']) {const node=document.createElement('div');node.id=id;document.body.append(node);}
 {for(const id of ['search-query','system-session','tools-session','stats-session','branch-session','files-path','git-path','diff-path']){const node=document.createElement('input');node.type='hidden';node.id=id;document.body.append(node);}}
  document.body.dataset.sessionId='s1';
@@ -62,7 +67,7 @@ beforeEach(async () => {
   if(method==='worker.list')return[{sessionId:'s1',cwd:'/fixture',busy}];
   if(method==='session.state')return{sessionId:'s1',sessionName:'隔离会话',isStreaming:busy,isCompacting:false,steeringMode:'all',followUpMode:'all',autoCompactionEnabled:true};
   if(method==='session.thinking_levels')return['off','high'];
-  if(method==='config.models.raw')return{providers:{cpa:{api:'https://example.com/v1',apiKey:'***',models:{m1:{name:'旧名字'}}}}};
+  if(method==='config.models.raw')return{providers:{cpa:{api:'openai-completions',baseUrl:'https://example.com/v1',apiKey:'***',models:[{id:'m1',name:'旧名字',reasoning:true},{id:'m2',name:'第二个'}]}}};
   if(method==='config.models.write')return{written:true};
   if(method==='config.models.discover')return{models:[{id:'gpt-x',name:'GPT X'}]};
   if(method==='config.models.test')return{ok:true,message:'连通正常'};
@@ -172,6 +177,12 @@ describe('排队与压缩设置', () => {
 });
 
 describe('模型配置编辑器', () => {
+  // JSON 源码是逃生门：不要求先选中供应商或模型，直接保存编辑器内容。
+  // 下面几条走的就是这条路径，所以要先切到 JSON 面板。
+  const openJsonPanel = () => {
+    (workbench as unknown as { models?: { select(panel: string): void } }).models?.select('json');
+  };
+
   it('打开时读取原始配置并格式化进编辑器', async () => {
     await (workbench as unknown as { action(a: string, b: HTMLElement): Promise<void> }).action('models-edit', document.createElement('button'));
     await vi.waitFor(() => expect(document.getElementById('models-editor').value).toContain('example.com'));
@@ -182,6 +193,7 @@ describe('模型配置编辑器', () => {
   it('保存非法 JSON 时拒绝并不发请求', async () => {
     await (workbench as unknown as { action(a: string, b: HTMLElement): Promise<void> }).action('models-edit', document.createElement('button'));
     await vi.waitFor(() => expect(document.getElementById('models-editor').value).toContain('example.com'));
+    openJsonPanel();
     const before = vi.mocked(fake.request).mock.calls.length;
     (document.getElementById('models-editor') as HTMLTextAreaElement).value = '{ 这不是 JSON';
     await (workbench as unknown as { action(a: string, b: HTMLElement): Promise<void> }).action('models-save', document.createElement('button'));
@@ -192,6 +204,7 @@ describe('模型配置编辑器', () => {
   it('保存成功后重新读取，避免用户接着编辑旧快照', async () => {
     await (workbench as unknown as { action(a: string, b: HTMLElement): Promise<void> }).action('models-edit', document.createElement('button'));
     await vi.waitFor(() => expect(document.getElementById('models-editor').value).toContain('example.com'));
+    openJsonPanel();
     const readsBefore = vi.mocked(fake.request).mock.calls.filter((c) => c[0] === 'config.models.raw').length;
     (document.getElementById('models-editor') as HTMLTextAreaElement).value = '{"providers":{}}';
     await (workbench as unknown as { action(a: string, b: HTMLElement): Promise<void> }).action('models-save', document.createElement('button'));
@@ -201,8 +214,8 @@ describe('模型配置编辑器', () => {
 
   it('自定义头部按行解析，非法格式被拒绝', async () => {
     await (workbench as unknown as { action(a: string, b: HTMLElement): Promise<void> }).action('models-edit', document.createElement('button'));
-    (document.getElementById('discover-url') as HTMLInputElement).value = 'https://api.example.com/v1';
-    (document.getElementById('discover-headers') as HTMLTextAreaElement).value = 'X-A: 1\n坏行\nX-B: 2';
+    (document.getElementById('mp-base') as HTMLInputElement).value = 'https://api.example.com/v1';
+    (document.getElementById('mp-headers') as HTMLTextAreaElement).value = 'X-A: 1\n坏行\nX-B: 2';
     await (workbench as unknown as { action(a: string, b: HTMLElement): Promise<void> }).action('models-discover', document.createElement('button'));
     await vi.waitFor(() => expect(document.getElementById('discover-result').textContent).toContain('名称: 值'));
     expect(vi.mocked(fake.request).mock.calls.some((c) => c[0] === 'config.models.discover')).toBe(false);
@@ -210,7 +223,7 @@ describe('模型配置编辑器', () => {
 
   it('发现结果按纯文本渲染，不插入 HTML', async () => {
     await (workbench as unknown as { action(a: string, b: HTMLElement): Promise<void> }).action('models-edit', document.createElement('button'));
-    (document.getElementById('discover-url') as HTMLInputElement).value = 'https://api.example.com/v1';
+    (document.getElementById('mp-base') as HTMLInputElement).value = 'https://api.example.com/v1';
     await (workbench as unknown as { action(a: string, b: HTMLElement): Promise<void> }).action('models-discover', document.createElement('button'));
     await vi.waitFor(() => expect(document.getElementById('discover-result').textContent).toContain('GPT X'));
     expect(document.getElementById('discover-result').querySelector('script')).toBeNull();
@@ -1083,5 +1096,83 @@ describe('顶栏功能面板', () => {
     // 提示词内容由桥渲染；前端只负责带上会话 ID 与触发刷新。
     expect((document.getElementById('system-session') as HTMLInputElement).value).toBe('s1');
     expect(vi.mocked(window.htmx.trigger).mock.calls.some((call) => call[1] === 'system-refresh')).toBe(true);
+  });
+});
+
+describe('模型配置的两级树与字段表单', () => {
+  const open = async () => {
+    await (workbench as unknown as { action(a: string, b: HTMLElement): Promise<void> }).action('models-edit', document.createElement('button'));
+    await vi.waitFor(() => expect(document.querySelectorAll('#models-tree-body [data-models-provider]').length).toBeGreaterThan(0));
+  };
+  const clickTree = (selector: string) => {
+    document.querySelector<HTMLElement>(selector)!.click();
+  };
+
+  it('树按 provider → model 两级渲染，模型行带推理标记', async () => {
+    await open();
+    const rows = [...document.querySelectorAll<HTMLElement>('#models-tree-body [data-models-provider]')];
+    // provider 行不带 data-models-model，模型行带下标。
+    const providers = rows.filter((r) => r.dataset.modelsModel === undefined);
+    const models = rows.filter((r) => r.dataset.modelsModel !== undefined);
+    expect(providers.map((r) => r.textContent)).toContain('cpa');
+    expect(models.map((r) => r.textContent)).toEqual(['m1T', 'm2']);
+    // 模型行必须缩进，否则两级看起来是平级的。
+    expect(models[0].className).toContain('models-indent');
+    expect(document.querySelector('[data-models-add-model]')?.textContent).toContain('+ 模型');
+    expect(document.querySelector('[data-models-add-provider]')?.textContent).toContain('+ 供应商');
+  });
+
+  it('点 provider 行把字段填进表单', async () => {
+    await open();
+    clickTree('#models-tree-body [data-models-provider]:not([data-models-model])');
+    expect((document.getElementById('mp-name') as HTMLInputElement).value).toBe('cpa');
+    expect((document.getElementById('mp-base') as HTMLInputElement).value).toBe('https://example.com/v1');
+    // 密钥读回来必须是打码值，页面拿不到真值。
+    expect((document.getElementById('mp-key') as HTMLInputElement).value).toBe('***');
+    expect((document.getElementById('mp-api') as HTMLSelectElement).value).toBe('openai-completions');
+    expect(document.querySelector('[data-models-panel=provider]')?.hidden).toBe(false);
+  });
+
+  it('点模型行填模型表单，能力复选框反映记录', async () => {
+    await open();
+    clickTree('#models-tree-body [data-models-model="0"]');
+    expect((document.getElementById('mm-id') as HTMLInputElement).value).toBe('m1');
+    expect((document.getElementById('mm-name') as HTMLInputElement).value).toBe('旧名字');
+    expect((document.getElementById('mm-reasoning') as HTMLInputElement).checked).toBe(true);
+    expect((document.getElementById('mm-image') as HTMLInputElement).checked).toBe(false);
+    // 思考等级映射必须把七个等级都渲染出来，否则用户看不到有哪些可选。
+    expect(document.querySelectorAll('#mm-thinking [data-thinking-level]').length).toBe(7);
+  });
+
+  it('改表单后保存，写回的是整份文档而不是只有改过的字段', async () => {
+    await open();
+    clickTree('#models-tree-body [data-models-model="0"]');
+    (document.getElementById('mm-name') as HTMLInputElement).value = '新名字';
+    const writes: unknown[] = [];
+    vi.mocked(fake.request).mockImplementation(async (method: string, _id: string, params?: unknown) => {
+      if (method === 'config.models.raw') return { providers: { cpa: { api: 'openai-completions', baseUrl: 'https://example.com/v1', apiKey: '***', models: [{ id: 'm1', name: '新名字', reasoning: true }, { id: 'm2', name: '第二个' }] } } };
+      if (method === 'config.models.write') { writes.push(params); return { written: true }; }
+      return {};
+    });
+    await (workbench as unknown as { action(a: string, b: HTMLElement): Promise<void> }).action('models-save', document.createElement('button'));
+    await vi.waitFor(() => expect(writes.length).toBe(1));
+    const config = (writes[0] as { config: { providers: { cpa: { models: Array<{ id: string; name: string }> } } } }).config;
+    expect(config.providers.cpa.models[0].name).toBe('新名字');
+    // 没动过的第二个模型必须原样保留：只提交改过的字段会把其余模型删掉。
+    expect(config.providers.cpa.models[1].name).toBe('第二个');
+  });
+
+  it('密钥显示开关切换 input 类型', async () => {
+    await open();
+    clickTree('#models-tree-body [data-models-provider]:not([data-models-model])');
+    const input = document.getElementById('mp-key') as HTMLInputElement;
+    const button = document.createElement('button');
+    expect(input.type).toBe('password');
+    await (workbench as unknown as { action(a: string, b: HTMLElement): Promise<void> }).action('models-toggle-secret', button);
+    expect(input.type).toBe('text');
+    expect(button.textContent).toBe('隐藏');
+    await (workbench as unknown as { action(a: string, b: HTMLElement): Promise<void> }).action('models-toggle-secret', button);
+    expect(input.type).toBe('password');
+    expect(button.textContent).toBe('显示');
   });
 });

@@ -208,28 +208,75 @@
       <header class="config-panel-head"><h2>模型配置</h2><code class="config-panel-sub" id="models-sub">models.json</code><button class="config-close" type="button" data-close-dialog aria-label="关闭模型配置">×</button></header>
       <div class="config-split">
         <aside class="config-side">
-          <div class="config-side-list">
+          <div class="config-side-list" id="models-tree">
+            {{/* 左侧是 provider → model 两级树，与 Pi Web 的 ModelsConfig 同构：
+                 每个 provider 一行，其下缩进列出模型，再下面是「+ 模型」。
+                 「JSON 源码」保留为逃生门——表单覆盖不到的自定义字段仍可手改。 */}}
             <div class="config-side-group">
-              <div class="config-side-group-label">配置</div>
-              <button class="config-side-item" type="button" data-models-section="editor" aria-current="page"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M16 18l6-6-6-6M8 6l-6 6 6 6"/></svg><span class="config-side-text">编辑</span></button>
-              <button class="config-side-item" type="button" data-models-section="discover"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg><span class="config-side-text">发现与连通</span></button>
+              <div class="config-side-group-label">模型</div>
+              <div id="models-tree-body"><p class="config-empty">正在读取配置…</p></div>
+            </div>
+            <div class="config-side-group">
+              <button class="config-side-item" type="button" data-models-section="json"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M16 18l6-6-6-6M8 6l-6 6 6 6"/></svg><span class="config-side-text">JSON 源码</span></button>
             </div>
           </div>
         </aside>
-        <div class="config-detail">
-          <section class="config-detail-stack" data-models-panel="editor">
+        <div class="config-detail" id="models-detail">
+          {{/* ── provider 编辑 ── */}}
+          <section class="config-detail-stack" data-models-panel="provider" hidden>
+            <div class="config-detail-header"><h3 class="config-detail-title">供应商</h3>
+              <div class="config-actions"><button class="config-btn is-danger" type="button" data-action="models-delete-provider">删除</button></div>
+            </div>
+            <div class="config-field"><label for="mp-name">名称</label><input id="mp-name" type="text" class="mono" placeholder="provider-name" spellcheck="false" autocomplete="off"></div>
+            <div class="config-field"><label for="mp-base">Base URL</label><input id="mp-base" type="text" class="mono" placeholder="https://api.example.com/v1" spellcheck="false" autocomplete="off"></div>
+            <div class="config-field"><label for="mp-key">API Key</label>
+              <div class="config-secret"><input id="mp-key" type="password" class="mono" placeholder="ENV_VAR_NAME, !shell-command, or literal key" spellcheck="false" autocomplete="off"><button class="config-btn" type="button" data-action="models-toggle-secret" aria-label="显示或隐藏密钥">显示</button></div>
+              <span class="hint">以 <code>!</code> 开头表示执行 shell 命令取密钥，也可以直接写环境变量名。</span>
+            </div>
+            <div class="config-field"><label for="mp-api">API 协议</label>
+              <select id="mp-api"><option value="">— 默认 / 无 —</option><option value="openai-completions">openai-completions</option><option value="openai-responses">openai-responses</option><option value="anthropic-messages">anthropic-messages</option></select>
+            </div>
+            <div class="config-field"><label for="mp-headers">自定义头部（每行 name: value）</label><textarea id="mp-headers" rows="3" spellcheck="false"></textarea>
+              <span class="hint">会加到该供应商的每个请求上，例如网关要求的 User-Agent。</span>
+            </div>
+            <div class="config-section-sep">
+              <div class="config-detail-header"><h3 class="config-detail-title">从上游发现模型</h3></div>
+              <div class="config-actions"><button class="config-btn" type="button" data-action="models-discover">发现模型</button><button class="config-btn" type="button" data-action="models-test">测试连通</button></div>
+              <div id="discover-result" class="discover-result" aria-live="polite"></div>
+            </div>
+          </section>
+          {{/* ── model 编辑 ── */}}
+          <section class="config-detail-stack" data-models-panel="model" hidden>
+            <div class="config-detail-header"><h3 class="config-detail-title">模型</h3>
+              <div class="config-actions"><button class="config-btn is-danger" type="button" data-action="models-delete-model">移除</button></div>
+            </div>
+            <div class="config-two-col">
+              <div class="config-field"><label for="mm-id">ID *</label><input id="mm-id" type="text" class="mono" placeholder="model-id" spellcheck="false" autocomplete="off"></div>
+              <div class="config-field"><label for="mm-name">显示名称</label><input id="mm-name" type="text" placeholder="Display name" autocomplete="off"></div>
+            </div>
+            <div class="config-field"><span class="config-label">能力</span>
+              <div class="config-checks">
+                <label class="config-check"><input type="checkbox" id="mm-reasoning"><span>推理模型</span></label>
+                <label class="config-check"><input type="checkbox" id="mm-image"><span>接受图片输入</span></label>
+              </div>
+            </div>
+            <div class="config-two-col">
+              <div class="config-field"><label for="mm-ctx">上下文窗口</label><input id="mm-ctx" type="number" min="0" step="1000" class="mono" placeholder="800000"></div>
+              <div class="config-field"><label for="mm-max">最大输出</label><input id="mm-max" type="number" min="0" step="1000" class="mono" placeholder="384000"></div>
+            </div>
+            <div class="config-field"><span class="config-label">思考等级映射</span>
+              <span class="hint">把 UI 上的思考强度映射到上游参数；留空表示该等级不映射。</span>
+              <div id="mm-thinking" class="config-kv"></div>
+            </div>
+          </section>
+          {{/* ── JSON 源码 ── */}}
+          <section class="config-detail-stack" data-models-panel="json" hidden>
             <p class="config-note">直接编辑 <code>models.json</code>。密钥字段显示为 <code>***</code>；保存时桥会用磁盘上的真实值还原，不会因为「只改个名字」就把全部密钥写成占位符。</p>
             <p id="models-status" class="form-error" role="alert"></p>
             <div class="config-field"><label for="models-editor">配置 JSON</label><textarea id="models-editor" class="config-editor" rows="18" spellcheck="false" aria-describedby="models-status"></textarea></div>
           </section>
-          <section class="config-detail-stack" data-models-panel="discover" hidden>
-            <div class="config-detail-header"><h3 class="config-detail-title">从上游发现模型</h3></div>
-            <div class="config-field"><label for="discover-url">baseURL</label><input id="discover-url" type="url" placeholder="https://api.example.com/v1"></div>
-            <div class="config-field"><label for="discover-api">api 协议</label><input id="discover-api" placeholder="openai-completions"></div>
-            <div class="config-field"><label for="discover-key">apiKey</label><input id="discover-key" type="password" autocomplete="off"></div>
-            <div class="config-field"><label for="discover-headers">自定义头部（每行 name: value）</label><textarea id="discover-headers" rows="2" spellcheck="false"></textarea></div>
-            <div class="config-actions"><button class="config-btn" type="button" data-action="models-discover">发现模型</button><button class="config-btn" type="button" data-action="models-test">测试连通</button></div>
-            <div id="discover-result" class="discover-result" aria-live="polite"></div>
+          <section class="config-detail-stack" data-models-panel="empty">
+            <p class="config-empty">从左侧选择一个供应商或模型。</p>
           </section>
         </div>
       </div>

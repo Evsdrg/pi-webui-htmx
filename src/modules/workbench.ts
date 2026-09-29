@@ -155,7 +155,18 @@ export class Workbench {
       packagesLoaded = true;
       window.htmx.trigger(document.body, 'packages-refresh');
     });
-    wireConfigNav('data-models-section', 'data-models-panel');
+    // 模型配置的树点击先问编辑器：命中树节点就由它切面板，
+    // 没命中才按通用导航处理（「JSON 源码」那一项）。
+    document.addEventListener('click', (event) => {
+      const models = document.getElementById('models-dialog') as HTMLDialogElement | null;
+      if (!models?.open) return;
+      const target = (event.target as Element).closest<HTMLElement>('#models-tree [data-models-provider],#models-tree [data-models-add-model],#models-tree [data-models-add-provider]');
+      if (target && this.models?.handleClick(target)) event.preventDefault();
+    }, { signal });
+    document.addEventListener('click', (event) => {
+      const item = (event.target as Element).closest<HTMLElement>('[data-models-section]');
+      if (item?.dataset.modelsSection === 'json') this.models?.select('json');
+    }, { signal });
     el('new-form').addEventListener('submit', (event) => {
       event.preventDefault(); const cwd = el<HTMLInputElement>('cwd-input').value.trim();
       if (!cwd) return;
@@ -901,7 +912,27 @@ export class Workbench {
       case 'models-edit': {
         if (!this.models) { const { ModelsEditor } = await import('./models'); this.models = new ModelsEditor(this.bridge, (err) => this.fail(err)); }
         openDialog('models-dialog');
+        this.models.select('empty');
         await this.models.open();
+        break;
+      }
+      case 'models-toggle-secret': {
+        const input = document.getElementById('mp-key') as HTMLInputElement | null;
+        if (!input) break;
+        const show = input.type === 'password';
+        input.type = show ? 'text' : 'password';
+        button.textContent = show ? '隐藏' : '显示';
+        break;
+      }
+      case 'models-delete-provider': {
+        if (!this.models) break;
+        if (!confirm('删除整个供应商会同时移除它下面的全部模型，确定？')) break;
+        this.models.deleteProvider();
+        break;
+      }
+      case 'models-delete-model': {
+        if (!this.models) break;
+        this.models.deleteModel();
         break;
       }
       case 'models-reload': await this.models?.reload(); break;

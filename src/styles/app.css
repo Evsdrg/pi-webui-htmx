@@ -557,3 +557,24 @@ input,select,textarea { background:var(--bg); border:1px solid var(--border); bo
   .config-side { width:100%; height:190px; border-right:0; border-bottom:1px solid var(--border); }
   .config-detail { padding:14px; }
 }
+
+/* ==== 模型配置：provider/model 两级树与字段表单（对齐 Pi Web ModelsConfig）── */
+/* 模型行比 provider 行缩进一级；Pi Web 用 padding-left:26px。 */
+.models-indent { padding-left:26px; }
+.models-add { color:var(--text-dim); }
+.models-add:not(:disabled):hover,.models-add:not(:disabled):focus-visible { color:var(--accent); }
+.config-two-col { display:grid; grid-template-columns:1fr 1fr; gap:10px; }
+@media (max-width:640px) { .config-two-col { grid-template-columns:1fr; } }
+.config-checks { display:flex; flex-wrap:wrap; gap:20px; }
+.config-check { display:flex; align-items:center; gap:6px; color:var(--text-muted); cursor:pointer; font-size:12px; }
+.config-check input { width:13px; height:13px; accent-color:var(--accent); cursor:pointer; }
+/* 密钥输入框与「显示」按钮并排；Pi Web 的 SecretTextInput 同形。 */
+.config-secret { display:flex; align-items:center; gap:6px; }
+.config-secret input { flex:1 1 auto; min-width:0; }
+/* 思考等级映射：一行一个等级，左标签右输入。 */
+.config-kv { display:flex; flex-direction:column; gap:6px; }
+.config-kv-row { display:flex; align-items:center; gap:10px; }
+.config-kv-row .kv-level { flex:0 0 72px; color:var(--text-muted); font-size:11px; }
+.config-kv-row input { flex:1 1 auto; min-width:0; padding:5px 9px; border:1px solid var(--border); border-radius:5px; background:var(--bg); color:var(--text); font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:11px; }
+/* provider 表单里的「发现模型」与上面的字段分开：Pi Web 用一条上边框隔开。 */
+.config-section-sep { display:flex; flex-direction:column; gap:10px; padding-top:14px; border-top:1px solid var(--border); }
