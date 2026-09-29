@@ -178,7 +178,10 @@ func outcomeFor(err error) storage.Outcome {
 // 返回 false 表示调用方必须放弃这条命令（结论已通过 reply 发出）。
 //
 // 两条入口以前各写一份去重逻辑，容易各自漂移；现在只有这一处事实来源。
-func (s *Server) admit(req protocol.Request, reply func(protocol.Message)) (bool, bool) {
+// 返回值依次是：是否接受、是否需优先处理（urgent）。
+// 两个 bool 相邻时位置很容易记反，而「不接受」与「需优先」用错
+// 分别会导致重复执行与排队顺序错误，所以结果具名。
+func (s *Server) admit(req protocol.Request, reply func(protocol.Message)) (accepted bool, urgent bool) {
 	if req.Version != protocol.Version {
 		reply(protocol.Reply(req.RequestID, nil, protocol.E("unsupported_version", "仅支持版本 1")))
 		return false, false

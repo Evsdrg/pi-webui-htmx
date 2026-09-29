@@ -70,15 +70,35 @@ type State struct {
 	} `json:"model"`
 }
 
+// workerStatus 是工作进程的生命周期状态。
+//
+// 取值域是封闭的：以前它是裸 string、字面量散在 9 处赋值点上，
+// 拼错一个字母不会被编译器发现，只会在界面上显示成未知状态。
+// JSON 标签保持原样，因为它是协议字段（前端按这些字符串分支）。
+type workerStatus string
+
+const (
+	statusStarting     workerStatus = "starting"
+	statusRunning      workerStatus = "running"
+	statusIdle         workerStatus = "idle"
+	statusWaitingInput workerStatus = "waiting_input"
+	statusStopping     workerStatus = "stopping"
+	statusStopped      workerStatus = "stopped"
+	statusFailed       workerStatus = "failed"
+)
+
+// String 便于日志与错误信息使用（fmt 会调用它）。
+func (s workerStatus) String() string { return string(s) }
+
 // Info 描述受管工作进程，供列表与订阅确认返回。
 type Info struct {
-	SessionID string `json:"sessionId"`
-	Epoch     string `json:"epoch"`
-	PID       int    `json:"pid"`
-	Cwd       string `json:"cwd"`
-	Status    string `json:"status"`
-	Busy      bool   `json:"busy"`
-	Seq       uint64 `json:"seq"`
+	SessionID string       `json:"sessionId"`
+	Epoch     string       `json:"epoch"`
+	PID       int          `json:"pid"`
+	Cwd       string       `json:"cwd"`
+	Status    workerStatus `json:"status"`
+	Busy      bool         `json:"busy"`
+	Seq       uint64       `json:"seq"`
 	// ToolPreset 是本次启动使用的工具预设；空字符串表示 Pi 默认工具集。
 	ToolPreset string `json:"toolPreset,omitempty"`
 }
@@ -248,9 +268,9 @@ func (m *Manager) StartWithPreset(ctx context.Context, id, cwd, preset string) (
 	w.mu.Lock()
 	w.id = state.SessionID
 	w.owner = m
-	w.status = "idle"
+	w.status = statusIdle
 	if w.active {
-		w.status = "running"
+		w.status = statusRunning
 	}
 	w.mu.Unlock()
 	m.mu.Lock()
@@ -322,7 +342,7 @@ func (m *Manager) reap() {
 					if m.metrics != nil {
 						m.metrics.WorkerReaped()
 					}
-					go w.stop(false, true)
+					go func() { _ = w.stopIfIdle() }()
 				}
 			}
 		}
@@ -396,7 +416,8 @@ func (s *Subscription) Close() {
 type Worker struct {
 	cfg                                Config
 	mu                                 sync.Mutex
-	id, epoch, cwd, status             string
+	id, epoch, cwd                     string
+	status                             workerStatus
 	preset                             string
 	cmd                                *exec.Cmd
 	client                             *pi.Client
@@ -467,7 +488,10 @@ func (w *Worker) Subscribe() (*Subscription, Info, error) {
 // 合并后要么整体成功（快照 + 已注册），要么整体失败且不留下半套状态。
 //
 // cursor 为空表示普通订阅，不做补发。
-func (w *Worker) SubscribeWithReplay(epoch string, afterSeq uint64, cursor bool) (*Subscription, Info, []events.Item, bool, error) {
+// 返回值依次是：订阅句柄、当前状态快照、补发事件、补发是否可用。
+// 补发不可用（replayed=false）时订阅仍然成立，但调用方必须要求客户端
+// 重新同步——这一条不能靠位置记住，所以结果具名。
+func (w *Worker) SubscribeWithReplay(epoch string, afterSeq uint64, cursor bool) (sub *Subscription, info Info, replay []events.Item, replayed bool, err error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	if w.closing {
@@ -554,13 +578,13 @@ func (w *Worker) event(raw json.RawMessage) {
 	switch ev.Type {
 	case "agent_start", "compaction_start", "auto_retry_start", "summarization_retry_scheduled":
 		w.active = true
-		w.status = "running"
+		w.status = statusRunning
 		w.lastActivity = time.Now()
 	case "agent_settled":
 		w.active = false
 		w.uncertain = false
 		if !w.waitingInput {
-			w.status = "idle"
+			w.status = statusIdle
 		}
 		w.lastActivity = time.Now()
 	case "queue_update":
@@ -585,7 +609,7 @@ func (w *Worker) event(raw json.RawMessage) {
 			w.pendingDialogs[ev.ID] = raw
 			w.dialogOpened[ev.ID] = time.Now()
 			w.waitingInput = true
-			w.status = "waiting_input"
+			w.status = statusWaitingInput
 		}
 	}
 	if len(raw) > w.cfg.EventBytes {
@@ -724,7 +748,7 @@ func (w *Worker) Abort(ctx context.Context) (json.RawMessage, error) {
 		w.active = false
 		w.queued = false
 		w.uncertain = false
-		w.status = "idle"
+		w.status = statusIdle
 		w.lastActivity = time.Now()
 		w.mu.Unlock()
 	}
@@ -732,9 +756,17 @@ func (w *Worker) Abort(ctx context.Context) (json.RawMessage, error) {
 }
 
 // Stop 主动停止工作进程；默认拒绝仍在忙的会话，force 必须显式。
+// Stop 停止工作进程。force 为假时若仍在忙则拒绝并提示必须显式强停。
+// force 是协议字段（session.stop 的入参），因此保留这个名字。
 func (w *Worker) Stop(force bool) error { return w.stop(force, false) }
 
+// stopIfIdle 只在空闲达到 IdleTimeout 时才停止，由回收器调用。
+// 与 Stop 分开命名：以前回收器写的是 stop(false, true)，
+// 两个相邻布尔读不出哪个是 force、哪个是 idleOnly。
+func (w *Worker) stopIfIdle() error { return w.stop(false, true) }
+
 // stop 执行分级停止：关闭 stdin、SIGTERM、SIGKILL，每段都有宽限期。
+// 它是 Stop 与 stopIfIdle 的共同实现，请从上面两个具名入口调用。
 func (w *Worker) stop(force, idleOnly bool) error {
 	w.mu.Lock()
 	if w.closing {
@@ -751,7 +783,7 @@ func (w *Worker) stop(force, idleOnly bool) error {
 		return nil
 	}
 	w.closing = true
-	w.status = "stopping"
+	w.status = statusStopping
 	// 先取消所有待回复对话，否则扩展会在进程退出前一直等待人工输入。
 	dialogs := make([]string, 0, len(w.pendingDialogs))
 	for id := range w.pendingDialogs {
@@ -849,7 +881,7 @@ func launch(cfg Config, cwd, file, preset string) (*Worker, error) {
 		cfg:            cfg,
 		epoch:          hex.EncodeToString(epoch),
 		cwd:            cwd,
-		status:         "starting",
+		status:         statusStarting,
 		preset:         preset,
 		cmd:            cmd,
 		done:           make(chan struct{}),
@@ -891,9 +923,9 @@ func launch(cfg Config, cwd, file, preset string) (*Worker, error) {
 		w.uncertain = false
 		w.waitingInput = false
 		w.closing = true
-		w.status = "stopped"
+		w.status = statusStopped
 		if exitErr != nil {
-			w.status = "failed"
+			w.status = statusFailed
 		}
 		w.publishLocked("bridge.worker_state", w.infoLocked())
 		for s := range w.subs {

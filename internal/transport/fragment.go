@@ -24,6 +24,13 @@ func (s *Server) fragmentIssue(w http.ResponseWriter, encoding string, err error
 	if errors.As(err, &protocolErr) && protocolErr.Message != "" {
 		message = protocolErr.Message
 	}
+	// UI 层可缺席（未配 --ui-dir）：正常路径上 /ui/* 已被更外层的守卫
+	// 拦掉，这里再判一次是为了让「将来新增的片段调用点」不会踩到 panic——
+	// 渲染器不再为 nil 接收者容错。
+	if s.ui == nil {
+		writeHTML(w, encoding, `<p class="empty-note">`+html.EscapeString(message)+`</p>`)
+		return
+	}
 	if note, rerr := s.ui.RenderNote(message); rerr == nil {
 		writeHTML(w, encoding, note)
 		return

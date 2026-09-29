@@ -88,7 +88,7 @@ Effective Go 要求函数短小并聚焦单一职责；这类函数同时承担�
 
 建议方向：按域拆成 `dispatchSession` / `dispatchFiles` / `dispatchConfig` / `dispatchTerminal` / `dispatchSessionOps`，各返回具名结构体；方法准入交给 `specs` 表。拆分本身不改变行为，可用现有 62 方法逐一回归。
 
-### G02 构造函数长参数列表（中）
+### G02 构造函数长参数列表（中） · 已在批次 I 修复（见第 10 节）
 
 ```go
 func New(manager *run.Manager, store *sessions.Store, …, token, host string, publicOrigin PublicOrigin, ui *presentation.Renderer) *Server
@@ -144,7 +144,7 @@ Code Review Comments 对「忽略错误」的立场是要么处理、要么在�
 
 建议方向：自有哨兵错误（如 `ErrNotEnabled`），或让 `Record` 返回 `(recorded bool, err error)`。
 
-### G07 字符串与裸布尔当枚举（中）
+### G07 字符串与裸布尔当枚举（中） · 已在批次 I 修复（`encoding` 一项在批次 J）
 
 - `worker.status` 用字面量赋值 7 处：`runtime/manager.go:251`/`:563`/`:727`/`:754`/`:852`、`runtime/dialogs.go:82`/`:143`。
 - `encoding string`（同 G03）。
@@ -190,7 +190,7 @@ case <-time.After(2 * time.Millisecond):
 
 建议方向：每个 mutex 上方一句注释写明保护范围与加锁顺序（现有代码里 `w.mu` 已有类似注释，是好的先例）。
 
-### G12 nil 接收者与 nil 检查混用（中）
+### G12 nil 接收者与 nil 检查混用（中） · 已在批次 I 修复（见第 10 节）
 
 三种做法同时存在：
 
@@ -579,6 +579,7 @@ dialogs.go:29/76         再把 raw 读出来使用（:113 是重新登记）
 | G1 | `5cb5f65` | G22：整页一次分配，`selected`/`Entries` 预分配 | 无 |
 | G2 | `025e94d` | G23：`jsonl.Reusable` 复用缓冲，三个安全调用点切换 | `lazy.go` 经核对不安全，未切 |
 | H | `acf5ad0` | G28：删除对内置 `printf` 的覆盖 | 无 |
+| I | `bb9247a` | G02 `transport.Options` + G07 具名状态与具名布尔 + G12 nil 约定统一 | 两个协议布尔保留原名 |
 
 ### 批次 A
 
@@ -698,3 +699,18 @@ dialogs.go:29/76         再把 raw 读出来使用（:113 是重新登记）
 删除 `funcMap` 里对内置 `printf` 的覆盖。被删实现只认 `%s` 与 `%/`：`%d` 原样输出、非字符串的 `%s` 静默变空，写错不报错只显示错。模板实际只用到 `printf "%s/%s" .Provider .ID`（两个字符串），内置语义完全覆盖。
 
 两条回归：`Test模板printf用内置语义` 断言 `funcMap()` 不再定义 `printf` 且内置语义可用；`Test模型选择器selected仍正确` 断言被删函数唯一的真实用途（模型下拉的 `selected` 判定）不受影响。
+
+### 批次 I（G02 + G07 + G12）
+
+**G02**：`transport.New` 从 13 个位置参数改为 `transport.Options` + `Validate()`，返回 `(*Server, error)`。取值约束从 `cmd/pi-bridge/main.go`（那里有一份长度检查，测试路径完全没有）收进构造处，错误信息点名字段。`Validate` 对 `Token < 32` 的提示直接写成「检查是否与 Host 写反」——这正是该签名最现实的错法。
+
+回归 `Test构造参数校验` 覆盖 6 种错配（token 太短、token 位置填成监听地址、host 为空、缺 manager/store/files）；`TestUI层可选但缺了要有明确表现` 与 `TestUI缺席时片段路径不panic` 覆盖可选字段。
+
+**G07**：
+- `runtime.workerStatus` 具名类型 + 7 个常量（`starting`/`running`/`idle`/`waiting_input`/`stopping`/`stopped`/`failed`），JSON 标签不变（协议字段），9 处字面量赋值改常量。
+- `Worker.stop(force, idleOnly bool)` 增加两个具名入口：`Stop(force)`（协议字段，保留该名）与 `stopIfIdle()`（回收器调用）；`stop` 降为共同实现并注明从具名入口调用。
+- `Terminal.Close(force bool)` 拆成 `Close()`（优雅）与 `ForceClose()`（宽限期后 SIGKILL 进程组）。调用点按真实语义改名——`Close(true)` 只是读不出意图，而强制杀掉进程组会让组内其它进程没有收尾机会，所以这不是纯改名。
+- 两个相邻布尔返回值加具名结果：`admit` → `(accepted, urgent bool)`、`SubscribeWithReplay` → `(sub, info, replay, replayed, err)`。
+- **未改**：`Bash(…, excludeFromContext bool)` 与 `Worker.Stop(force bool)`。两者的布尔直接对应协议字段（`bash.run` 的 `excludeFromContext`、`session.stop` 的 `force`），调用点就是把解码出的同名字段传进去；为它们造包装类型只会让协议字段与 Go 标识符之间多一层映射。
+
+**G12**：约定统一为「Renderer 非 nil，禁用 UI 由外层决定」。删除 `SetMagicContext` 的 nil 接收者容错（它曾是全仓唯一一处 nil 安全方法，等于把「记得判空」的责任推给每个人），`transport.New` 改为条件注入；`fragmentIssue` 补上自己的守卫，使将来新增的片段调用点不会踩到 panic。

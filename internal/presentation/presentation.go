@@ -59,12 +59,12 @@ const (
 )
 
 // SetMagicContext 注入 magic-context 只读视图。
-// 渲染器可以为 nil（没配 --ui-dir 时 UI 层整体禁用），所以这里判空——
-// 测试与禁用 UI 的部署都会走到这条路径。
+//
+// 渲染器**不再为 nil 接收者提供容错**：以前只有这一个方法容忍 nil，
+// 结果是「UI 层禁用」的安全性依赖调用方记得判空，漏一处就是 panic，
+// 而 panic 的位置离出错的地方很远。约定统一为：Renderer 非 nil，
+// 禁用 UI 由调用方在更外层决定（transport 用 s.ui == nil 守卫整段路由）。
 func (r *Renderer) SetMagicContext(store *magiccontext.Store) {
-	if r == nil {
-		return
-	}
 	r.mu.Lock()
 	r.mc = store
 	r.mu.Unlock()

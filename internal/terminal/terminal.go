@@ -139,7 +139,7 @@ func (m *Manager) Close() {
 	var wg sync.WaitGroup
 	for _, t := range terms {
 		wg.Add(1)
-		go func() { defer wg.Done(); _ = t.Close(true) }()
+		go func() { defer wg.Done(); _ = t.ForceClose() }()
 	}
 	wg.Wait()
 }
@@ -233,7 +233,7 @@ func (m *Manager) Open(cwd, shell string, cols, rows uint16) (*Terminal, error) 
 	m.mu.Lock()
 	if m.closed || t.closed.Load() {
 		m.mu.Unlock()
-		_ = t.Close(true)
+		_ = t.ForceClose()
 		return nil, protocol.E("worker_exited", "桥或终端已退出")
 	}
 	m.terminals[t.id] = t
@@ -259,7 +259,7 @@ func (m *Manager) CloseTerminal(id string) error {
 	if err != nil {
 		return err
 	}
-	return t.Close(true)
+	return t.ForceClose()
 }
 
 func (m *Manager) reap() {
@@ -285,7 +285,7 @@ func (m *Manager) reap() {
 				idle := time.Since(t.lastUse) >= m.cfg.IdleTimeout
 				t.mu.Unlock()
 				if idle {
-					go func() { _ = t.Close(true) }()
+					go func() { _ = t.ForceClose() }()
 				}
 			}
 		}
@@ -396,7 +396,7 @@ func (t *Terminal) pump(readBuffer int) {
 			t.dispatch(chunk)
 		}
 		if err != nil {
-			_ = t.Close(false)
+			_ = t.Close()
 			return
 		}
 	}
@@ -436,7 +436,7 @@ func (t *Terminal) Write(data []byte) error {
 	t.lastUse = time.Now()
 	t.mu.Unlock()
 	if _, err := t.ptmx.Write(data); err != nil {
-		_ = t.Close(false)
+		_ = t.Close()
 		return protocol.E("worker_exited", "终端写入失败")
 	}
 	return nil
@@ -464,7 +464,18 @@ func (t *Terminal) Resize(cols, rows uint16) error {
 func (t *Terminal) Done() <-chan struct{} { return t.done }
 
 // Close 分级关闭终端：关 PTY → SIGTERM 进程组 → SIGKILL。
-func (t *Terminal) Close(force bool) error {
+// Close 优雅关闭终端：先关 pty，给进程组一个 SIGTERM 与宽限期。
+//
+// 以前这个方法是 Close(force bool)：调用点写 Close(true) / Close(false)
+// 完全读不出意图，而两种语义差别很大——force 会 SIGKILL 整个进程组，
+// 里面的用户进程没有机会收尾。现在拆成两个具名方法。
+func (t *Terminal) Close() error { return t.close(false) }
+
+// ForceClose 在宽限期之后强杀整个进程组，供「用户主动关闭」这类
+// 不打算等进程自己退出的场合使用。
+func (t *Terminal) ForceClose() error { return t.close(true) }
+
+func (t *Terminal) close(force bool) error {
 	if t.closed.Swap(true) {
 		if force && t.cmd.Process != nil {
 			killGroup(t.cmd.Process.Pid, syscall.SIGKILL)

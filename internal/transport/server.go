@@ -107,25 +107,80 @@ type Server struct {
 	tunnelBridge *TunnelBridge
 }
 
-// New 构造入口；token 至少 32 字符，host 为监听地址上的主机名。
-// publicOrigin 为空值时只接受 host 本身（本地用法不变）。
-func New(manager *run.Manager, store *sessions.Store, terminals *terminal.Manager, files *workspace.Files, piConfig *management.Config, discovery management.DiscoveryLimits, exportDir string, receipts *storage.Receipts, metrics *observe.Metrics, token, host string, publicOrigin PublicOrigin, ui *presentation.Renderer) *Server {
+// Options 是 Server 的构造参数。
+//
+// 用结构体而不是位置参数：旧签名有 13 个位置参数，其中 token 与 host
+// 相邻且同为 string，对调后编译通过、运行期表现为「鉴权永远失败」——
+// 这类错误只会在部署后才暴露。字段名让编译器挡住这种错位，
+// 而 Validate 把取值约束从调用方（cmd 里那份长度检查）收到构造处。
+// 同仓的 runtime.Config、terminal.Config、tunnel.Config 都是这个形状。
+type Options struct {
+	Manager *run.Manager
+	Store   *sessions.Store
+	// Terminals、Files、Config 都是必需的：它们对应实际功能面，
+	// 而 UI 与 Tunnel 可以缺席（未配 --ui-dir、未启用 --relay）。
+	Terminals    *terminal.Manager
+	Files        *workspace.Files
+	Config       *management.Config
+	Discovery    management.DiscoveryLimits
+	ExportDir    string
+	Receipts     *storage.Receipts
+	Metrics      *observe.Metrics
+	Token        string
+	Host         string
+	PublicOrigin PublicOrigin
+	UI           *presentation.Renderer
+	// WorkspaceRoot 仅用于在构造失败时给出可读的提示（哪个目录不可用）。
+	WorkspaceRoot string
+}
+
+// Validate 检查构造参数。错误信息点名具体字段，方便对应到启动参数。
+func (o Options) Validate() error {
+	// Token 的长度下限不是形式主义：它是唯一凭据，短 token 可被暴力枚举。
+	// 这条检查以前只在 cmd 里做过，测试构造路径完全没有它——
+	// 把 token 与 host 写反时两种路径都不会报错。
+	if len(o.Token) < 32 {
+		return errors.New("Options.Token 至少需要 32 个字符（检查是否与 Host 写反）")
+	}
+	if o.Host == "" {
+		return errors.New("Options.Host 不能为空：它同时用于 Host 校验与 Cookie 签名")
+	}
+	switch {
+	case o.Manager == nil:
+		return errors.New("Options.Manager 不能为空")
+	case o.Store == nil:
+		return errors.New("Options.Store 不能为空")
+	case o.Terminals == nil:
+		return errors.New("Options.Terminals 不能为空")
+	case o.Files == nil:
+		return errors.New("Options.Files 不能为空")
+	case o.Config == nil:
+		return errors.New("Options.Config 不能为空")
+	}
+	return nil
+}
+
+// New 构造入口。publicOrigin 为零值时只接受 Host 本身（本地用法不变）。
+func New(opts Options) (*Server, error) {
+	if err := opts.Validate(); err != nil {
+		return nil, err
+	}
 	server := &Server{
-		manager:         manager,
-		store:           store,
-		terminals:       terminals,
-		files:           files,
-		piConfig:        piConfig,
-		discovery:       discovery,
-		exportDir:       exportDir,
+		manager:         opts.Manager,
+		store:           opts.Store,
+		terminals:       opts.Terminals,
+		files:           opts.Files,
+		piConfig:        opts.Config,
+		discovery:       opts.Discovery,
+		exportDir:       opts.ExportDir,
 		sessionContexts: newSessionContextCache(),
-		ui:              ui,
+		ui:              opts.UI,
 		extState:        newExtensionState(64),
-		receipts:        receipts,
-		metrics:         metrics,
-		token:           token,
-		host:            host,
-		publicOrigin:    publicOrigin,
+		receipts:        opts.Receipts,
+		metrics:         opts.Metrics,
+		token:           opts.Token,
+		host:            opts.Host,
+		publicOrigin:    opts.PublicOrigin,
 		connections:     make(chan struct{}, 8),
 		operations:      make(chan struct{}, 16),
 		claims:          newClaims(1024),
@@ -133,8 +188,11 @@ func New(manager *run.Manager, store *sessions.Store, terminals *terminal.Manage
 	// magic-context 的只读视图挂在渲染器上：面板是服务端片段，
 	// 由 presentation 负责取数，传输层只管路由与鉴权。
 	// ui 为 nil 表示没配 UI 包目录，那时整个 /ui/* 都不该被请求到。
-	ui.SetMagicContext(magiccontext.NewStore())
-	return server
+	// 这里必须显式判断：渲染器不再为 nil 接收者提供容错（见 G12）。
+	if opts.UI != nil {
+		opts.UI.SetMagicContext(magiccontext.NewStore())
+	}
+	return server, nil
 }
 
 // SetTunnelBridge 注入隧道接入层，使云端帧能复用同一套命令分发。
@@ -1681,7 +1739,7 @@ func (s *Server) dispatchCommon(ctx context.Context, r protocol.Request, sink co
 		info := term.Info()
 		sub, err := term.Subscribe(64, 1<<20)
 		if err != nil {
-			_ = term.Close(true)
+			_ = term.ForceClose()
 			return nil, protocol.E("worker_exited", "终端已关闭")
 		}
 		sink.trackTerminal(term.ID(), sub)

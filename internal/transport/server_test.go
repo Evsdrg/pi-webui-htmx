@@ -102,7 +102,16 @@ func newTestServer(t *testing.T) (*Server, *run.Manager, string) {
 		}
 		ui = rendered
 	}
-	return New(m, store, terminals, files, piConfig, management.DefaultDiscoveryLimits(), exportDir, receipts, metrics, testToken, "127.0.0.1:30142", PublicOrigin{}, ui), m, cwd
+	srv, err := New(Options{
+		Manager: m, Store: store, Terminals: terminals, Files: files,
+		Config: piConfig, Discovery: management.DefaultDiscoveryLimits(),
+		ExportDir: exportDir, Receipts: receipts, Metrics: metrics,
+		Token: testToken, Host: "127.0.0.1:30142", UI: ui,
+	})
+	if err != nil {
+		t.Fatalf("构造测试服务器失败：%v", err)
+	}
+	return srv, m, cwd
 }
 
 func writeSessionFile(t *testing.T, dir, id, cwd string) {
@@ -1370,5 +1379,17 @@ func Test片段提示不泄露错误原因(t *testing.T) {
 	}
 	if strings.Contains(body, "auth.json") || strings.Contains(body, "dial tcp") {
 		t.Fatalf("片段不得带出底层原因: %s", body)
+	}
+}
+
+// testOptions 给出合法的构造参数，供校验用例改单个字段后使用。
+func testOptions(t *testing.T) Options {
+	t.Helper()
+	srv, m, cwd := newTestServer(t)
+	return Options{
+		Manager: m, Store: srv.store, Terminals: srv.terminals, Files: srv.files,
+		Config: srv.piConfig, Discovery: srv.discovery, ExportDir: srv.exportDir,
+		Receipts: srv.receipts, Metrics: srv.metrics, Token: testToken,
+		Host: "127.0.0.1:30142", UI: srv.ui, WorkspaceRoot: cwd,
 	}
 }

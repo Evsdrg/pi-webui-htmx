@@ -52,7 +52,7 @@ func TestOpen执行命令并回收进程(t *testing.T) {
 	if !strings.Contains(got.String(), "terminal-ok") {
 		t.Fatalf("未收到命令输出: %q", got.String())
 	}
-	if err := term.Close(true); err != nil {
+	if err := term.ForceClose(); err != nil {
 		t.Fatalf("关闭终端失败: %v", err)
 	}
 	if processAlive(pid) {
@@ -91,7 +91,7 @@ func Test终端数量上限(t *testing.T) {
 		t.Fatalf("终端列表异常: %+v", m.List())
 	}
 	for _, term := range opened {
-		if err := term.Close(true); err != nil {
+		if err := term.ForceClose(); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -110,7 +110,7 @@ func TestResize与不存在终端(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer term.Close(true)
+	defer term.ForceClose()
 	if err := term.Resize(0, 0); err == nil {
 		t.Fatal("非法尺寸应被拒绝")
 	}
@@ -130,7 +130,7 @@ func Test空输入与超长输入被拒绝(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer term.Close(true)
+	defer term.ForceClose()
 	if err := term.Write(nil); err == nil {
 		t.Fatal("空输入应被拒绝")
 	}
@@ -146,7 +146,7 @@ func Test关闭后订阅与写入报错(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := term.Close(true); err != nil {
+	if err := term.ForceClose(); err != nil {
 		t.Fatal(err)
 	}
 	if err := term.Write([]byte("x")); err == nil {
@@ -166,7 +166,7 @@ func Test环境变量可覆盖默认shell(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer term.Close(true)
+	defer term.ForceClose()
 	if term.Info().Cwd == "" {
 		t.Fatal("终端缺少工作目录")
 	}
