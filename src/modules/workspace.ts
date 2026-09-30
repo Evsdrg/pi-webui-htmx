@@ -15,6 +15,8 @@ export class Workspace {
   private path = '';
   private generation = 0;
   private previewRequest: AbortController | undefined;
+  /** 当前预览图片的 blob URL；换预览时释放。 */
+  private imageUrl: string | undefined;
   private terminal: import('./terminal').TerminalView | undefined;
   private abort = new AbortController();
   constructor(private readonly bridge: BridgeClient, private readonly onError: (error: unknown) => void) {
@@ -165,26 +167,20 @@ export class Workspace {
   }
   // read 按文件类型分流：图片走 <img>，其余走文本。
   //
-  // 顺序是刻意的：先问桥「这是不是图片」。桥按魔数判断，比前端可靠；
-  // 而且 files.read 现在会明确拒绝二进制，不会再像以前那样把 PNG 的
-  // 字节转成 UTF-8 乱码返回。
+  // 两条分支都走 HTTP。WS 是控制通道、单帧上限 512 KiB：文本曾经因此
+  // 被撑断连接（B07），图片则更直接——图片允许到 4 MiB，整帧会被连接层
+  // 丢弃，命令只会让用户看到超时（B33）。HTTP 端点回原始字节，不需要
+  // base64 展开，还能让浏览器自己解码与缓存。
   private async read(path: string): Promise<void> {
     this.previewRequest?.abort();
     const controller = new AbortController(); this.previewRequest = controller;
     const generation = ++this.generation;
     const alive = () => !this.abort.signal.aborted && !controller.signal.aborted && generation === this.generation;
-    const image = await this.bridge.request<{mime:string;data:string}>('files.image', '', { path }).catch(() => null);
-    if (!alive()) return;
     const name = path.split('/').pop() ?? path;
     el('file-name').textContent = name; el('file-name').title = path;
-    if (image && image.data) {
-      const frame = document.createElement('img');
-      frame.className = 'file-image';
-      frame.alt = name;
-      frame.src = `data:${image.mime};base64,${image.data}`;
-      this.showPreview(frame);
-      return;
-    }
+    const image = await this.fetchImage(path, controller);
+    if (!alive()) { if (image) URL.revokeObjectURL(image.url); return; }
+    if (image) { this.showPreview(image.node, image.url); return; }
     let text: string;
     // 完整内容走 HTTP：WS 是控制通道，单帧有上限，整份文本会把连接撑断（B07）。
     // HTTP 端点带压缩，大文件也更划算；只有它整体失败时才退回 WS 的截断预览。
@@ -226,13 +222,33 @@ export class Workspace {
     return p;
   }
 
+  // fetchImage 取图片预览。不是图片、读取失败或已取消时返回 null，
+  // 调用方据此回退到文本分支——不需要额外的「这是不是图片」往返。
+  private async fetchImage(path: string, controller: AbortController): Promise<{ node: HTMLImageElement; url: string } | null> {
+    try {
+      const response = await fetch(`/ui/file-image?path=${encodeURIComponent(path)}`, { credentials: 'same-origin', signal: controller.signal });
+      if (!response.ok) return null;
+      const url = URL.createObjectURL(await response.blob());
+      const node = document.createElement('img');
+      node.className = 'file-image';
+      node.alt = path.split('/').pop() ?? path;
+      node.src = url;
+      return { node, url };
+    } catch { return null; }
+  }
+
   // showPreview 用给定节点替换预览区内容。
   // 预览区从「只有一个 <pre><code>」变成可放任意节点，
   // 所以这里重建 <pre> 而不是复用固定结构。
-  private showPreview(node: HTMLElement): void {
+  //
+  // imageUrl 是这张图对应的 blob URL：换预览时旧的要释放，否则每看一张图
+  // 都留一份解码后的位图。释放放在旧节点已从 DOM 摘除之后。
+  private showPreview(node: HTMLElement, imageUrl?: string): void {
     const box = el('panel-preview');
     const existing = box.querySelector('pre');
     if (existing) existing.remove();
+    if (this.imageUrl && this.imageUrl !== imageUrl) { URL.revokeObjectURL(this.imageUrl); this.imageUrl = undefined; }
+    this.imageUrl = imageUrl;
     const pre = document.createElement('pre');
     pre.append(node);
     box.append(pre);
