@@ -20,6 +20,7 @@
     "system": "templates/system.html",
     "tools": "templates/tools.html",
     "stats": "templates/stats.html",
+    "export": "templates/export.html",
     "note": "templates/note.html",
     "_comment": "相对路径以 src/ 为基准；下划线开头的键是说明，不是模板"
   },

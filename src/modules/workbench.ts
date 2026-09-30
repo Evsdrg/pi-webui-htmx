@@ -1066,7 +1066,9 @@ export class Workbench {
       case 'export': {
         // 用完整会话 ID，截断只会得到 "history-" 这种没有辨识度的名字。
         const name = `session-${this.sessionId.slice(0, 64)}.html`;
-        const result = await this.command<{ path: string }>('session.export_html', { fileName: name });
+        // 导出是磁盘投影：这里刻意不走 command()（它会先 ensureWorker），
+        // 只看历史不该拉起 Pi 进程（B76）。
+        const result = await this.request<{ path: string }>('session.export_html', { fileName: name });
         const file = text(result.path).split('/').pop() || name;
         this.notify('已导出，开始下载。');
         // 走普通导航而不是 fetch：需要浏览器弹出下载，且要带登录 Cookie。

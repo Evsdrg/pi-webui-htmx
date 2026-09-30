@@ -1343,6 +1343,17 @@ describe('实时流重同步与迟到回执的会话归属', () => {
     expect(document.getElementById('connection-notice')!.textContent).toBe('');
   });
 
+  // B76：导出是磁盘投影，不经过 ensureWorker——只看历史不该拉起 Pi 进程。
+  it('导出不启动工作进程', async () => {
+    vi.stubGlobal('location', { assign: vi.fn() });
+    const internal = workbench as unknown as { action(action: string, button: HTMLElement): Promise<void> };
+    const starts = () => fake.request.mock.calls.filter(([m]) => m === 'session.start').length;
+    const before = starts();
+    await internal.action('export', document.createElement('button'));
+    expect(starts()).toBe(before);
+    expect(fake.request).toHaveBeenCalledWith('session.export_html', 's1', { fileName: 'session-s1.html' }, 120_000);
+  });
+
   // R01：分支导航的监听绑在 signal 上；不传 signal 时销毁工作台
   // 留着监听，已卸载的 DOM 仍会被迟到响应改写。
   it('销毁工作台后分支面板的监听随之中止', async () => {

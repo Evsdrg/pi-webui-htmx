@@ -1,0 +1,59 @@
+<!doctype html>
+{{/*
+  只读导出文档：由桥从会话 JSONL 投影生成，可离线打开、可打印。
+  它是独立完整文档（不是 htmx 片段），所以契约里与 shell 同类；
+  但**不含任何脚本**——Pi Web 的导出正因为内嵌递归树脚本，
+  长线性会话打开时会栈溢出（B45），这里不做等价物。
+*/}}
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{if .Title}}{{.Title}}{{else}}会话导出{{end}}</title>
+<style>
+:root { color-scheme: light dark; --fg: #1f2328; --bg: #ffffff; --muted: #6a737d; --line: #d8dee4; --panel: #f6f8fa; }
+@media (prefers-color-scheme: dark) {
+  :root { --fg: #e6edf3; --bg: #0f1720; --muted: #8b949e; --line: #30363d; --panel: #16202b; }
+}
+body { margin: 0; padding: 24px; background: var(--bg); color: var(--fg);
+  font: 14px/1.65 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; }
+main { max-width: 60rem; margin: 0 auto; }
+header, footer { max-width: 60rem; margin: 0 auto 16px; }
+h1 { font-size: 18px; margin: 0 0 8px; }
+dl { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 2px 12px; margin: 0; }
+dt { color: var(--muted); }
+dd { margin: 0; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px;
+  overflow-wrap: anywhere; }
+.row { border: 1px solid var(--line); border-radius: 7px; padding: 8px 10px; margin: 0 0 10px;
+  background: var(--panel); }
+.row-user { border-left: 3px solid #2563eb; }
+.row-assistant { border-left: 3px solid #16a34a; }
+.row-toolCall, .row-toolResult { border-left: 3px solid #a371f7; }
+.row-thinking { border-left: 3px solid #8b949e; opacity: .85; }
+.row-info { border-left: 3px solid #d29922; }
+.label { display: inline-block; margin-bottom: 4px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px; color: var(--muted); }
+pre { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
+.note { color: var(--muted); }
+footer { color: var(--muted); font-size: 12px; border-top: 1px solid var(--line); padding-top: 10px; }
+@media print { body { background: #fff; color: #000; } .row { break-inside: avoid; } }
+</style>
+</head>
+<body>
+<header>
+<h1>{{if .Name}}{{.Name}}{{else}}会话导出{{end}}</h1>
+<dl>
+<dt>会话 ID</dt><dd>{{.ID}}</dd>
+<dt>工作目录</dt><dd>{{.Cwd}}</dd>
+<dt>当前叶子</dt><dd>{{.Leaf}}</dd>
+</dl>
+{{if .Truncated}}<p class="note">内容较多，导出已按上限截断。</p>{{end}}
+</header>
+<main>
+{{range .Rows}}<section class="row row-{{.Kind}}">{{if .Label}}<span class="label">{{.Label}}</span>{{end}}<pre>{{.Text}}</pre></section>
+{{end}}
+</main>
+<footer>由 pi-bridge-go 从会话 JSONL 只读投影生成；没有启动 Pi 进程。长内容按行截断。</footer>
+</body>
+</html>

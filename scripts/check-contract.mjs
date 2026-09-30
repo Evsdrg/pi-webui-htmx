@@ -15,8 +15,12 @@ for(const [name,relative] of Object.entries(manifest.templates??{})){
  const path=resolve(root,'src',relative);
  if(!path.startsWith(resolve(root,'src')+sep)||!existsSync(path)){fail(`模板路径无效: ${name}`);continue;}
  const body=readFileSync(path,'utf8');
- if(name!=='shell'&&/<!doctype|<(?:html|head|body)[\s>]/i.test(body))fail(`片段 ${name} 包含完整文档结构`);
- if(name!=='shell'&&/<script[\s>]/i.test(body))fail(`片段 ${name} 含脚本`);
+ // export 是独立下载文档（完整 HTML），与 shell 同类；其余必须是片段。
+ const fullDoc=name==='shell'||name==='export';
+ if(!fullDoc&&/<!doctype|<(?:html|head|body)[\s>]/i.test(body))fail(`片段 ${name} 包含完整文档结构`);
+ if(!fullDoc&&/<script[\s>]/i.test(body))fail(`片段 ${name} 含脚本`);
+ // 导出文档也不允许脚本：Pi Web 的导出内嵌递归树脚本，长链会栈溢出（B45）。
+ if(name==='export'&&/<script[\s>]/i.test(body))fail('导出文档不得含脚本');
  if(/style="[^"]*\{\{/.test(body))fail(`模板 ${name} 含动态内联样式`);
  if(name==='extDialog'&&(!body.includes('data-dialog-id')||!body.includes('data-extension-form')))fail('扩展对话缺少回执表单标记');
  ok(`模板 ${name}`);
