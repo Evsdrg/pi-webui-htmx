@@ -21,6 +21,8 @@ type TunnelBridge struct {
 	sender func([]byte) error
 	max    int
 	idle   time.Duration
+	// maxHTTPResponse 是单次 HTTP 转发允许回传的响应体上限。
+	maxHTTPResponse int64
 
 	mu      sync.Mutex
 	virtual map[string]*virtualConn
@@ -64,11 +66,13 @@ func NewTunnelBridge(server *Server, sender func([]byte) error, max int, idle ti
 		idle = 5 * time.Minute
 	}
 	t := &TunnelBridge{
-		server:  server,
-		sender:  sender,
-		max:     max,
-		idle:    idle,
-		virtual: map[string]*virtualConn{},
+		server: server,
+		sender: sender,
+		max:    max,
+		idle:   idle,
+		// 单次 HTTP 转发的响应上限；不同部署形态容忍度不同，所以是字段。
+		maxHTTPResponse: maxTunnelHTTPResponse,
+		virtual:         map[string]*virtualConn{},
 	}
 	go t.reap()
 	return t
@@ -135,7 +139,15 @@ func (t *TunnelBridge) reap() {
 // HandleFrame 实现 tunnel.Handler：处理一条来自云端的浏览器帧。
 func (t *TunnelBridge) HandleFrame(ctx context.Context, frame []byte) bool {
 	rf, ok := relay.Unwrap(frame)
-	if !ok || rf.From == "" {
+	if !ok {
+		return false
+	}
+	// HTTP 转发帧（B54）：不走虚拟 WS 连接，直接投给桥自己的 HTTP handler。
+	// 它没有 From——HTTP 请求本身不绑定标签页，响应按 ID 配对。
+	if rf.HTTP != nil {
+		return t.handleTunnelHTTP(ctx, *rf.HTTP)
+	}
+	if rf.From == "" {
 		return false
 	}
 	conn := t.acquire(rf.From)

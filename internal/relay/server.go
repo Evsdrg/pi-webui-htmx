@@ -72,6 +72,9 @@ type Server struct {
 	clients   map[string]*clientConn
 	clientSeq uint64
 	closed    bool
+	// httpWaiters 是「已发出、等待设备应答」的 HTTP 转发（B54）。
+	// 与 tunnels/clients 共用 mu。
+	httpWaiters map[string]*pendingHTTP
 }
 
 // tunnelConn 是一条来自本地桥的主动隧道。
@@ -98,9 +101,12 @@ type clientConn struct {
 // routeFrame 是隧道与浏览器之间的最小路由封装。
 // relay 只读 to/from 两个字段做转发，绝不解析 data 里的业务内容。
 type routeFrame struct {
-	To   string          `json:"to"`
+	To   string          `json:"to,omitempty"`
 	From string          `json:"from,omitempty"`
-	Data json.RawMessage `json:"data"`
+	Data json.RawMessage `json:"data,omitempty"`
+	// HTTP 是设备前缀转发用的请求/响应帧（B54）。
+	// relay 只按 ID 配对与 To/From 路由，不解析其中的 HTTP 语义。
+	HTTP *HTTPEnvelope `json:"http,omitempty"`
 }
 
 // RouteTo 把桥发来的原始帧包上目标浏览器标识（to），供隧道接入层调用。
@@ -151,7 +157,10 @@ func Unwrap(frame []byte) (routeFrame, bool) {
 	var rf routeFrame
 	dec := json.NewDecoder(bytes.NewReader(frame))
 	dec.DisallowUnknownFields()
-	if err := dec.Decode(&rf); err != nil || len(rf.Data) == 0 {
+	if err := dec.Decode(&rf); err != nil {
+		return routeFrame{}, false
+	}
+	if len(rf.Data) == 0 && rf.HTTP == nil {
 		return routeFrame{}, false
 	}
 	return rf, true
@@ -296,8 +305,6 @@ func (s *Server) userAuth(r *http.Request) (string, bool) {
 }
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Cache-Control", "no-store")
-	w.Header().Set("X-Content-Type-Options", "nosniff")
 	// 构造期已保证 host 非空，所以这两道校验**不再有「跳过」分支**（B63）。
 	if !hostMatches(s.host, r.Host) {
 		writeRelayError(w, 403, protocol.E("host_denied", "Host 不在预期范围内"))
@@ -310,6 +317,14 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	// 设备前缀：响应头由设备侧决定，relay 不叠加自己的通用头
+	// （否则 Cache-Control/X-Content-Type-Options 会被写两遍）。
+	if strings.HasPrefix(r.URL.Path, devicePrefix) {
+		s.serveDeviceHTTP(w, r)
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
 	switch {
 	case r.Method == http.MethodGet && r.URL.Path == "/healthz":
 		writeRelayJSON(w, 200, map[string]any{"ok": true})
@@ -554,6 +569,11 @@ func (s *Server) handleTunnel(w http.ResponseWriter, r *http.Request) {
 		frame := make([]byte, len(b))
 		copy(frame, b)
 		rf, ok := Unwrap(frame)
+		// 设备回的 HTTP 响应（B54）：按 ID 交给等待中的转发。
+		if rf.HTTP != nil {
+			s.deliverHTTP(*rf.HTTP)
+			continue
+		}
 		if !ok || rf.To == "" {
 			continue
 		}
