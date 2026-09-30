@@ -13,6 +13,18 @@ import type { Scope } from './scope';
 const DIALOGS = new Set(['select','confirm','input','editor']);
 const ABORT_PENDING_NOTICE = '已请求中止，等待 Pi 完成清理。';
 const SUBSCRIPTION_CHECK_NOTICE = '实时订阅已结束，正在核对任务状态。';
+
+// 长任务命令的等待上限，与桥 protocol/methods.go 的 Spec.Timeout 对应。
+// 桥侧给的时间更长，前端先放弃只会让用户以为失败（B66）。
+const COMMAND_TIMEOUTS: Partial<Record<Method, number>> = {
+  'session.compact': 300_000,
+  'session.bash': 300_000,
+  'session.export_html': 120_000,
+};
+
+function commandTimeout(method: Method): number {
+  return COMMAND_TIMEOUTS[method] ?? 30_000;
+}
 interface State { sessionId: string; sessionName?: string; isStreaming: boolean; isCompacting: boolean; thinkingLevel?: string; model?: { id: string; provider: string; name: string } | null; pendingMessageCount?: number; steeringMode?: string; followUpMode?: string; autoCompactionEnabled?: boolean }
 type ModelChoice = { provider: string; id: string; name: string };
 
@@ -373,7 +385,7 @@ export class Workbench {
   }
   private request<T = unknown>(method: Method, params?: unknown, session = this.sessionId): Promise<T> {
     if (!this.capabilities.has(method)) return Promise.reject(new BridgeError('unsupported_method', `当前桥不支持 ${method}`));
-    return this.bridge.request<T>(method, session, params, method === 'session.compact' ? 120_000 : 30_000);
+    return this.bridge.request<T>(method, session, params, commandTimeout(method));
   }
   private async ensureWorker(scope: Scope = this.scope.current$()): Promise<Scope> {
     const oldId = this.sessionId;

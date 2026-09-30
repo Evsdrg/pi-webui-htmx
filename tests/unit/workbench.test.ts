@@ -19,7 +19,7 @@ let workbench: Workbench;
 let pending: string[];
 let busy: boolean;
 let sequence: number;
-const methods = ['session.start','session.prompt','session.abort','session.fork','session.subscribe','session.set_model','sessions.search','worker.list','session.state','session.thinking_levels','session.pending_dialogs','session.ui_response','session.stats','session.set_queue_mode','session.set_thinking','session.stop','session.set_auto_compaction','session.set_auto_retry','session.abort_retry','session.export_html','config.models.raw','config.models.write','config.models.discover','config.models.test'];
+const methods = ['session.start','session.prompt','session.abort','session.fork','session.subscribe','session.set_model','sessions.search','worker.list','session.state','session.thinking_levels','session.pending_dialogs','session.ui_response','session.stats','session.set_queue_mode','session.set_thinking','session.stop','session.set_auto_compaction','session.set_auto_retry','session.abort_retry','session.export_html','session.compact','session.bash','config.models.raw','config.models.write','config.models.discover','config.models.test'];
 function emit(type: string, extra: Record<string, unknown> = {}) {
  fake.instance!.dispatchEvent(new CustomEvent('message', { detail: { version:1,kind:'event',event:'pi.event',sessionId:'s1',epoch:'test',seq:++sequence,data:{type,...extra} } }));
 }
@@ -1246,5 +1246,21 @@ describe('模型配置的两级树与字段表单', () => {
     await (workbench as unknown as { action(a: string, b: HTMLElement): Promise<void> }).action('models-toggle-secret', button);
     expect(input.type).toBe('password');
     expect(button.textContent).toBe('显示');
+  });
+});
+
+describe('命令等待上限', () => {
+  it('长任务按桥的标注放宽，其余仍是默认', async () => {
+    // 桥 protocol/methods.go 给压缩与用户 bash 标注了 5 分钟，导出 2 分钟；
+    // 前端先放弃只会让用户以为失败（B66）。这里锁定两侧的上限对应关系。
+    const call = (method: string) => (workbench as unknown as { command(m: string): Promise<unknown> }).command(method);
+    await call('session.compact');
+    expect(fake.request.mock.calls.at(-1)?.[3]).toBe(300_000);
+    await call('session.bash');
+    expect(fake.request.mock.calls.at(-1)?.[3]).toBe(300_000);
+    await call('session.export_html');
+    expect(fake.request.mock.calls.at(-1)?.[3]).toBe(120_000);
+    await call('session.state');
+    expect(fake.request.mock.calls.at(-1)?.[3]).toBe(30_000);
   });
 });
