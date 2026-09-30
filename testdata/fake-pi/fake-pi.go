@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"strconv"
 	"strings"
 	"time"
@@ -74,6 +75,17 @@ func main() {
 	// script `set_status`：模拟插件在会话启动时 setStatus 一次。
 	// 它发生在任何命令之前，用来验证「快照不依赖浏览器订阅」（B36）：
 	// 老实现只在转发给浏览器的路径上更新快照，没订阅者就漏记。
+	// script `spawn_grandchild`：起一个同进程组的后代并把 PID 写盘。
+	// 用来验证桥的 Stop 回收整个进程组，而不是只杀直接子进程（B40）。
+	if script["spawn_grandchild"] {
+		child := exec.Command("sleep", "300")
+		if err := child.Start(); err != nil {
+			os.Exit(72)
+		}
+		if path := os.Getenv("FAKE_PI_CHILD_PID_FILE"); path != "" {
+			_ = os.WriteFile(path, []byte(strconv.Itoa(child.Process.Pid)), 0600)
+		}
+	}
 	if script["set_status"] {
 		emit(frame{Type: "extension_ui_request", Method: "setStatus", StatusKey: "mc", StatusText: "mc: 3 (1%) · idle"})
 	}

@@ -54,6 +54,21 @@ go run ./cmd/pi-bridge \
 - 扩展默认关闭；显式开启 `--extensions` 也不等于授权全部项目执行，更不提供沙箱。
 - 不配置 `--ui-dir` 时只提供 API；配置后必须有模板和 Vite 产物，没有内嵌/CDN 兜底。UI rebuild 后重启桥，确保模板、manifest 与哈希资源一致。
 
+### 受管部署（systemd）
+
+桥被 SIGKILL 时 `Pdeathsig` 只覆盖直接子进程——忽略 SIGTERM 的 shell 或扩展
+后代仍会存活。生产用法是让服务管理器负责整个单元：
+
+```ini
+[Service]
+KillMode=control-group
+TimeoutStopSec=30
+```
+
+`KillMode=control-group` 让 systemd 在停止单元时向 cgroup 内全部进程发信号，
+补上桥自己做不到的那一半（正常 Stop 会向整组发信号，见 `Test停止回收同组后代`）。
+手工 `go run` 仍是较弱保证。
+
 ## 核心接口
 
 - `/healthz`：健康状态；`/api/v1/auth`：Bearer 换 Cookie。

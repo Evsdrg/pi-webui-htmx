@@ -306,18 +306,31 @@ func (m *Manager) reap() {
 	}
 }
 
-// allowedShells 是允许启动的 shell 白名单。
-// 目的是让「开终端」可控，同时不把桥变成任意命令执行入口。
-var allowedShells = map[string]struct{}{
-	"sh": {}, "bash": {}, "dash": {}, "zsh": {}, "fish": {},
-	"ksh": {}, "csh": {}, "tcsh": {}, "nu": {}, "pwsh": {}, "powershell": {},
+// shellCandidates 是本机固定受信路径表：shell 名 → 允许的实际可执行文件。
+// 不用 PATH 查找，也不接受调用方给的任意绝对路径：
+// 「PATH 上有一个叫 bash 的可执行文件」与「系统里的 /bin/bash」是两回事，
+// 前者可以被任何能在 PATH 里落文件的人换成任意程序（B75）。
+var shellCandidates = map[string][]string{
+	"sh":         {"/bin/sh", "/usr/bin/sh"},
+	"bash":       {"/bin/bash", "/usr/bin/bash"},
+	"dash":       {"/bin/dash", "/usr/bin/dash"},
+	"zsh":        {"/bin/zsh", "/usr/bin/zsh"},
+	"ksh":        {"/bin/ksh", "/usr/bin/ksh"},
+	"csh":        {"/bin/csh", "/usr/bin/csh"},
+	"tcsh":       {"/bin/tcsh", "/usr/bin/tcsh"},
+	"fish":       {"/usr/bin/fish", "/usr/local/bin/fish"},
+	"nu":         {"/usr/bin/nu", "/usr/local/bin/nu"},
+	"pwsh":       {"/usr/bin/pwsh", "/usr/local/bin/pwsh", "/opt/microsoft/powershell/7/pwsh"},
+	"powershell": {"/usr/bin/powershell", "/usr/local/bin/powershell"},
 }
 
 // forbiddenShellChars 一旦出现即判定为试图注入参数。
 const forbiddenShellChars = " \t\r\n;|&$`><(){}[]*?\\\"'"
 
 // resolveShell 校验并解析 shell：拒绝参数与元字符，
-// 只接受白名单内的可执行文件，PATH 查找或绝对路径均可。
+// 且只从受信路径表里取实际可执行文件（B75）。
+// 调用方给的绝对路径必须是表里规范路径的同一文件（os.SameFile，
+// 因此 /bin → /usr/bin 这类 symlink 仍可用），否则拒绝。
 func resolveShell(shell string) (string, error) {
 	if shell == "" {
 		return "", protocol.E("invalid_params", "shell 不能为空")
@@ -325,36 +338,52 @@ func resolveShell(shell string) (string, error) {
 	if strings.ContainsAny(shell, forbiddenShellChars) {
 		return "", protocol.E("invalid_params", "shell 不能包含参数或 shell 元字符")
 	}
-	base := filepath.Base(shell)
-	if _, ok := allowedShells[strings.ToLower(base)]; !ok {
+	base := strings.ToLower(filepath.Base(shell))
+	candidates, ok := shellCandidates[base]
+	if !ok {
 		return "", protocol.E("forbidden", "shell 不在允许列表内")
 	}
-	resolved := shell
-	if !filepath.IsAbs(shell) {
-		found, err := exec.LookPath(shell)
-		if err != nil {
-			return "", protocol.E("not_found", "找不到指定的 shell")
-		}
-		resolved = found
-	}
-	info, err := os.Stat(resolved)
-	if err != nil || !info.Mode().IsRegular() || info.Mode()&0111 == 0 {
-		return "", protocol.E("forbidden", "shell 不是可执行的普通文件")
-	}
-	return resolved, nil
-}
-
-// defaultShell 按环境选择可用 shell，不读取网络配置。
-func defaultShell() string {
-	for _, candidate := range []string{os.Getenv("SHELL"), "/bin/bash", "/bin/sh"} {
-		if candidate == "" {
+	for _, candidate := range candidates {
+		info, err := os.Stat(candidate)
+		if err != nil || !info.Mode().IsRegular() || info.Mode()&0111 == 0 {
 			continue
 		}
-		if _, err := os.Stat(candidate); err == nil {
-			return candidate
+		if filepath.IsAbs(shell) && !sameFile(shell, candidate) {
+			// 名字同名但路径不是受信文件：拒绝，不静默改用表里的路径。
+			continue
+		}
+		return candidate, nil
+	}
+	return "", protocol.E("not_found", "找不到受信的 shell")
+}
+
+// sameFile 判断两个路径是否指向同一个文件（跟随 symlink）。
+func sameFile(a, b string) bool {
+	ai, err := os.Stat(a)
+	if err != nil {
+		return false
+	}
+	bi, err := os.Stat(b)
+	if err != nil {
+		return false
+	}
+	return os.SameFile(ai, bi)
+}
+
+// defaultShell 从受信表里选一个可用 shell，不读网络配置。
+// SHELL 环境变量只作为「优先哪个名字」的提示，实际路径仍来自表。
+func defaultShell() string {
+	if env := os.Getenv("SHELL"); env != "" {
+		if _, err := resolveShell(env); err == nil {
+			return env
 		}
 	}
-	return "/bin/sh"
+	for _, name := range []string{"bash", "sh"} {
+		if _, err := resolveShell(name); err == nil {
+			return name
+		}
+	}
+	return "sh"
 }
 
 // ID 返回终端标识。
