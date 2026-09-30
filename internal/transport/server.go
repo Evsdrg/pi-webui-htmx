@@ -94,6 +94,9 @@ type Server struct {
 	// exportMu 串行化导出前的配额裁剪。导出本身可能很慢（Pi 要写完整
 	// 快照），所以不持锁；锁只护住目录扫描与删除这一段（B77）。
 	exportMu sync.Mutex
+	// catalog 缓存模型目录快照：它是公网只读数据，
+	// 每次按键都重新拉取既慢又无意义（B70）。
+	catalog catalogCache
 	// sessionContexts 缓存「系统提示词 + 工具定义」；它们只能靠导出一次
 	// 会话 HTML 取回，按 (sessionId, epoch) 缓存以免每次开面板都重导。
 	sessionContexts *sessionContextCache
@@ -808,6 +811,10 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if r.Method == http.MethodPost && r.URL.Path == "/ui/models/catalog" {
+		s.serveModelCatalog(w, r, encoding)
+		return
+	}
 	if r.Method == http.MethodPost && (r.URL.Path == "/ui/models/discover" || r.URL.Path == "/ui/models/test") {
 		s.serveModelProbe(w, r, encoding)
 		return

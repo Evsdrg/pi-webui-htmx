@@ -106,7 +106,11 @@ func (c *Config) TestConnection(ctx context.Context, baseURL, api, apiKey string
 // 带超时与体积上限；失败不影响本地编辑。
 func (c *Config) Catalog(ctx context.Context, limits DiscoveryLimits) ([]DiscoveredModel, error) {
 	limits = normalizeDiscoveryLimits(limits)
-	body, err := c.fetchJSON(ctx, "https://models.dev/api.json", "", "", nil, limits)
+	source := c.catalogURL
+	if source == "" {
+		source = defaultCatalogURL
+	}
+	body, err := c.fetchJSON(ctx, source, "", "", nil, limits)
 	if err != nil {
 		return nil, err
 	}

@@ -8,6 +8,7 @@ import (
 	"io"
 	"math"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
@@ -34,9 +35,14 @@ type Config struct {
 	httpClient   *http.Client
 	// registryBaseURL 供测试注入本地 registry；生产固定为 npmjs。
 	registryBaseURL string
+	// catalogURL 是模型目录（models.dev）的来源，可用 SetCatalogURL 覆盖。
+	catalogURL string
 }
 
 const defaultRegistryBaseURL = "https://registry.npmjs.org"
+
+// defaultCatalogURL 是模型目录的默认来源。
+const defaultCatalogURL = "https://models.dev/api.json"
 
 func NewConfig(agentDir string, limits Limits) *Config {
 	if limits.MaxFileBytes <= 0 {
@@ -45,7 +51,7 @@ func NewConfig(agentDir string, limits Limits) *Config {
 	if limits.MaxModels <= 0 {
 		limits.MaxModels = DefaultLimits().MaxModels
 	}
-	return &Config{agentDir: agentDir, limits: limits, packageSlots: make(chan struct{}, maxPackageQueries), httpClient: providerHTTPClient, registryBaseURL: defaultRegistryBaseURL}
+	return &Config{agentDir: agentDir, limits: limits, packageSlots: make(chan struct{}, maxPackageQueries), httpClient: providerHTTPClient, registryBaseURL: defaultRegistryBaseURL, catalogURL: defaultCatalogURL}
 }
 
 // Raw 返回可编辑的脱敏文档。v1 的 *** 只能表示保留已存在的秘密。
@@ -402,4 +408,21 @@ func validateConfigFields(entry map[string]any) error {
 		}
 	}
 	return nil
+}
+
+// SetCatalogURL 覆盖模型目录来源，供内网镜像与测试使用。
+//
+// 只由部署者与测试设置，**不接受网页输入**：目录 URL 会成为一条出站请求，
+// 允许网页指定目标就等于给它一条 SSRF 通道。空值与非法地址会被忽略，
+// 保持默认来源而不是让配置把自己关掉。
+func (c *Config) SetCatalogURL(target string) {
+	target = strings.TrimSpace(target)
+	if target == "" {
+		return
+	}
+	parsed, err := url.Parse(target)
+	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" {
+		return
+	}
+	c.catalogURL = target
 }
