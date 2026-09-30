@@ -10,10 +10,14 @@ import (
 
 // 附件上限。图片以 base64 内联进 RPC 帧，过大的图会让单帧超出 Pi 的
 // 读取缓冲，也会把 WS 单帧上限顶满。
+//
+// 数量与体积由 protocol 统一给出：帧上限（BrowserFrameLimit）就是按它们
+// 算出来的，两处各写一份就会漂——历史上 relay 与隧道客户端都因此
+// 写死了更小的值（B53）。
 const (
-	MaxImages       = 8
-	MaxImageBytes   = 8 << 20  // 单张解码后上限
-	MaxImageDataLen = 12 << 20 // 单张 base64 文本上限（解码后约 8 MB）
+	MaxImages       = protocol.MaxImageAttachments
+	MaxImageBytes   = 8 << 20 // 单张解码后上限
+	MaxImageDataLen = protocol.MaxImageAttachmentBytes
 )
 
 // allowedImageTypes 是允许内联的图片 MIME 白名单。

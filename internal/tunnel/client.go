@@ -12,6 +12,8 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
+
+	"pi-bridge-go/internal/protocol"
 )
 
 // ErrNotReady 表示隧道尚未建立。
@@ -262,6 +264,11 @@ func urlQueryEscape(v string) string {
 }
 
 const (
-	maxFrame     = 1 << 20
+	// maxFrame 是桥从 relay 收到的单帧上限。
+	//
+	// relay 转发的是**浏览器原始帧**（它只包一层 {"from":…,"data":…}），
+	// 所以这里必须能装下浏览器允许发的最大帧：写死 1 MiB 时，图片附件
+	// 一超过这个体积就会让桥主动断开与 relay 的连接（B53）。
+	maxFrame     = protocol.BrowserFrameLimit + protocol.RelayEnvelopeBytes
 	writeTimeout = 10 * time.Second
 )

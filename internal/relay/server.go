@@ -110,7 +110,7 @@ func RouteTo(clientID string, payload []byte) []byte { return routeToBrowser(cli
 // routeToBrowser 把桥发来的原始帧包上目标浏览器标识（to）。
 // 桥必须用这个方向；relay 只认 to，缺失即丢弃，不做广播。
 func routeToBrowser(clientID string, payload []byte) []byte {
-	b, err := json.Marshal(routeFrame{To: clientID, Data: json.RawMessage(payload)})
+	b, err := marshalRouteFrame(routeFrame{To: clientID, Data: json.RawMessage(payload)})
 	if err != nil {
 		return nil
 	}
@@ -120,11 +120,28 @@ func routeToBrowser(clientID string, payload []byte) []byte {
 // routeFromBrowser 把浏览器发来的原始帧包上来源标识（from），
 // 让桥知道该把回复发回哪个标签页。
 func routeFromBrowser(clientID string, payload []byte) []byte {
-	b, err := json.Marshal(routeFrame{From: clientID, Data: json.RawMessage(payload)})
+	b, err := marshalRouteFrame(routeFrame{From: clientID, Data: json.RawMessage(payload)})
 	if err != nil {
 		return nil
 	}
 	return b
+}
+
+// marshalRouteFrame 编码路由封装。
+//
+// 不用 json.Marshal：它默认做 HTML 转义，把载荷里的 < > & 变成 \u003c 之类
+// （最多 6 字节），于是「本身合法的帧」会在封装后顶出上限被丢掉。relay 只
+// 转发、从不渲染，没有理由做 HTML 转义；关掉之后封装开销就是固定前缀，
+// 与载荷内容无关。
+func marshalRouteFrame(rf routeFrame) ([]byte, error) {
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
+	if err := enc.Encode(rf); err != nil {
+		return nil, err
+	}
+	// Encode 会补一个换行符；去掉它，让封装开销精确等于前缀加一。
+	return bytes.TrimRight(buf.Bytes(), "\n"), nil
 }
 
 // Unwrap 取出路由帧中的原始载荷与目标/来源。
@@ -616,9 +633,18 @@ func (s *Server) findClientLocked(deviceID, clientID string) *clientConn {
 }
 
 // enqueue 把一帧放入有界队列；满了就关闭该连接，绝不在 relay 里无限堆积。
+//
+// 放行线取「队列预算」与本帧大小的较大值：桥允许的最大帧（图片附件量级）
+// 不能被 4 MiB 的队列预算自己挤掉——否则最大的那批帧永远发不出去。队列
+// 非空时仍按预算约束堆积，慢消费者不会因为这条放宽而无限占内存。
 func enqueue(out chan []byte, queued *atomic.Int64, frame []byte, cancel context.CancelFunc) {
-	if queued.Add(int64(len(frame))) > maxQueueBytes {
-		queued.Add(-int64(len(frame)))
+	size := int64(len(frame))
+	limit := int64(maxQueueBytes)
+	if size > limit {
+		limit = size
+	}
+	if queued.Add(size) > limit {
+		queued.Add(-size)
 		cancel()
 		return
 	}
@@ -649,7 +675,12 @@ func pumpWrites(ctx context.Context, ws *websocket.Conn, out chan []byte, queued
 }
 
 const (
-	maxFrame       = 1 << 20
+	// maxFrame 是 relay 允许的单帧上限。
+	//
+	// 它必须装得下桥允许浏览器发的最大帧（图片附件就是这个量级），再加上
+	// 转发时外面那层路由封装——relay 是转发器，比桥更小气只会把合法帧变成
+	// 「断隧道」（B53：这里曾写死 1 MiB）。
+	maxFrame       = protocol.BrowserFrameLimit + protocol.RelayEnvelopeBytes
 	maxQueueBytes  = 4 << 20
 	enqueueTimeout = 2 * time.Second
 	writeTimeout   = 10 * time.Second

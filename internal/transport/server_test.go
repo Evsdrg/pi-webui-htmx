@@ -39,9 +39,10 @@ func newTestServer(t *testing.T) (*Server, *run.Manager, string) {
 	return newTestServerTuned(t, 2*time.Second)
 }
 
-// newTestServerTuned 与 newTestServer 相同，只是把命令超时压到指定值。
+// newTestServerTuned 与 newTestServer 相同，只是把命令超时压到指定值，
+// 并允许改终端限额（能力发现的用例要证明报的是真实值而不是默认值）。
 // B66 的用例需要默认超时在几百毫秒内到期，才能区分长任务命令用的不是它。
-func newTestServerTuned(t *testing.T, commandTimeout time.Duration) (*Server, *run.Manager, string) {
+func newTestServerTuned(t *testing.T, commandTimeout time.Duration, termOpts ...func(*terminal.Config)) (*Server, *run.Manager, string) {
 	t.Helper()
 	cwd := t.TempDir()
 	state := t.TempDir()
@@ -92,7 +93,11 @@ func newTestServerTuned(t *testing.T, commandTimeout time.Duration) (*Server, *r
 		t.Fatal(err)
 	}
 	t.Cleanup(files.Close)
-	terminals := terminal.NewManager(terminal.Defaults())
+	termCfg := terminal.Defaults()
+	for _, opt := range termOpts {
+		opt(&termCfg)
+	}
+	terminals := terminal.NewManager(termCfg)
 	t.Cleanup(terminals.Close)
 
 	piConfig := management.NewConfig(agentDir, management.DefaultLimits())

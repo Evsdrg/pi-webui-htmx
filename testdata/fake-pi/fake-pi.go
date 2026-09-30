@@ -81,6 +81,9 @@ func main() {
 			Type    string `json:"type"`
 			ID      string `json:"id"`
 			Message string `json:"message"`
+			// outputPath 是 export_html 的目标路径；它不在 message 里，
+			// 夹具以前读错字段，于是导出成功路径从未被端到端覆盖过。
+			OutputPath string `json:"outputPath"`
 		}
 		if json.Unmarshal([]byte(line), &cmd) != nil {
 			emit(frame{Type: "response", ID: "", Success: false, Error: "无法解析命令"})
@@ -186,7 +189,14 @@ func main() {
 			emit(frame{Type: "response", ID: cmd.ID, Success: true})
 		case "export_html":
 			// 回显请求里的 outputPath，让桥能校验路径一致性。
-			emit(frame{Type: "response", ID: cmd.ID, Success: true, Data: map[string]any{"path": cmd.Message}})
+			// 可选地真写一个文件（FAKE_PI_EXPORT_BYTES），供配额相关的测试使用。
+			if n, _ := strconv.Atoi(envOr("FAKE_PI_EXPORT_BYTES", "0")); n > 0 && cmd.OutputPath != "" {
+				if err := os.WriteFile(cmd.OutputPath, make([]byte, n), 0600); err != nil {
+					emit(frame{Type: "response", ID: cmd.ID, Success: false, Error: "写入导出文件失败"})
+					continue
+				}
+			}
+			emit(frame{Type: "response", ID: cmd.ID, Success: true, Data: map[string]any{"path": cmd.OutputPath}})
 		case "crash":
 			os.Exit(3)
 		default:

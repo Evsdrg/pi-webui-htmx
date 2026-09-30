@@ -116,6 +116,14 @@ type Manager struct {
 	closed    bool
 }
 
+// Limits 返回终端的实际限额，供能力发现使用。
+// 以前发现端点里写死了默认值 4 与 600，而 CLI 的 --max-terminals /
+// --terminal-idle 可以改掉它们，于是「报告给客户端的限额」与「真正执行的
+// 限额」是两回事（B80）。
+func (m *Manager) Limits() (terminals int, idleSeconds int) {
+	return m.cfg.MaxTerminals, int(m.cfg.IdleTimeout / time.Second)
+}
+
 // NewManager 构造终端管理器。
 func NewManager(cfg Config) *Manager {
 	ctx, cancel := context.WithCancel(context.Background())

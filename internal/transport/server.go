@@ -31,7 +31,6 @@ import (
 	"pi-bridge-go/internal/magiccontext"
 	"pi-bridge-go/internal/management"
 	"pi-bridge-go/internal/observe"
-	"pi-bridge-go/internal/pi"
 	"pi-bridge-go/internal/presentation"
 	"pi-bridge-go/internal/protocol"
 	run "pi-bridge-go/internal/runtime"
@@ -71,13 +70,15 @@ var SupportedMethods = []string{
 
 // wsReadLimit 是 WS 单帧读取上限。
 // 取图片附件的最大合法体积（8 张 × 12 MiB base64）再加 1 MiB 封套余量，
-// 与 pi.MaxImages / pi.MaxImageDataLen 对齐；两侧不一致就会把合法请求
-// 当成超限帧，表现为「发不出图片且连接断开」。
-const wsReadLimit = pi.MaxImages*pi.MaxImageDataLen + (1 << 20)
+// 由 protocol.BrowserFrameLimit 统一给出；两侧不一致就会把合法请求
+// 当成超限帧，表现为「发不出图片且连接断开」。隧道与 relay 转发器
+// 必须用同一个值（B53）。
+const wsReadLimit = protocol.BrowserFrameLimit
 
-// wsTextBudget 是 WS 响应里文本内容的安全预算。
+// wsTextBudget 是 WS 响应里载荷的安全预算（文本与图片共用）。
 // 连接层单帧上限是 512 KiB，这里留出 JSON 封套与转义余量；
-// 超出即截断并标记 truncated，绝不把超限帧交给连接层。
+// 文本超出即截断并标记 truncated，图片超出则明确拒绝——
+// 两者都不能把超限帧交给连接层（那会被静默丢掉）。
 const wsTextBudget = 448 << 10
 
 // Server 是 HTTP 与 WebSocket 入口，只做接入、鉴权与限额。
@@ -89,6 +90,9 @@ type Server struct {
 	piConfig  *management.Config
 	discovery management.DiscoveryLimits
 	exportDir string
+	// exportMu 串行化导出前的配额裁剪。导出本身可能很慢（Pi 要写完整
+	// 快照），所以不持锁；锁只护住目录扫描与删除这一段（B77）。
+	exportMu sync.Mutex
 	// sessionContexts 缓存「系统提示词 + 工具定义」；它们只能靠导出一次
 	// 会话 HTML 取回，按 (sessionId, epoch) 缓存以免每次开面板都重导。
 	sessionContexts *sessionContextCache
@@ -804,8 +808,15 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	switch r.URL.Path {
 	case "/api/v1/capabilities":
+		// 这里只报**实际生效**的东西：以前写死 phase "A"（阶段早已完成，
+		// 发现端点却还在说 A 阶段）与终端的默认限额（CLI 可覆盖，于是
+		// 报给客户端的值与真正执行的值不符）——两者都会误导调用方（B80）。
+		terminals, terminalIdle := 0, 0
+		if s.terminals != nil {
+			terminals, terminalIdle = s.terminals.Limits()
+		}
 		writeJSON(w, encoding, 200, map[string]any{
-			"version": 1, "phase": "A", "piBaseline": "0.85.1",
+			"version": 1, "piBaseline": "0.85.1",
 			"methods":          SupportedMethods,
 			"replay":           true,
 			"persistentDedup":  true,
@@ -818,7 +829,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				"wsRequestBytes": 1 << 20, "wsResponseBytes": 512 << 10,
 				"connectionQueueBytes": 1 << 20, "requestIdsPerConnection": 1024,
 				"replayItems": 256, "replayBytes": 1 << 20,
-				"terminals": 4, "terminalIdleSeconds": 600,
+				"terminals": terminals, "terminalIdleSeconds": terminalIdle,
 			},
 		})
 	case "/api/v1/sessions":
@@ -1129,7 +1140,7 @@ func (s *Server) serveWS(w http.ResponseWriter, r *http.Request) {
 	}
 	defer ws.CloseNow()
 	// 读上限必须覆盖命令本身的合法体积，而不是随手给个 1 MiB：
-	// 图片附件按 pi.MaxImages × pi.MaxImageDataLen 计，约 96 MiB。
+	// 图片附件按 protocol.BrowserFrameLimit 计，约 96 MiB。
 	// 旧值 1 MiB 让稍大的图片不仅发不出去，还会因超限直接断开连接（U05）。
 	ws.SetReadLimit(wsReadLimit)
 	ctx, cancel := context.WithCancel(s.manager.Context())
