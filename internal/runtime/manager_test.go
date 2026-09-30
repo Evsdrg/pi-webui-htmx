@@ -333,8 +333,13 @@ func Test订阅与补发原子化(t *testing.T) {
 		t.Fatalf("带游标订阅失败: %v %v", ok, err)
 	}
 	defer sub.Close()
-	if len(items) != 0 {
-		t.Fatalf("afterSeq 已是当前序号，不应有补发内容: %d", len(items))
+	// B05 的不变量是「快照末序号 == 注册序号」：订阅起点之后的都要补发，
+	// 之前的一条也不补。取 Info 与订阅之间可能恰好又来了一条事件，
+	// 那不是缺陷——所以这里校验的不是「一条都没有」，而是「一条都不早于 afterSeq」。
+	for _, item := range items {
+		if item.Seq <= info.Seq {
+			t.Fatalf("补发里出现了 afterSeq 之前的旧事件: seq=%d afterSeq=%d", item.Seq, info.Seq)
+		}
 	}
 	// 注册之后发布的事件必须能收到：这就是窗口期要堵住的部分。
 	if err := w.Prompt(ctx, "after", "", nil); err != nil {
