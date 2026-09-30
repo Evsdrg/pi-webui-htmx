@@ -28,6 +28,10 @@ type TunnelBridge struct {
 }
 
 // virtualConn 是一条隧道上的逻辑浏览器连接。
+//
+// 并发结构：handle 只把 session.subscribe/unsubscribe 串行化，其余命令
+// （含 terminal.*）走并行分发，所以 subs/terms 两个映射都由 bridge.mu 统一
+// 保护，任何访问点都不能裸读裸写（B73 当初只看到 subs 就把问题收了工）。
 type virtualConn struct {
 	id      string
 	bridge  *TunnelBridge
@@ -40,10 +44,15 @@ type virtualConn struct {
 	// 反复订阅/退订耗尽（B14）。
 	subs  map[string]*runtime.Subscription
 	terms map[string]*terminal.Subscription
-	seen  map[string]bool
 	// dead 表示 pump 已退出（隧道发送失败）。死连接必须从映射移除，
 	// 否则同一 clientId 重连会复用它，响应入队却无人发送（B57）。
 	dead atomic.Bool
+}
+
+// connHandles 是一批待关闭的句柄。
+type connHandles struct {
+	subs  []*runtime.Subscription
+	terms []*terminal.Subscription
 }
 
 // NewTunnelBridge 构造隧道接入层。
@@ -139,25 +148,31 @@ func (t *TunnelBridge) HandleFrame(ctx context.Context, frame []byte) bool {
 }
 
 // acquire 取到（或创建）某个 clientId 的虚拟连接。
+//
+// 锁只圈住映射操作，摘下来的句柄一律在解锁之后关闭。历史写法是
+// defer 解锁、又在锁内调 releaseAll，而 releaseAll 自己还要拿同一把
+// 不可重入的 mutex——一旦撞上「dead 已置位、尚未从映射摘除」的窗口，
+// 整个 TunnelBridge（含 reap/Close/其他连接）会被永久锁死。
 func (t *TunnelBridge) acquire(id string) *virtualConn {
 	if len(id) > 64 {
 		id = id[:64]
 	}
+	var stale []connHandles
 	t.mu.Lock()
-	defer t.mu.Unlock()
 	if t.closed {
+		t.mu.Unlock()
 		return nil
 	}
 	if c, ok := t.virtual[id]; ok {
-		// 死连接的 pump 已退出，不能再复用：同一 clientId 重连时
-		// 响应会静静堆在队列里。换成新连接。
-		if c.dead.Load() {
-			delete(t.virtual, id)
-			c.cancel()
-			c.releaseAll()
-		} else {
+		if !c.dead.Load() {
+			t.mu.Unlock()
 			return c
 		}
+		// 死连接的 pump 已退出，不能再复用：同一 clientId 重连时
+		// 响应会静静堆在队列里。换成新连接。
+		delete(t.virtual, id)
+		c.cancel()
+		stale = append(stale, c.takeLocked())
 	}
 	if len(t.virtual) >= t.max {
 		// 达到上限时淘汰最久未用的一个，保证状态有界。
@@ -170,6 +185,7 @@ func (t *TunnelBridge) acquire(id string) *virtualConn {
 		if oldest != nil {
 			delete(t.virtual, oldest.id)
 			oldest.cancel()
+			stale = append(stale, oldest.takeLocked())
 		}
 	}
 	ctx, cancel := context.WithCancel(context.Background())
@@ -177,10 +193,11 @@ func (t *TunnelBridge) acquire(id string) *virtualConn {
 		id: id, bridge: t, queue: newOutboundQueue(64),
 		ctx: ctx, cancel: cancel, lastUse: time.Now(),
 		subs: map[string]*runtime.Subscription{}, terms: map[string]*terminal.Subscription{},
-		seen: map[string]bool{},
 	}
 	t.virtual[id] = c
+	t.mu.Unlock()
 	go c.pump()
+	closeHandles(stale)
 	return c
 }
 
@@ -234,22 +251,40 @@ func (c *virtualConn) markDead() {
 // releaseAll 关闭该虚拟连接持有的全部订阅与终端。
 func (c *virtualConn) releaseAll() {
 	c.bridge.mu.Lock()
-	subs := make([]*runtime.Subscription, 0, len(c.subs))
+	handles := c.takeLocked()
+	c.bridge.mu.Unlock()
+	closeHandles([]connHandles{handles})
+}
+
+// takeLocked 摘出该连接持有的全部句柄并清空映射，调用方必须已持有 bridge.mu。
+//
+// 摘取与关闭必须分成两步：Close 会走回桥的其他路径，持锁关闭容易形成
+// 锁序问题；而且 releaseAll 的调用方 acquire 本身就持着锁。
+func (c *virtualConn) takeLocked() connHandles {
+	h := connHandles{
+		subs:  make([]*runtime.Subscription, 0, len(c.subs)),
+		terms: make([]*terminal.Subscription, 0, len(c.terms)),
+	}
 	for _, sub := range c.subs {
-		subs = append(subs, sub)
+		h.subs = append(h.subs, sub)
 	}
 	c.subs = map[string]*runtime.Subscription{}
-	terms := make([]*terminal.Subscription, 0, len(c.terms))
 	for _, sub := range c.terms {
-		terms = append(terms, sub)
+		h.terms = append(h.terms, sub)
 	}
 	c.terms = map[string]*terminal.Subscription{}
-	c.bridge.mu.Unlock()
-	for _, sub := range subs {
-		sub.Close()
-	}
-	for _, sub := range terms {
-		sub.Close()
+	return h
+}
+
+// closeHandles 在锁外关闭句柄。
+func closeHandles(list []connHandles) {
+	for _, h := range list {
+		for _, sub := range h.subs {
+			sub.Close()
+		}
+		for _, sub := range h.terms {
+			sub.Close()
+		}
 	}
 }
 
@@ -382,13 +417,21 @@ func (c *virtualConn) connContext() context.Context { return c.ctx }
 
 // trackTerminal 实现 connSink。
 func (c *virtualConn) trackTerminal(id string, sub *terminal.Subscription) {
+	c.bridge.mu.Lock()
 	c.terms[id] = sub
+	c.bridge.mu.Unlock()
 }
 
 // dropTerminal 实现 connSink。
+// 与 dropSubscription 同形：锁内摘除，锁外关闭。
 func (c *virtualConn) dropTerminal(id string) {
-	if sub, ok := c.terms[id]; ok {
-		sub.Close()
+	c.bridge.mu.Lock()
+	sub, ok := c.terms[id]
+	if ok {
 		delete(c.terms, id)
+	}
+	c.bridge.mu.Unlock()
+	if ok {
+		sub.Close()
 	}
 }
