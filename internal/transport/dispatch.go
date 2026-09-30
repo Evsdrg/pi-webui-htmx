@@ -682,9 +682,9 @@ func (s *Server) dispatchWorkspace(ctx context.Context, r protocol.Request) (any
 			return nil, err
 		}
 		encoded := base64.StdEncoding.EncodeToString(body)
-		// base64 会把体积放大约 4/3，而 WS 单帧只有 512 KiB（留出封套后是
-		// wsTextBudget，与文本共用同一条预算）。超过时旧实现把整帧交给
-		// 连接层静默丢掉：命令看起来卡住，用户只看到超时（B33）。
+		// base64 会把体积放大约 4/3，而单条响应载荷的预算是 wsTextBudget
+		// （与文本共用）。超过时旧实现把整帧交给连接层静默丢掉：
+		// 命令看起来卡住，用户只看到超时（B33）。
 		// 这里明确拒绝，并指出不需要 base64 的那条通道。
 		if len(encoded) > wsTextBudget {
 			return nil, protocol.E("limit_exceeded", "图片过大，无法通过事件通道返回，请改用 /ui/file-image")

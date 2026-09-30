@@ -76,10 +76,13 @@ var SupportedMethods = []string{
 // 必须用同一个值（B53）。
 const wsReadLimit = protocol.BrowserFrameLimit
 
-// wsTextBudget 是 WS 响应里载荷的安全预算（文本与图片共用）。
-// 连接层单帧上限是 512 KiB，这里留出 JSON 封套与转义余量；
-// 文本超出即截断并标记 truncated，图片超出则明确拒绝——
-// 两者都不能把超限帧交给连接层（那会被静默丢掉）。
+// wsTextBudget 是**桥发出去**的单条响应载荷预算（文本与图片共用）。
+//
+// 这是产品预算，不是连接层限制：读方向的上限是 protocol.BrowserFrameLimit
+// （≈97 MiB，为了收得下图片附件），浏览器收帧则没有大小限制。
+// 之所以压到 448 KiB，是因为响应帧会被前端整块交给 JS 处理——
+// 一条几百 MB 的工具结果会让页面卡死，而这对用户毫无价值。
+// 文本超出即截断并标记 truncated，图片超出则明确拒绝（截断的图片没有意义）。
 const wsTextBudget = 448 << 10
 
 // Server 是 HTTP 与 WebSocket 入口，只做接入、鉴权与限额。
