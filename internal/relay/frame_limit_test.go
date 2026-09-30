@@ -2,8 +2,8 @@ package relay
 
 import (
 	"strings"
-	"sync/atomic"
 	"testing"
+	"time"
 
 	"pi-bridge-go/internal/protocol"
 )
@@ -43,28 +43,47 @@ func Test封装开销不随载荷内容放大(t *testing.T) {
 }
 
 // Test队列放行超过预算的单帧 覆盖 B53 的第三面：
-// 队列预算是 4 MiB，而合法的最大帧远大于它。旧实现按预算直接拒绝，
-// 于是最大的那批帧永远发不出去。放行线改用「预算与本帧大小的较大值」。
+// 队列预算是 4 MiB，而合法的最大帧远大于它。按预算直接拒绝会让
+// 最大的那批帧永远发不出去，所以大帧在**独占队列**时放行。
 func Test队列放行超过预算的单帧(t *testing.T) {
-	out := make(chan []byte, 4)
-	var queued atomic.Int64
+	o := newOutbound()
 	cancelled := false
 	cancel := func() { cancelled = true }
 
 	// 队列为空：大于预算的单帧必须放行。
 	big := make([]byte, maxQueueBytes+1)
-	enqueue(out, &queued, big, cancel)
+	o.send(big, cancel)
 	if cancelled {
 		t.Fatal("队列为空时，大于预算的单帧被拒——最大帧永远发不出去")
 	}
-	if len(out) != 1 {
-		t.Fatalf("帧没有入队，队列长度 %d", len(out))
+	if len(o.data) != 1 {
+		t.Fatalf("帧没有入队，队列长度 %d", len(o.data))
 	}
 
-	// 队列已占用：仍按预算约束，慢消费者不会无限堆积。
-	cancelled = false
-	enqueue(out, &queued, make([]byte, maxQueueBytes), cancel)
-	if !cancelled {
-		t.Fatal("队列已占用时，超预算的帧应当被拒并断开连接")
+	// 队列已占用：大帧要求独占，占用期间不放行也不立刻断连。
+	o2 := newOutbound()
+	o2.reserve(maxQueueBytes) // 模拟队列里已有等待写出的字节
+	done := make(chan struct{})
+	go func() { o2.send(make([]byte, maxQueueBytes+1), cancel); close(done) }()
+	select {
+	case <-done:
+		t.Fatal("队列非空时大帧应立即等待预算归还，而不是当场放弃")
+	case <-time.After(50 * time.Millisecond):
+	}
+	if cancelled {
+		t.Fatal("等待期间不应取消连接")
+	}
+	// 预算归还后它应当被放行。
+	o2.release(maxQueueBytes)
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("预算归还后大帧仍未送出")
+	}
+	if cancelled {
+		t.Fatal("预算已归还，连接不该被取消")
+	}
+	if len(o2.data) != 1 {
+		t.Fatalf("归还预算后大帧应入队，实际 %d", len(o2.data))
 	}
 }

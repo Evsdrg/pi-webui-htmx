@@ -12,7 +12,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/coder/websocket"
@@ -81,8 +80,7 @@ type tunnelConn struct {
 	ws       *websocket.Conn
 	ctx      context.Context
 	cancel   context.CancelFunc
-	out      chan []byte
-	queued   atomic.Int64
+	out      *outbound
 }
 
 // clientConn 是一条来自浏览器的连接。
@@ -94,8 +92,7 @@ type clientConn struct {
 	ws     *websocket.Conn
 	ctx    context.Context
 	cancel context.CancelFunc
-	out    chan []byte
-	queued atomic.Int64
+	out    *outbound
 }
 
 // routeFrame 是隧道与浏览器之间的最小路由封装。
@@ -531,7 +528,7 @@ func (s *Server) handleTunnel(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithCancel(context.Background())
 	t := &tunnelConn{
 		deviceID: deviceID, ws: ws, ctx: ctx, cancel: cancel,
-		out: make(chan []byte, 64),
+		out: newOutbound(),
 	}
 	s.tunnels[deviceID] = t
 	s.mu.Unlock()
@@ -544,7 +541,7 @@ func (s *Server) handleTunnel(w http.ResponseWriter, r *http.Request) {
 		s.mu.Unlock()
 		s.registry.SetOnline(deviceID, false)
 	}()
-	go pumpWrites(ctx, ws, t.out, &t.queued)
+	go pumpWrites(ctx, ws, t.out)
 	for {
 		typ, b, err := ws.Read(ctx)
 		if err != nil {
@@ -566,7 +563,7 @@ func (s *Server) handleTunnel(w http.ResponseWriter, r *http.Request) {
 		if target == nil {
 			continue
 		}
-		enqueue(target.out, &target.queued, rf.Data, target.cancel)
+		target.out.send(rf.Data, target.cancel)
 	}
 }
 
@@ -625,7 +622,7 @@ func (s *Server) handleClient(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithCancel(context.Background())
 	c := &clientConn{
 		deviceID: deviceID, clientID: clientID, owner: owner, ws: ws, ctx: ctx, cancel: cancel,
-		out: make(chan []byte, 64),
+		out: newOutbound(),
 	}
 	if old := s.findClientLocked(deviceID, clientID); old != nil {
 		// 同一 clientId 重连：旧连接立即让位，避免两处同时写入。
@@ -648,7 +645,7 @@ func (s *Server) handleClient(w http.ResponseWriter, r *http.Request) {
 		}
 		s.mu.Unlock()
 	}()
-	go pumpWrites(ctx, ws, c.out, &c.queued)
+	go pumpWrites(ctx, ws, c.out)
 	for {
 		typ, b, err := ws.Read(ctx)
 		if err != nil {
@@ -670,7 +667,7 @@ func (s *Server) handleClient(w http.ResponseWriter, r *http.Request) {
 		if wrapped == nil {
 			continue
 		}
-		enqueue(t.out, &t.queued, wrapped, t.cancel)
+		t.out.send(wrapped, t.cancel)
 	}
 }
 
@@ -684,57 +681,17 @@ func (s *Server) findClientLocked(deviceID, clientID string) *clientConn {
 	return nil
 }
 
-// enqueue 把一帧放入有界队列；满了就关闭该连接，绝不在 relay 里无限堆积。
-//
-// 放行线取「队列预算」与本帧大小的较大值：桥允许的最大帧（图片附件量级）
-// 不能被 4 MiB 的队列预算自己挤掉——否则最大的那批帧永远发不出去。队列
-// 非空时仍按预算约束堆积，慢消费者不会因为这条放宽而无限占内存。
-func enqueue(out chan []byte, queued *atomic.Int64, frame []byte, cancel context.CancelFunc) {
-	size := int64(len(frame))
-	limit := int64(maxQueueBytes)
-	if size > limit {
-		limit = size
-	}
-	if queued.Add(size) > limit {
-		queued.Add(-size)
-		cancel()
-		return
-	}
-	select {
-	case out <- frame:
-	case <-time.After(enqueueTimeout):
-		queued.Add(-int64(len(frame)))
-		cancel()
-	}
-}
-
-// pumpWrites 是单连接唯一写协程，保证 WS 写入串行化。
-func pumpWrites(ctx context.Context, ws *websocket.Conn, out chan []byte, queued *atomic.Int64) {
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case b := <-out:
-			queued.Add(-int64(len(b)))
-			wctx, cancel := context.WithTimeout(ctx, writeTimeout)
-			err := ws.Write(wctx, websocket.MessageText, b)
-			cancel()
-			if err != nil {
-				return
-			}
-		}
-	}
-}
-
 const (
 	// maxFrame 是 relay 允许的单帧上限。
 	//
 	// 它必须装得下桥允许浏览器发的最大帧（图片附件就是这个量级），再加上
 	// 转发时外面那层路由封装——relay 是转发器，比桥更小气只会把合法帧变成
 	// 「断隧道」（B53：这里曾写死 1 MiB）。
-	maxFrame       = protocol.BrowserFrameLimit + protocol.RelayEnvelopeBytes
-	maxQueueBytes  = 4 << 20
+	maxFrame = protocol.BrowserFrameLimit + protocol.RelayEnvelopeBytes
+	// enqueueTimeout 是「等预算归还」与「等通道有空位」的时间预算。
 	enqueueTimeout = 2 * time.Second
+	// enqueuePoll 是等不到归还通知时的兜底重试间隔。
+	enqueuePoll    = 5 * time.Millisecond
 	writeTimeout   = 10 * time.Second
 	userCookieName = "pi_relay_session"
 )
