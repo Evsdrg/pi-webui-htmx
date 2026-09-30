@@ -20,6 +20,12 @@ var errStopWalk = errors.New("stop walk")
 func isStopWalk(err error) bool { return errors.Is(err, errStopWalk) }
 
 // SearchLimits 约束全文搜索的规模，避免一次搜索拖垮桥。
+// MaxMatchesLimit 是一次搜索允许返回的命中数上限。
+// 客户端只能在这个范围内收紧或放宽，不能把默认值顶穿：
+// 每条命中都带摘要与元数据，这个数直接决定响应体积（B72）。
+const MaxMatchesLimit = 500
+
+// SearchLimits 约束一次搜索的资源占用。
 type SearchLimits struct {
 	MaxFiles     int
 	MaxFileBytes int64
@@ -65,6 +71,13 @@ func (s *Store) Search(ctx context.Context, query string, limits SearchLimits) (
 		return SearchResult{}, protocol.E("invalid_params", "搜索词过长")
 	}
 	needle := strings.ToLower(query)
+	// 命中数由搜索能力自己兜底：调用方只应该收紧或放宽，不能无上限（B72）。
+	if limits.MaxMatches <= 0 {
+		limits.MaxMatches = DefaultSearchLimits().MaxMatches
+	}
+	if limits.MaxMatches > MaxMatchesLimit {
+		limits.MaxMatches = MaxMatchesLimit
+	}
 	out := SearchResult{Matches: []Match{}}
 	scanned := 0
 	walkErr := walkDir(ctx, s.root, ".", 0, func(path string, size int64, _ time.Time) error {
