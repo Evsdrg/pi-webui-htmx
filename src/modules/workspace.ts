@@ -222,6 +222,14 @@ export class Workspace {
     return p;
   }
 
+  // releaseImageUrl 释放当前图片预览的 blob URL。换图已走 showPreview，
+  // 但关闭预览与销毁工作区以前只清 DOM，对象 URL 留到页面卸载（R01）。
+  private releaseImageUrl(): void {
+    if (!this.imageUrl) return;
+    URL.revokeObjectURL(this.imageUrl);
+    this.imageUrl = undefined;
+  }
+
   // fetchImage 取图片预览。不是图片、读取失败或已取消时返回 null，
   // 调用方据此回退到文本分支——不需要额外的「这是不是图片」往返。
   private async fetchImage(path: string, controller: AbortController): Promise<{ node: HTMLImageElement; url: string } | null> {
@@ -247,7 +255,7 @@ export class Workspace {
     const box = el('panel-preview');
     const existing = box.querySelector('pre');
     if (existing) existing.remove();
-    if (this.imageUrl && this.imageUrl !== imageUrl) { URL.revokeObjectURL(this.imageUrl); this.imageUrl = undefined; }
+    if (this.imageUrl && this.imageUrl !== imageUrl) this.releaseImageUrl();
     this.imageUrl = imageUrl;
     const pre = document.createElement('pre');
     pre.append(node);
@@ -296,6 +304,7 @@ export class Workspace {
       case 'files-refresh': await this.list(this.path || this.cwd); break;
       case 'file-close':
         this.generation++; this.previewRequest?.abort();
+        this.releaseImageUrl();
         // 图片预览用 <img> 顶掉了 #file-content，此时它已不在 DOM 里；
         // 直接 replaceChildren 会抛异常，关闭按钮就此失效（U12）。
         el('panel-preview').hidden = true;
@@ -307,5 +316,5 @@ export class Workspace {
     }
   }
   event(message: Message): void { if (message.kind !== 'response') this.terminal?.event(message.event, record(message.data)); }
-  dispose(): void { this.generation++; this.previewRequest?.abort(); this.abort.abort(); this.terminal?.dispose(); }
+  dispose(): void { this.generation++; this.previewRequest?.abort(); this.releaseImageUrl(); this.abort.abort(); this.terminal?.dispose(); }
 }

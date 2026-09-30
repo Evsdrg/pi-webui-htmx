@@ -56,3 +56,22 @@ it('换预览时释放上一张图的 blob URL', async () => {
   await vi.waitFor(() => expect(created.length).toBeGreaterThan(1));
   expect(revoked).toContain(created[0]);
 });
+
+it('关闭文件预览时释放图片 URL', async () => {
+  const { created, revoked } = stubBlobUrls();
+  mount();
+  document.querySelector<HTMLButtonElement>('[data-file-path]')!.click();
+  await vi.waitFor(() => expect(created.length).toBe(1));
+  // 关闭预览以前只清 DOM，对象 URL 留到页面卸载（R01）。
+  document.querySelector<HTMLButtonElement>('[data-action="file-close"]')!.click();
+  expect(revoked).toContain(created[0]);
+});
+
+it('销毁工作区时释放图片 URL', async () => {
+  const { created, revoked } = stubBlobUrls();
+  mount();
+  document.querySelector<HTMLButtonElement>('[data-file-path]')!.click();
+  await vi.waitFor(() => expect(created.length).toBe(1));
+  workspace.dispose();
+  expect(revoked).toContain(created[0]);
+});

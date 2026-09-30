@@ -30,8 +30,12 @@ export class EventCursor {
    */
   begin(epoch: string, seq = 0): void {
     if (!epoch) return;
+    const next = Number.isSafeInteger(seq) && seq > 0 ? seq : 0;
+    // 同 epoch 的确认不得让游标倒退：重订阅等竞态下迟到的确认
+    // 若把 seq 拉回去，已应用的事件会被重新接受一遍（U16）。
+    if (this.epoch === epoch && next < this.seq) return;
     this.epoch = epoch;
-    this.seq = Number.isSafeInteger(seq) && seq > 0 ? seq : 0;
+    this.seq = next;
   }
 
   accept(epoch: string, seq: number): boolean {

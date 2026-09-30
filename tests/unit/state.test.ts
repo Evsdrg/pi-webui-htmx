@@ -24,6 +24,18 @@ it('补发事件去重，且事件流不能自己切换 epoch', () => {
   expect(cursor.accept('a',99)).toBe(false);
   cursor.reset(); expect(cursor.seq).toBe(0);
 });
+it('迟到确认不让同 epoch 的游标倒退', () => {
+  const cursor = new EventCursor();
+  cursor.begin('a', 10);
+  expect(cursor.accept('a', 12)).toBe(true);
+  // 重订阅等竞态下，迟到的确认带着更小的 seq 回来：不得回退（U16）。
+  cursor.begin('a', 9);
+  expect(cursor.seq).toBe(12);
+  // 新 epoch 仍然无条件接管。
+  cursor.begin('b', 3);
+  expect(cursor.epoch).toBe('b');
+  expect(cursor.seq).toBe(3);
+});
 it('消息正文只读取文本块', () => { expect(messageText({content:[{type:'text',text:'正文'},{type:'toolCall',text:'不显示'}]})).toBe('正文'); expect(messageText({content:'用户文字'})).toBe('用户文字'); });
 it('草稿按会话隔离，数量和大小均有上限', () => { for (let i=0;i<12;i++) saveDraft(String(i),'x'.repeat(30_000)); expect(readDraft('0')).toBe(''); expect(readDraft('11')).toHaveLength(20_000); expect(JSON.parse(localStorage.getItem('pi-ui:drafts')!)).toHaveLength(8); saveDraft('11',''); expect(readDraft('11')).toBe(''); });
 it('损坏草稿与无效主题安全回退', () => { localStorage.setItem('pi-ui:drafts','{'); expect(readDraft('x')).toBe(''); applyTheme('unknown'); expect(document.documentElement.dataset.theme).toBeUndefined(); });

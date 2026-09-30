@@ -13,6 +13,8 @@ import type { Scope } from './scope';
 const DIALOGS = new Set(['select','confirm','input','editor']);
 const ABORT_PENDING_NOTICE = '已请求中止，等待 Pi 完成清理。';
 const SUBSCRIPTION_CHECK_NOTICE = '实时订阅已结束，正在核对任务状态。';
+// RESYNC_NOTICE：实时流不再可信、正从持久历史重建时的统一提示。
+const RESYNC_NOTICE = '实时事件已超出补发窗口，已重新读取历史；生成中的缺失内容将在本轮完成后同步。';
 
 // 长任务命令的等待上限，与桥 protocol/methods.go 的 Spec.Timeout 对应。
 // 桥侧给的时间更长，前端先放弃只会让用户以为失败（B66）。
@@ -446,20 +448,36 @@ export class Workbench {
   }
   private async subscribe(): Promise<void> {
     const id = this.sessionId; if (!id || this.subscribed === id) return;
+    // 归属在发起时固定：等待确认期间切了会话，迟到的确认不得改写
+    // 新会话的游标（U16）——事件帧已由 accept 挡住旧 epoch，
+    // 但确认帧此前没有守卫。
+    const scope = this.scope.current$();
     const saved = this.cursor.epoch ? { epoch: this.cursor.epoch, afterSeq: this.cursor.seq } : {};
     // 确认帧里的 epoch/seq 是权威起点：它是桥对「这条订阅属于哪个工作进程」
     // 的回答，也是游标唯一允许切换 epoch 的地方（U16）。
     const begin = (ack: { epoch?: string; seq?: number } | undefined): void => {
-      if (ack?.epoch) this.cursor.begin(ack.epoch, ack.seq ?? 0);
+      if (ack?.epoch && scope.alive()) this.cursor.begin(ack.epoch, ack.seq ?? 0);
     };
     try { begin(await this.request<{ epoch?: string; seq?: number }>('session.subscribe', saved, id)); } catch (error) {
       if (!(error instanceof BridgeError) || error.code !== 'resync_required') throw error;
-      if (id !== this.sessionId) return;
+      if (!scope.alive()) return;
       this.cursor.reset(); this.live.clear();
-      this.notice('实时事件已超出补发窗口，已重新读取历史；生成中的缺失内容将在本轮完成后同步。');
+      this.notice(RESYNC_NOTICE);
       await this.refreshHistory(); begin(await this.request<{ epoch?: string; seq?: number }>('session.subscribe', {}, id));
     }
     if (id === this.sessionId) this.subscribed = id;
+  }
+  // resyncFromStream 是「实时流不再可信、必须从持久历史重建」的统一入口。
+  // 三条路径共用它：桥明确要求重同步（resync_required）、订阅被关闭且
+  // 带 resyncRequired、事件因体积被省略（bridge.event_omitted，U15）。
+  // 只做只读重建：重读历史、重订、刷新扩展对话；绝不重发副作用命令。
+  private resyncFromStream(reason: string): void {
+    if (!this.sessionId) return;
+    this.subscribed = ''; this.cursor.reset(); this.live.clear();
+    this.notice(reason);
+    void this.refreshHistory().catch((err) => this.fail(err));
+    void this.refreshDialogs().catch((err) => this.fail(err));
+    if (this.bridge.connected) void this.reconcile().catch((err) => this.fail(err));
   }
   private async reconcile(): Promise<void> {
     const scope = this.scope.current$();
@@ -680,8 +698,11 @@ export class Workbench {
     if (message.sessionId !== this.sessionId) return;
     if (message.kind === 'control') {
       if (message.event === 'bridge.subscription_closed') {
+        // 提示仍保留到状态核对结束（既有语义）；resyncRequired 表示
+        // 订阅期间的事件可能已丢，另补一次持久历史重读（U15）。
         this.subscribed = '';
         if (this.run !== 'idle') this.notice(SUBSCRIPTION_CHECK_NOTICE);
+        if (record(message.data).resyncRequired === true) void this.refreshHistory().catch((err) => this.fail(err));
         if (this.bridge.connected) void this.reconcile().catch((err) => this.fail(err));
       }
       return;
@@ -689,6 +710,11 @@ export class Workbench {
     const event = message as EventMessage;
     if (!this.cursor.accept(event.epoch, event.seq)) return;
     if (event.event === 'worker.exited') { this.setRun('idle'); return; }
+    if (event.event === 'bridge.event_omitted') {
+      // 事件因体积被省略：流的连续性已断，别等到下一次 settled（U15）。
+      this.resyncFromStream('有事件因体积被省略，已重新读取历史以补齐内容。');
+      return;
+    }
     if (event.event !== 'pi.event') return;
     const data = record(event.data);
     this.setRun(runStateAfter(this.run, data));
@@ -920,13 +946,16 @@ export class Workbench {
   }
   private async answerDialog(form: HTMLFormElement, button: HTMLButtonElement | null): Promise<void> {
     const dialog = form.closest<HTMLDialogElement>('dialog')!;
+    // 归属在回复前固定：回执等待期间切了会话，迟到的成功与错误
+    // 都不得改动新会话的对话框、状态行或提示（U18）。
+    const scope = this.scope.current$();
     const params: Record<string, unknown> = { id: dialog.dataset.dialogId };
     if (!button || button.name === 'cancelled') params.cancelled = true;
     else if (button.name === 'confirmed') params.confirmed = button.value === 'true';
     else params.value = new FormData(form).get('value') ?? '';
     for (const btn of form.querySelectorAll('button')) btn.disabled = true;
-    try { await this.request('session.ui_response', params); dialog.close(); dialog.remove(); await this.refreshDialogs(); await this.reconcile(); }
-    catch (error) { this.fail(error); for (const btn of form.querySelectorAll('button')) btn.disabled = false; }
+    try { await this.request('session.ui_response', params); if (!scope.alive()) return; dialog.close(); dialog.remove(); await this.refreshDialogs(); await this.reconcile(); }
+    catch (error) { if (!scope.alive()) return; this.fail(error); for (const btn of form.querySelectorAll('button')) btn.disabled = false; }
   }
   private showCommands(): void {
     const menu = el('command-menu'); const value = el<HTMLTextAreaElement>('prompt').value;
@@ -963,7 +992,7 @@ export class Workbench {
         if (!this.branch) {
           const { BranchNavigator } = await import('./branch');
           if (this.abort.signal.aborted) return;
-          this.branch ??= new BranchNavigator(this.bridge, (err) => this.fail(err), (leafId) => this.gotoLeaf(leafId), (entryId) => void this.forkFrom(entryId), () => this.sessionId);
+          this.branch ??= new BranchNavigator(this.bridge, (err) => this.fail(err), (leafId) => this.gotoLeaf(leafId), (entryId) => void this.forkFrom(entryId), () => this.sessionId, this.abort.signal);
         }
         openDialog('branch-dialog');
         await this.branch.open();

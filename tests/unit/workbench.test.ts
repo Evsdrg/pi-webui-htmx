@@ -27,6 +27,10 @@ function emit(type: string, extra: Record<string, unknown> = {}) {
 function emitRaw(epoch: string, seq: number, data: Record<string, unknown>) {
  fake.instance!.dispatchEvent(new CustomEvent('message', { detail: { version:1,kind:'event',event:'pi.event',sessionId:'s1',epoch,seq,data } }));
 }
+// emitNamed 指定事件名：用于 bridge.event_omitted 这类非 pi.event 的流内事件。
+function emitNamed(event: string, data: Record<string, unknown>) {
+ fake.instance!.dispatchEvent(new CustomEvent('message', { detail: { version:1,kind:'event',event,sessionId:'s1',epoch:'test',seq:++sequence,data } }));
+}
 function mount() {
  document.body.innerHTML = `<form id=auth-form><input id=bridge-token><button>连接</button></form><dialog id=auth-dialog></dialog><div id=auth-error></div>
  <form id=composer><textarea id=prompt></textarea><div id=attachments hidden></div><p id=composer-drop hidden></p><input id=attach-input type=file><button id=send-button></button><button id=abort-button></button><select id=model-select><option value="">Pi 默认模型</option></select><select id=thinking-select></select><select id=tool-preset-quick><option value=chat-only>仅聊天</option><option value=read-only>只读</option><option value=default selected>默认</option><option value=full>完整</option></select></form>
@@ -1273,6 +1277,84 @@ describe('事件游标的 epoch 归属', () => {
     emitRaw('live-1', 6, { type: 'agent_start' });
     expect(cursor.seq).toBe(6);
     expect(cursor.epoch).toBe('live-1');
+  });
+});
+
+describe('实时流重同步与迟到回执的会话归属', () => {
+  // U16 残留：事件帧已挡住旧 epoch，但订阅确认此前没有会话代次守卫——
+  // A 会话的确认迟到回来时，仍会把新会话的游标改成 A 的 epoch。
+  it('迟到的订阅确认不改写新会话的游标', async () => {
+    const impl = fake.request.getMockImplementation()!;
+    let release: (() => void) | undefined;
+    fake.request.mockImplementation(async (method: string, sessionId: string, params?: unknown, timeout?: number) => {
+      if (method === 'session.subscribe' && sessionId === 's1') {
+        await new Promise<void>((resolve) => { release = resolve; });
+        return { subscribed: true, epoch: 'e-stale', seq: 40 };
+      }
+      return impl(method, sessionId, params, timeout);
+    });
+    const internal = workbench as unknown as { subscribed: string; subscribe(): Promise<void>; cursor: { epoch: string; seq: number }; selectSession(id: string, cwd: string, title: string, push?: boolean, entryId?: string, persisted?: boolean): void };
+    internal.subscribed = '';
+    const stale = internal.subscribe();
+    internal.selectSession('s2', '/w2', '另一个会话', false);
+    release!();
+    await stale;
+    expect(internal.cursor.epoch).not.toBe('e-stale');
+  });
+
+  // U15：桥明确要求重同步（补发超时）时只重订不够，中间事件已丢。
+  it('订阅被关闭且要求重同步时重读历史', async () => {
+    const internal = workbench as unknown as { subscribed: string; diskSession: boolean };
+    internal.diskSession = true; internal.subscribed = 's1';
+    const ajax = window.htmx.ajax as unknown as ReturnType<typeof vi.fn>;
+    ajax.mockClear();
+    fake.instance!.dispatchEvent(new CustomEvent('message', { detail: { version: 1, kind: 'control', event: 'bridge.subscription_closed', sessionId: 's1', data: { resyncRequired: true } } }));
+    await vi.waitFor(() => expect(ajax).toHaveBeenCalledWith('get', expect.stringContaining('/ui/sessions/s1/history'), expect.anything()));
+  });
+
+  // U15：事件因体积被省略时流已断开，等下一次 settled 会一直缺内容。
+  it('事件被省略时立即重读历史', async () => {
+    const internal = workbench as unknown as { diskSession: boolean };
+    internal.diskSession = true;
+    const ajax = window.htmx.ajax as unknown as ReturnType<typeof vi.fn>;
+    ajax.mockClear();
+    emitNamed('bridge.event_omitted', { type: 'pi.event', reason: '事件体积超过上限', resyncRequired: true });
+    await vi.waitFor(() => expect(ajax).toHaveBeenCalledWith('get', expect.stringContaining('/ui/sessions/s1/history'), expect.anything()));
+    expect(document.getElementById('connection-notice')!.textContent).toContain('体积');
+  });
+
+  // U18：回执等待期间切会话，迟到的错误不得写进新会话。
+  it('切会话后迟到的回执错误不写进新会话', async () => {
+    pending = ['dialog-1']; busy = true; emit('extension_ui_request', { id: 'dialog-1', method: 'input', title: '请输入' });
+    await vi.waitFor(() => expect(document.querySelector('#ext-dialog-slot input')).not.toBeNull());
+    const impl = fake.request.getMockImplementation()!;
+    let rejectResponse: ((error: Error) => void) | undefined;
+    fake.request.mockImplementation(async (method: string, sessionId: string, params?: unknown, timeout?: number) => {
+      if (method === 'session.ui_response') { await new Promise<void>((_, reject) => { rejectResponse = reject; }); }
+      return impl(method, sessionId, params, timeout);
+    });
+    const internal = workbench as unknown as { answerDialog(form: HTMLFormElement, button: HTMLButtonElement | null): Promise<void>; selectSession(id: string, cwd: string, title: string, push?: boolean, entryId?: string, persisted?: boolean): void };
+    const form = document.querySelector<HTMLFormElement>('#ext-dialog-slot form')!;
+    const submit = form.querySelector<HTMLButtonElement>('button[type=submit]')!;
+    const answered = internal.answerDialog(form, submit);
+    internal.selectSession('s2', '/w2', '另一个会话', false);
+    rejectResponse!(new Error('回执失败'));
+    await answered;
+    expect(document.getElementById('connection-notice')!.textContent).toBe('');
+  });
+
+  // R01：分支导航的监听绑在 signal 上；不传 signal 时销毁工作台
+  // 留着监听，已卸载的 DOM 仍会被迟到响应改写。
+  it('销毁工作台后分支面板的监听随之中止', async () => {
+    document.body.insertAdjacentHTML('beforeend', '<div id=branch-status></div><div id=branch-body></div>');
+    const internal = workbench as unknown as { action(action: string, button: HTMLElement): Promise<void>; branch?: unknown };
+    await internal.action('branch', document.createElement('button'));
+    expect(internal.branch).toBeTruthy();
+    const status = document.getElementById('branch-status')!;
+    expect(status.textContent).toContain('正在读取会话树');
+    workbench.dispose();
+    document.dispatchEvent(new CustomEvent('htmx:afterSwap', { detail: { target: { id: 'branch-body' } } }));
+    expect(status.textContent).toContain('正在读取会话树');
   });
 });
 
