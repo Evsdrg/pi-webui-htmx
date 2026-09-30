@@ -82,7 +82,10 @@ type Registry struct {
 	devices  map[string]*Device
 	attempts map[string]*attemptWindow
 	dirty    bool
-	closed   bool
+	// version 每次置脏自增，persist 靠它判断「写盘期间是否有新改动」，
+	// 决定能不能清脏（B78）。
+	version uint64
+	closed  bool
 }
 
 type attemptWindow struct {
@@ -104,6 +107,12 @@ func NewRegistry(dir string, limits Limits) (*Registry, error) {
 }
 
 func (r *Registry) path() string { return filepath.Join(r.dir, "devices.json") }
+
+// markDirty 记录有待写盘的改动；调用方必须已持有 r.mu。
+func (r *Registry) markDirty() {
+	r.dirty = true
+	r.version++
+}
 
 // load 只在启动时读一次小文件，不做全量扫描。
 func (r *Registry) load() error {
@@ -172,7 +181,7 @@ func (r *Registry) persist() error {
 	// 必须在锁内序列化：list 里是 *Device 指针，解锁后 SetOnline
 	// 会与 marshal 并发读写同一字段（B22，-race 已复现）。
 	b, err := json.MarshalIndent(list, "", "  ")
-	r.dirty = false
+	version := r.version
 	r.mu.Unlock()
 	if err != nil {
 		return err
@@ -181,7 +190,17 @@ func (r *Registry) persist() error {
 	if err := os.WriteFile(tmp, b, 0600); err != nil {
 		return err
 	}
-	return os.Rename(tmp, r.path())
+	if err := os.Rename(tmp, r.path()); err != nil {
+		return err
+	}
+	// 落盘成功之后才清脏，而且只清「写下的就是当前状态」那一份：
+	// 写盘期间又发生的改动要留给下一次（B78）。
+	r.mu.Lock()
+	if r.version == version {
+		r.dirty = false
+	}
+	r.mu.Unlock()
+	return nil
 }
 
 func randomID(prefix string, n int) (string, error) {
@@ -242,7 +261,7 @@ func (r *Registry) Register(deviceID, name string) (string, error) {
 		existing.Name = name
 		existing.LastSeen = time.Now().UTC()
 	}
-	r.dirty = true
+	r.markDirty()
 	return code, nil
 }
 
@@ -303,7 +322,7 @@ func (r *Registry) Claim(owner, code string) (*Device, string, error) {
 	if r.limits.ClaimTTL > 0 && time.Since(target.PairingAt) > r.limits.ClaimTTL {
 		target.PairingCode = ""
 		target.PairingAt = time.Time{}
-		r.dirty = true
+		r.markDirty()
 		return nil, "", protocol.E("not_found", "配对码已过期")
 	}
 	token, err := randomID("dev_", 24)
@@ -314,7 +333,7 @@ func (r *Registry) Claim(owner, code string) (*Device, string, error) {
 	target.PairingCode = ""
 	target.ClaimedAt = time.Now().UTC()
 	target.LastSeen = time.Now().UTC()
-	r.dirty = true
+	r.markDirty()
 	out := *target
 	return &out, token, nil
 }
@@ -345,7 +364,7 @@ func (r *Registry) SetDeviceToken(deviceID, token string) error {
 		return protocol.E("not_found", "设备不存在")
 	}
 	d.TokenHash = hashToken(token)
-	r.dirty = true
+	r.markDirty()
 	return nil
 }
 
@@ -392,7 +411,7 @@ func (r *Registry) Revoke(owner, deviceID string) error {
 		return protocol.E("not_found", "设备不存在")
 	}
 	delete(r.devices, deviceID)
-	r.dirty = true
+	r.markDirty()
 	return nil
 }
 
