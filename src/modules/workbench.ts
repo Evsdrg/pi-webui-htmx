@@ -465,7 +465,23 @@ export class Workbench {
       this.notice(RESYNC_NOTICE);
       await this.refreshHistory(); begin(await this.request<{ epoch?: string; seq?: number }>('session.subscribe', {}, id));
     }
-    if (id === this.sessionId) this.subscribed = id;
+    if (id === this.sessionId) {
+      this.subscribed = id;
+      void this.pullExtensionStatus(scope).catch(() => {});
+    }
+  }
+  // pullExtensionStatus 在订阅确认后补齐扩展状态行。
+  // 桥把 setStatus 记在 worker 上（B36），所以页面加载、重订阅与
+  // 重连后都能拿到已发生的状态行，不必等插件下次 setStatus。
+  // 只补本地缺的 key：快照可能比已收到的 WS 增量旧，覆盖会让状态倒退。
+  private async pullExtensionStatus(scope: Scope): Promise<void> {
+    const data = await this.request<{ epoch?: string; statuses?: Record<string, string> }>('session.ext_status');
+    if (!scope.alive()) return;
+    for (const [key, value] of Object.entries(record(data.statuses))) {
+      const line = text(value).slice(0, 2048);
+      if (line && !this.statuses.has(key) && this.statuses.size < 64) this.statuses.set(key, line);
+    }
+    this.renderExtensions();
   }
   // resyncFromStream 是「实时流不再可信、必须从持久历史重建」的统一入口。
   // 三条路径共用它：桥明确要求重同步（resync_required）、订阅被关闭且

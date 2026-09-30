@@ -19,7 +19,7 @@ let workbench: Workbench;
 let pending: string[];
 let busy: boolean;
 let sequence: number;
-const methods = ['session.start','session.prompt','session.abort','session.fork','session.subscribe','session.set_model','sessions.search','worker.list','session.state','session.thinking_levels','session.pending_dialogs','session.ui_response','session.stats','session.set_queue_mode','session.set_thinking','session.stop','session.set_auto_compaction','session.set_auto_retry','session.abort_retry','session.export_html','session.compact','session.bash','config.models.raw','config.models.write','config.models.discover','config.models.test'];
+const methods = ['session.start','session.prompt','session.abort','session.fork','session.subscribe','session.set_model','sessions.search','worker.list','session.state','session.thinking_levels','session.pending_dialogs','session.ext_status','session.ui_response','session.stats','session.set_queue_mode','session.set_thinking','session.stop','session.set_auto_compaction','session.set_auto_retry','session.abort_retry','session.export_html','session.compact','session.bash','config.models.raw','config.models.write','config.models.discover','config.models.test'];
 function emit(type: string, extra: Record<string, unknown> = {}) {
  fake.instance!.dispatchEvent(new CustomEvent('message', { detail: { version:1,kind:'event',event:'pi.event',sessionId:'s1',epoch:'test',seq:++sequence,data:{type,...extra} } }));
 }
@@ -1355,6 +1355,40 @@ describe('实时流重同步与迟到回执的会话归属', () => {
     workbench.dispose();
     document.dispatchEvent(new CustomEvent('htmx:afterSwap', { detail: { target: { id: 'branch-body' } } }));
     expect(status.textContent).toContain('正在读取会话树');
+  });
+});
+
+describe('扩展状态行快照', () => {
+  // B36：桥把 setStatus 记在 worker 上；前端在订阅确认后补齐。
+  // 老实现是桥侧的全局表且只在转发路径更新，页面加载时拿不到已发生的状态行。
+  it('订阅确认后补齐扩展状态行', async () => {
+    const impl = fake.request.getMockImplementation()!;
+    fake.request.mockImplementation(async (method: string, sessionId: string, params?: unknown, timeout?: number) => {
+      if (method === 'session.ext_status') return { epoch: 'e1', statuses: { mc: 'mc: 3 (1%) · idle' } };
+      return impl(method, sessionId, params, timeout);
+    });
+    const internal = workbench as unknown as { subscribed: string; statuses: Map<string, string>; subscribe(): Promise<void> };
+    internal.subscribed = '';
+    await internal.subscribe();
+    await vi.waitFor(() => expect(internal.statuses.get('mc')).toBe('mc: 3 (1%) · idle'));
+    expect(document.getElementById('ext-status-slot')!.textContent).toContain('mc: 3');
+  });
+
+  it('快照不覆盖已收到的新状态', async () => {
+    const internal = workbench as unknown as { subscribed: string; statuses: Map<string, string>; subscribe(): Promise<void> };
+    internal.subscribed = '';
+    // 先收到一条更新的 WS 增量（同一 key）。
+    emit('extension_ui_request', { method: 'setStatus', statusKey: 'mc', statusText: 'mc: 20 (9%) · running' });
+    const impl = fake.request.getMockImplementation()!;
+    fake.request.mockImplementation(async (method: string, sessionId: string, params?: unknown, timeout?: number) => {
+      if (method === 'session.ext_status') return { epoch: 'e1', statuses: { mc: 'mc: 3 (1%) · idle', extra: '额外行' } };
+      return impl(method, sessionId, params, timeout);
+    });
+    await internal.subscribe();
+    await vi.waitFor(() => expect(fake.request).toHaveBeenCalledWith('session.ext_status', 's1', undefined, 30_000));
+    // 较旧的快照只能补缺，不能把已更新的值拉回去；缺的 key 仍然补上。
+    expect(internal.statuses.get('mc')).toBe('mc: 20 (9%) · running');
+    await vi.waitFor(() => expect(internal.statuses.get('extra')).toBe('额外行'));
   });
 });
 

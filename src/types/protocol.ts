@@ -109,6 +109,7 @@ export type Method =
   | "session.bash_output"
   | "session.ui_response"
   | "session.pending_dialogs"
+  | "session.ext_status"
   | "session.stats"
   | "session.set_name"
   | "session.last_assistant"
