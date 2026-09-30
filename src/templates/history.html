@@ -1,7 +1,7 @@
 {{/* 分页控件独立交换；历史正文只含回合，旧内容始终插到顶部。 */}}
 <div id="older-slot" hx-swap-oob="innerHTML">
 {{if .HasMore}}<div class="older"><button class="btn" id="older-sentinel"
- hx-get="/ui/sessions/{{.SessionID}}/history?before={{.OldestEntryID}}&amp;leafId={{.LeafID}}"
+ hx-get="ui/sessions/{{.SessionID}}/history?before={{.OldestEntryID}}&amp;leafId={{.LeafID}}"
  hx-target="#turns" hx-swap="afterbegin" hx-sync="this:drop" hx-disabled-elt="this">↑ 加载更早的消息</button></div>{{end}}
 </div>
 <span hidden data-history-model-provider="{{if .HistoricalModel}}{{.HistoricalModel.Provider}}{{end}}" data-history-model-id="{{if .HistoricalModel}}{{.HistoricalModel.ID}}{{end}}"></span>
@@ -29,7 +29,7 @@
       <span class="thinking-preview">查看思考过程</span>
       {{if .Duration}}<span class="thinking-duration">{{.Duration}}s</span>{{end}}
     </summary>
-    <div class="thinking-body"><button class="lazy-block" data-lazy="thinking" data-entry-id="{{.EntryID}}" data-block-index="{{.BlockIndex}}" hx-get="/ui/sessions/{{$.SessionID}}/lazy?kind=thinking&amp;format=html&amp;entryId={{.EntryID}}&amp;blockIndex={{.BlockIndex}}" hx-target="this" hx-swap="outerHTML" hx-sync="this:drop" hx-disabled-elt="this">载入思考内容</button></div>
+    <div class="thinking-body"><button class="lazy-block" data-lazy="thinking" data-entry-id="{{.EntryID}}" data-block-index="{{.BlockIndex}}" hx-get="ui/sessions/{{$.SessionID}}/lazy?kind=thinking&amp;format=html&amp;entryId={{.EntryID}}&amp;blockIndex={{.BlockIndex}}" hx-target="this" hx-swap="outerHTML" hx-sync="this:drop" hx-disabled-elt="this">载入思考内容</button></div>
   </details>{{end}}{{end}}
   {{if $turn.AssistantText}}<div class="turn-assistant"><span class="role" role="img" aria-label="Pi 助手">π</span><div class="bubble markdown">{{$turn.AssistantText}}</div></div>{{end}}
   {{if $turn.Error}}<div class="turn-error">{{$turn.Error}}</div>{{end}}

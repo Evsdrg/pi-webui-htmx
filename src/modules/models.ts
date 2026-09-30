@@ -539,7 +539,7 @@ export class ModelsEditor {
     const result = el('catalog-result');
     const q = query ?? el<HTMLInputElement>('catalog-query').value.trim();
     result.dataset.requestScope = String(++this.probeSequence);
-    await window.htmx.ajax('post', '/ui/models/catalog', {
+    await window.htmx.ajax('post', 'ui/models/catalog', {
       source: result, target: result, swap: 'innerHTML', values: { q },
     });
   }

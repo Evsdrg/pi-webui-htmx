@@ -5,9 +5,13 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="light dark">
 <title>Pi · 工作台</title>
-{{range .CSS}}<link rel="stylesheet" href="/assets/{{.}}">{{end}}
+{{/* 文档基地址：设备前缀部署时是 /d/{id}/，本地是 /。
+     下面所有相对 URL（含前端脚本里的）都相对它解析，因此同一份产物
+     在两种形态下都指向正确的前缀（B54）。 */}}
+<base href="{{.Base}}">
+{{range .CSS}}<link rel="stylesheet" href="assets/{{.}}">{{end}}
 {{/* 拆出去的供应商分块（htmx）与入口并行拉取，避免多一个往返。 */}}
-{{range .Preload}}<link rel="modulepreload" href="/assets/{{.}}">{{end}}
+{{range .Preload}}<link rel="modulepreload" href="assets/{{.}}">{{end}}
 </head>
 <body data-session-id="{{.SessionID}}" hx-history="false">
 <a class="skip-link" href="#prompt">跳到消息输入框</a>
@@ -20,7 +24,7 @@
 <button class="btn new-session" data-action="new" id="new-session-btn" title=""><span aria-hidden="true">＋</span> <span class="new-session-cwd" id="new-session-cwd">新建会话</span> <kbd>⌘ K</kbd></button>
     <label class="search-box"><span aria-hidden="true">⌕</span><input id="session-search" type="search" placeholder="搜索会话" aria-label="搜索会话" autocomplete="off"></label>
     <div class="section-label">会话 <span id="session-count"></span><button class="icon-btn" data-action="refresh-sessions" aria-label="刷新会话">↻</button></div>
-    <input type="hidden" id="search-query" name="q" value=""><span hidden hx-get="/ui/search" hx-trigger="search-refresh from:body" hx-target="#session-list" hx-swap="innerHTML" hx-include="#search-query"></span><nav id="session-list" aria-label="会话列表" hx-get="/ui/sessions" hx-trigger="sessions-refresh from:body" hx-swap="innerHTML"><p class="empty-note">连接后显示本地会话</p></nav>
+    <input type="hidden" id="search-query" name="q" value=""><span hidden hx-get="ui/search" hx-trigger="search-refresh from:body" hx-target="#session-list" hx-swap="innerHTML" hx-include="#search-query"></span><nav id="session-list" aria-label="会话列表" hx-get="ui/sessions" hx-trigger="sessions-refresh from:body" hx-swap="innerHTML"><p class="empty-note">连接后显示本地会话</p></nav>
     <!-- 文件浏览器常驻侧栏下半，与会话列表同属一个 landmark。
          分隔条可拖动调整两区高度；折叠态只留一行标题栏，
          点一下展开——不占会话列表的空间。 -->
@@ -35,7 +39,7 @@
       </header>
       <div class="sidebar-files-body" id="sidebar-files-body">
         <input type="hidden" id="files-path" name="path" value="">
-        <nav id="file-list" hx-sync="this:replace" aria-label="文件列表" hx-get="/ui/files" hx-trigger="files-refresh from:body" hx-include="#files-path" hx-swap="innerHTML"><p class="empty-note">连接后显示工作区文件</p></nav>
+        <nav id="file-list" hx-sync="this:replace" aria-label="文件列表" hx-get="ui/files" hx-trigger="files-refresh from:body" hx-include="#files-path" hx-swap="innerHTML"><p class="empty-note">连接后显示工作区文件</p></nav>
       </div>
     </section>
     <footer class="sidebar-footer"><button class="btn btn-quiet" data-action="settings">⚙ 设置与扩展</button><span id="conn-state" class="state state-offline" role="status">连接中</span></footer>
@@ -70,7 +74,7 @@
     <section id="panel-info" class="top-panel" hidden>
       <button class="icon-btn panel-close" type="button" data-action="panel-info-close" aria-label="关闭会话信息">×</button>
       <input type="hidden" id="stats-session" name="sessionId" value="">
-      <div id="stats-body" hx-sync="this:replace" hx-get="/ui/stats" hx-trigger="stats-refresh from:body" hx-include="#stats-session" hx-swap="innerHTML"><p class="muted">打开时读取会话详情。</p></div>
+      <div id="stats-body" hx-sync="this:replace" hx-get="ui/stats" hx-trigger="stats-refresh from:body" hx-include="#stats-session" hx-swap="innerHTML"><p class="muted">打开时读取会话详情。</p></div>
     </section>
     <section id="panel-title" class="top-panel" hidden>
       <header><strong>生成标题</strong><button class="icon-btn" type="button" data-action="panel-title-close" aria-label="关闭生成标题">×</button></header>
@@ -85,7 +89,7 @@
     <section id="panel-system" class="top-panel" hidden>
       <button class="icon-btn panel-close" type="button" data-action="panel-system-close" aria-label="关闭系统面板">×</button>
       <input type="hidden" id="system-session" name="sessionId" value="">
-      <div id="system-body" hx-sync="this:replace" hx-get="/ui/system" hx-trigger="system-refresh from:body" hx-include="#system-session" hx-swap="innerHTML" title="Pi 的 RPC 不直接暴露系统提示词；此处内容来自一次按需导出的会话快照。"><p class="muted">打开时读取。</p></div>
+      <div id="system-body" hx-sync="this:replace" hx-get="ui/system" hx-trigger="system-refresh from:body" hx-include="#system-session" hx-swap="innerHTML" title="Pi 的 RPC 不直接暴露系统提示词；此处内容来自一次按需导出的会话快照。"><p class="muted">打开时读取。</p></div>
     </section>
     <section id="panel-mc" class="top-panel" hidden>
       <button class="icon-btn panel-close" type="button" data-action="panel-mc-close" aria-label="关闭记忆面板">×</button>
@@ -101,12 +105,12 @@
         <input type="hidden" id="mc-category" name="category" value="">
         <input type="hidden" id="mc-project" name="project" value="">
       </div>
-      <div id="mc-body" hx-get="/ui/mc" hx-trigger="mc-refresh from:body" hx-include="#mc-fields" hx-swap="innerHTML"><p class="config-empty">正在读取 magic-context 存储…</p></div>
+      <div id="mc-body" hx-get="ui/mc" hx-trigger="mc-refresh from:body" hx-include="#mc-fields" hx-swap="innerHTML"><p class="config-empty">正在读取 magic-context 存储…</p></div>
     </section>
     <section id="panel-tools" class="top-panel" hidden>
       <button class="icon-btn panel-close" type="button" data-action="panel-tools-close" aria-label="关闭工具面板">×</button>
       <input type="hidden" id="tools-session" name="sessionId" value="">
-      <div id="tools-body" hx-sync="this:replace" hx-get="/ui/tools" hx-trigger="tools-refresh from:body" hx-include="#tools-session" hx-swap="innerHTML" title="以下是本次工作进程实际暴露给模型的工具，随启动时的工具预设与已装扩展变化。"><p class="muted">打开时读取。</p></div>
+      <div id="tools-body" hx-sync="this:replace" hx-get="ui/tools" hx-trigger="tools-refresh from:body" hx-include="#tools-session" hx-swap="innerHTML" title="以下是本次工作进程实际暴露给模型的工具，随启动时的工具预设与已装扩展变化。"><p class="muted">打开时读取。</p></div>
     </section>
     <div id="connection-notice" class="notice" role="status" hidden></div>
     <div id="history-scope" class="history-scope" hidden><span>仅显示所选位置以前的历史；发送仍沿会话当前分支继续。</span><button class="btn-quiet" type="button" data-action="branch-current">返回最新</button></div>
@@ -134,7 +138,7 @@
         </div>
         <div class="composer-actions">
           <button class="icon-btn" type="button" data-action="attach" aria-label="添加图片附件" title="添加图片附件">＋</button><input id="attach-input" type="file" accept="image/png,image/jpeg,image/gif,image/webp" multiple hidden>
-          <label class="select-label model-control"><span class="sr-only">模型</span><select id="model-select" name="model" aria-label="模型" hx-get="/ui/models" hx-trigger="models-refresh from:body"><option value="">Pi 默认模型</option></select></label>
+          <label class="select-label model-control"><span class="sr-only">模型</span><select id="model-select" name="model" aria-label="模型" hx-get="ui/models" hx-trigger="models-refresh from:body"><option value="">Pi 默认模型</option></select></label>
           {{/* 模型配置的入口。它刻意不在「设置与扩展」里：那里面是本机外观与已装扩展，
                模型是随会话切换的东西，放在选它的地方旁边才不会找错地方。 */}}
           <button class="icon-btn" type="button" data-action="models-edit" aria-label="编辑模型配置" title="编辑模型配置（models.json）"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M16 18l6-6-6-6M8 6l-6 6 6 6"/></svg></button>
@@ -156,7 +160,7 @@
          而是「有东西可看时才出现」的那一个。 */}}<button role="tab" id="tab-preview" aria-controls="panel-preview" aria-selected="false" data-panel="preview" hidden>预览</button><button role="tab" id="tab-git" aria-controls="panel-git" aria-selected="true" data-panel="git">变更</button><button role="tab" id="tab-terminal" aria-controls="panel-terminal" aria-selected="false" data-panel="terminal">终端</button></div>
     <section id="panel-preview" role="tabpanel" aria-labelledby="tab-preview" hidden><div class="panel-header"><strong id="file-name"></strong><button class="icon-btn" data-action="file-close" aria-label="关闭文件">×</button></div><pre><code id="file-content"></code></pre></section>
     
-    <section id="panel-git" role="tabpanel" aria-labelledby="tab-git" hidden><input type="hidden" id="git-path" name="path" value=""><input type="hidden" id="diff-path" name="path" value=""><button class="btn" data-action="git-refresh">刷新变更</button><div id="git-status" hx-get="/ui/git-status" hx-trigger="git-status-refresh from:body" hx-include="#git-path" hx-swap="innerHTML"></div><div id="git-diff" hx-get="/ui/diff" hx-trigger="diff-refresh from:body" hx-include="#diff-path" hx-swap="innerHTML"></div></section>
+    <section id="panel-git" role="tabpanel" aria-labelledby="tab-git" hidden><input type="hidden" id="git-path" name="path" value=""><input type="hidden" id="diff-path" name="path" value=""><button class="btn" data-action="git-refresh">刷新变更</button><div id="git-status" hx-get="ui/git-status" hx-trigger="git-status-refresh from:body" hx-include="#git-path" hx-swap="innerHTML"></div><div id="git-diff" hx-get="ui/diff" hx-trigger="diff-refresh from:body" hx-include="#diff-path" hx-swap="innerHTML"></div></section>
     <section id="panel-terminal" role="tabpanel" aria-labelledby="tab-terminal" hidden><div class="terminal-actions"><button class="btn" data-action="terminal-open">启动终端</button><button class="btn" data-action="terminal-close">关闭终端</button></div><p id="terminal-notice" class="empty-note">终端仅在启动后占用资源。</p><div id="terminal-mount"></div></section>
   </aside>
 </div>
@@ -172,7 +176,7 @@
       <!-- 输入/请求路径与最后成功浏览路径分开，OOB仅更新后者。 -->
 <input type="hidden" id="dir-current" value="">
 <input type="hidden" id="dir-request" name="path" value="">
-<div class="dir-list" id="dir-list" hx-get="/ui/dirs" hx-include="#dir-request" hx-trigger="dirs-refresh from:body" hx-swap="innerHTML"><p class="empty-note">正在读取目录…</p></div>
+<div class="dir-list" id="dir-list" hx-get="ui/dirs" hx-include="#dir-request" hx-trigger="dirs-refresh from:body" hx-swap="innerHTML"><p class="empty-note">正在读取目录…</p></div>
       <footer class="dir-dialog-foot">
         <p class="muted">浏览页面不会启动 Pi；发送第一条消息时才创建工作进程。只能在工作区根内浏览。</p>
         <div class="dialog-actions"><button class="btn" type="button" data-close-dialog>取消</button><button class="btn btn-primary" type="submit" id="dir-use" disabled>使用此目录</button></div>
@@ -217,7 +221,7 @@
               <div class="config-actions"><button class="config-btn" type="button" data-action="packages-refresh">重新读取</button></div>
             </div>
             <p class="config-note">清单来自桥所在机器的 Pi 配置。包由 Pi 自己加载，这里只做展示；安装与卸载请直接改 <code>settings.json</code> 的 <code>packages</code>。</p>
-            <div id="packages-slot" hx-get="/ui/packages" hx-trigger="packages-refresh from:body"><p class="config-empty">正在读取已安装清单…</p></div>
+            <div id="packages-slot" hx-get="ui/packages" hx-trigger="packages-refresh from:body"><p class="config-empty">正在读取已安装清单…</p></div>
           </section>
         </div>
       </div>
@@ -314,14 +318,14 @@
 <div class="config-actions"><button class="btn" data-action="branch-refresh">刷新</button><button class="btn" data-action="branch-current">回到当前分支</button></div>
 <p id="branch-status" class="form-error" role="alert"></p>
 <input type="hidden" id="branch-session" name="sessionId" value="">
-<div id="branch-body" hx-get="/ui/branch" hx-trigger="branch-refresh from:body" hx-include="#branch-session" hx-swap="innerHTML" hx-sync="this:drop">
+<div id="branch-body" hx-get="ui/branch" hx-trigger="branch-refresh from:body" hx-include="#branch-session" hx-swap="innerHTML" hx-sync="this:drop">
 <section id="branch-tree" class="branch-tree" aria-live="polite"></section>
 <h3>可分支的用户消息</h3>
 <section id="branch-forks" class="branch-forks" aria-live="polite"></section>
 </div>
 </dialog>
-<input type="hidden" id="dialogs-session" name="sessionId" value=""><div id="ext-dialog-slot" hx-get="/ui/extensions/dialogs" hx-trigger="dialogs-refresh from:body" hx-include="#dialogs-session" hx-swap="innerHTML"></div>
+<input type="hidden" id="dialogs-session" name="sessionId" value=""><div id="ext-dialog-slot" hx-get="ui/extensions/dialogs" hx-trigger="dialogs-refresh from:body" hx-include="#dialogs-session" hx-swap="innerHTML"></div>
 <div id="toast-root" class="toast-root" aria-live="polite" aria-atomic="false"></div>
-{{range .JS}}<script type="module" src="/assets/{{.}}"></script>{{end}}
+{{range .JS}}<script type="module" src="assets/{{.}}"></script>{{end}}
 </body>
 </html>

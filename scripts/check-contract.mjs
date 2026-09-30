@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // 检查模板结构与生产产物；交互接线由 tests/unit 和浏览器验收负责。
-import { readFileSync, existsSync } from 'node:fs';
+import { readFileSync, existsSync, readdirSync } from 'node:fs';
 import { dirname, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { gzipSync } from 'node:zlib';
@@ -36,6 +36,23 @@ for(const [name,relative] of Object.entries(manifest.templates??{})){
  });
  if(decls.length!==1||!/11px/.test(decls[0]))fail(`.tool-call 的 font-size 应只声明一次且为 11px，实际 ${JSON.stringify(decls)}`);
  ok('工具块字号只有一处声明');
+}
+
+// 模板里的请求 URL 必须是相对的（B54）：云端形态下文档在
+// relay 的 `/d/{deviceId}/` 前缀下，根绝对路径会绕过设备前缀。
+// 允许的例外是以 `{{` 开头（由桥注入）或已带前缀的写法。
+{
+ const dir=resolve(root,'src/templates');
+ const files=[];
+ const walk=(d)=>{for(const e of readdirSync(d,{withFileTypes:true})){const p=resolve(d,e.name);e.isDirectory()?walk(p):e.name.endsWith('.html')&&files.push(p);}};
+ walk(dir);
+ for(const file of files){
+  const body=readFileSync(file,'utf8');
+  for(const mm of body.matchAll(/\b(hx-(?:get|post|put|delete)|action)="(\/[^"]*)"/g)){
+   fail(`${file.replace(root+'/','')} 里的 ${mm[1]} 是根绝对路径：${mm[2]}（应写成相对路径）`);
+  }
+ }
+ ok('模板请求 URL 都是相对路径');
 }
 
 // app.css 里引用的自定义属性必须在 tokens.css 或 app.css 里有定义。

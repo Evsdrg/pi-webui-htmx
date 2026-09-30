@@ -5,6 +5,10 @@ import { resolve } from "node:path";
 // Vite 只负责 JS/CSS。Go 模板在 src/templates/，由桥渲染，
 // Vite 不碰它们——但 Tailwind 需要扫描它们才能产出用到的类。
 export default defineConfig({
+  // 相对 base：产物里的动态 import 预加载（Vite 生成的 assetsURL）
+  // 因此基于 import.meta.url 解析，而不是写死 `/assets/…`。
+  // 云端形态下文档在 `/d/{deviceId}/`，根绝对路径会绕过设备前缀（B54）。
+  base: './',
   plugins: [tailwindcss()],
   resolve: {
     alias: {

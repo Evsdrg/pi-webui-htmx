@@ -81,5 +81,5 @@ it('目录查询把输入作为 q 交给桥', async () => {
   vi.stubGlobal('htmx', { ajax, trigger: vi.fn() });
   input('catalog-query').value = 'deepseek';
   await editor.catalog();
-  expect(ajax).toHaveBeenCalledWith('post', '/ui/models/catalog', expect.objectContaining({ values: { q: 'deepseek' } }));
+  expect(ajax).toHaveBeenCalledWith('post', 'ui/models/catalog', expect.objectContaining({ values: { q: 'deepseek' } }));
 });

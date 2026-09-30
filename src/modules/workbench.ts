@@ -8,6 +8,7 @@ import type { TopbarHost } from './topbar';
 import { closeDialog, el, openDialog } from './dom';
 import { mountFragmentRequests } from './fragment-requests';
 import { SessionScope } from './scope';
+import { relativeSocketUrl } from '../lib/url';
 import type { Scope } from './scope';
 
 const DIALOGS = new Set(['select','confirm','input','editor']);
@@ -35,7 +36,10 @@ function knownModel(model: State['model']): model is ModelChoice {
 }
 
 export class Workbench {
-  readonly bridge = new BridgeClient(`${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}/api/v1/ws`);
+  // WS 端点用**相对路径**解析：本地形态下是 `{host}/api/v1/ws`，
+  // 经 relay 的设备前缀形态下是 `{host}/d/{id}/api/v1/ws`——
+  // 同一份产物在两种部署下都指向正确的前缀（B54）。
+  readonly bridge = new BridgeClient(relativeSocketUrl('api/v1/ws'));
   private capabilities = new Set<Method>();
   private abort = new AbortController();
   private sessionId = document.body.dataset.sessionId ?? '';
@@ -361,7 +365,7 @@ export class Workbench {
 
   private async authenticate(): Promise<void> {
     try {
-      const response = await fetch('/api/v1/capabilities', { cache: 'no-store' });
+      const response = await fetch('api/v1/capabilities', { cache: 'no-store' });
       if (response.status === 401) { this.showLogin(); return; }
       if (!response.ok) throw new Error(`读取桥能力失败（${response.status}）`);
       const caps = await response.json() as Capabilities;
@@ -379,7 +383,7 @@ export class Workbench {
     const button = el<HTMLButtonElement>('auth-form').querySelector('button')!;
     button.disabled = true; el('auth-error').textContent = '';
     try {
-      const response = await fetch('/api/v1/auth', { method: 'POST', headers: { Authorization: `Bearer ${input.value}` } });
+      const response = await fetch('api/v1/auth', { method: 'POST', headers: { Authorization: `Bearer ${input.value}` } });
       if (!response.ok) throw new Error(response.status === 401 ? '令牌无效，请重试。' : `登录失败（${response.status}）`);
       input.value = ''; await this.authenticate();
     } catch (error) { el('auth-error').textContent = error instanceof Error ? error.message : '登录失败'; }
@@ -555,7 +559,12 @@ export class Workbench {
     if (presetSelect) presetSelect.value = this.toolPresetBySession.get(id) ?? 'default';
     if (!this.sending) el<HTMLTextAreaElement>('prompt').value = readDraft(this.draftKey());
     document.body.dataset.sessionId = id; this.setRun('idle'); this.notice(''); closeMobileSidebar();
-    if (push) history.pushState(null, '', id ? `/?session=${encodeURIComponent(id)}` : '/');
+    // URL 里的路径部分要保留：设备前缀部署时文档在 `/d/{id}/`，
+    // 写死 `/?session=…` 会把地址栏（以及之后的相对解析）拽回根路径（B54）。
+    if (push) {
+      const path = location.pathname;
+      history.pushState(null, '', id ? `${path}?session=${encodeURIComponent(id)}` : path);
+    }
     this.markSelected(); el('chat-scroll').dataset.resetScroll = 'true';
     if (id && this.diskSession) void this.refreshHistory(entryId);
     if (this.bridge.connected) void this.reconcile().catch((err) => this.fail(err));

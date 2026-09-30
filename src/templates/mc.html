@@ -1,7 +1,7 @@
 {{define "mc-rows"}}{{range .Rows}}
 <details class="mc-row"><summary><span class="mc-row-title">{{.Title}}</span>{{if .Category}}<span class="mc-tag">{{.Category}}</span>{{end}}{{if .Status}}<span class="mc-tag is-{{.Status}}">{{.Status}}</span>{{end}}<span class="mc-when">{{.When}}</span></summary>
 <div class="mc-preview">{{.Preview}}{{if gt .FullLen 240}}…{{end}}
-{{if gt .FullLen 240}}<button type="button" class="btn" hx-get="/ui/mc/content?kind={{.Kind}}&amp;id={{.ID}}" hx-include="unset" hx-target="closest .mc-preview" hx-swap="innerHTML" hx-sync="this:drop">读取完整正文</button>{{end}}</div>
+{{if gt .FullLen 240}}<button type="button" class="btn" hx-get="ui/mc/content?kind={{.Kind}}&amp;id={{.ID}}" hx-include="unset" hx-target="closest .mc-preview" hx-swap="innerHTML" hx-sync="this:drop">读取完整正文</button>{{end}}</div>
 {{if .Extra}}<dl class="mc-extra">{{range .Extra}}<dt>{{.Label}}</dt><dd>{{.Value}}</dd>{{end}}</dl>{{end}}</details>
 {{else}}<p class="mc-empty">这个分区暂时没有内容。</p>{{end}}{{end}}
 {{define "mc-more"}}<div class="mc-foot" id="mc-more"><span class="mc-count">本页 {{len .Rows}} 条 · 分区共 {{.Total}} 条</span>{{if .MoreURL}}<button type="button" class="mc-more" hx-get="{{.MoreURL}}" hx-include="unset" hx-target="#mc-more" hx-swap="outerHTML" hx-disabled-elt="this">加载更多</button>{{end}}</div>{{end}}
@@ -12,8 +12,8 @@
 <div class="mc-panel" data-mc-kind="{{.Kind}}" hx-sync="#mc-body:replace">
 <div class="mc-head"><div class="mc-title">Magic Context</div><div class="mc-source" title="{{.Status.Source}}">本机存储 · {{.Status.Counts.memories}} 条记忆</div></div>
 {{if not .Status.Available}}<p class="mc-empty">{{.Notice}}</p>{{else}}
-<nav class="mc-kinds" aria-label="记忆分区">{{range .Kinds}}<button type="button" class="mc-kind" hx-get="/ui/mc?kind={{.Key}}" hx-include="unset" hx-target="#mc-body" hx-swap="innerHTML"{{if .Current}} aria-current="page"{{end}}>{{.Label}}</button>{{end}}</nav>
-{{if eq .Kind "memories"}}<form class="mc-filters" hx-get="/ui/mc" hx-trigger="change" hx-include="this" hx-target="#mc-body" hx-swap="innerHTML"><input type="hidden" name="kind" value="memories">
+<nav class="mc-kinds" aria-label="记忆分区">{{range .Kinds}}<button type="button" class="mc-kind" hx-get="ui/mc?kind={{.Key}}" hx-include="unset" hx-target="#mc-body" hx-swap="innerHTML"{{if .Current}} aria-current="page"{{end}}>{{.Label}}</button>{{end}}</nav>
+{{if eq .Kind "memories"}}<form class="mc-filters" hx-get="ui/mc" hx-trigger="change" hx-include="this" hx-target="#mc-body" hx-swap="innerHTML"><input type="hidden" name="kind" value="memories">
 <label class="mc-filter">分类<select name="category"><option value="">全部</option>{{range .Categories}}<option value="{{.Name}}"{{if .Current}} selected{{end}}>{{.Name}}（{{.Count}}）</option>{{end}}</select></label>
 <label class="mc-filter">项目<select name="project"><option value="">全部</option>{{range .Projects}}<option value="{{.Key}}"{{if .Current}} selected{{end}}>{{.Key}}（{{.Count}}）</option>{{end}}</select></label></form>{{end}}
 {{if .Notice}}<p class="mc-empty">{{.Notice}}</p>{{end}}
