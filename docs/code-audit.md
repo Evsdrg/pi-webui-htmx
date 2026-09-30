@@ -2,6 +2,10 @@
 
 更新：2026-09-30（第二轮修复已落地，见下方两段复核记录）。**P0 已完成，P1 正在实施，协议仍为 v1。** 下表 ✅ 表示对应代码与回归已完成，未标记项仍待修复。技术方案见 [architecture.md](architecture.md)，批次与进度见 [repair-plan.md](repair-plan.md)。
 
+## 联合复核：当前优先入口
+
+后续整体核查见 [剩余问题联合分析与实施顺序](remaining-issues-plan.md)。原表实际106个编号、17项未关闭（含B71部署约束），不是上一轮汇报的15项。此次重开B63、U16、B77；B70校正为仅目录/预设未接线，R01记录图片URL/分支监听释放遗漏。旧阶段总表与下方限额表仍含历史状态，不作为当前验收保证；以逐条源码证据和联合方案为准。
+
 ## 范围与基线
 
 审查对象：`pi-bridge-go`、`pi-webui-htmx`；以 `/srv/projects/pi/pi-web` 的当前源码作对照。覆盖两个仓库的生产 Go 模块、HTMX/TypeScript 入口与模块、模板、协议和主要资源生命周期；对会话、凭据、命令与事件传输、工作区、Git、终端、relay、压缩和前端异步切换做了重点源码核对与定向反例。本文是源码审查记录，不是形式化证明；运行时不能安全或稳定触发的条目会明确标为源码确认。
@@ -108,7 +112,7 @@
 | U13 | ✅ 已修 | UI | **修复：** `send`/`sendQueued` 的目标会话在发起时取定；切换后明确报错并保留输入与附件，不静默丢弃。 | `src/modules/workbench.ts`；`tests/unit/workbench.test.ts` |
 | U14 | ✅ 已修 | UI | **修复：** 自动重试改为按会话记忆的本地偏好（`autoRetryBySession`），切换会话时套用该会话上次选择、默认关闭；模板明确标注「不是 Pi 的实时状态」。 | `src/modules/workbench.ts`；`src/templates/shell.html` |
 | U15 | 中 | UI | `bridge.event_omitted` 控制事件被忽略；UI 不读取 `resyncRequired`，连接仍在线时不会立即重读历史，直到后续 settled/手动刷新。 | `pi-webui-htmx/src/modules/workbench.ts`；`pi-bridge-go/internal/runtime/manager.go` |
-| U16 | ✅ 已修 | UI | 本轮修复：`EventCursor.accept` 不再接受事件流里冒出的其它 epoch（那正是上一个 worker 的延迟帧）；切换 epoch 只走订阅确认帧的 `epoch/seq`（`begin`）。`workbench.subscribe` 已改用确认值。反例：`state.test.ts` 与 `workbench.test.ts` 各一条，旧实现下都红。 | `pi-webui-htmx/src/modules/stream.ts`；`pi-bridge-go/internal/transport/server.go` |
+| U16 | ⚠️ 部分，重开 | UI | 事件帧已不能任意切epoch，但 subscribe确认未校验发起时Scope/请求序号，旧会话ACK仍可改写新视图；begin同epoch会直接覆盖seq。修复须保住桥现有“补发→确认→实时”顺序，不能简单丢弃全部确认前事件。 | `src/modules/stream.ts`、`src/modules/workbench.ts`；`internal/transport/server.go:subscribeWithReplay` |
 | U17 | ✅ 已修 | UI | xhr→epoch的本地映射在beforeOnLoad核对，先于HX响应头/OOB；不需要让服务器回显自定义头。A→B→A反例覆盖，动态思考按钮也归属会话。 | `src/modules/fragment-requests.ts` |
 | U18 | ⚠️ 部分 | UI | **精度校正后状态：** 对话目标已按 sessionId 校验，并补了代次。**仍缺：** 同一 session 的旧代次/ pending 集合乱序、响应处理前守卫，以及旧错误/`finally` 对新视图的影响。 | `src/modules/workbench.ts` |
 | U19 | ✅ 再修复 | UI | 模型表单重做后曾回归（F01）。现在维护单一草稿，保存独立快照、完成不重读，重复保存合并；选节点/JSON/末项删除也不丢字段。不承诺跨浏览器配置CAS。 | `src/modules/models.ts`、`tests/unit/models_draft.test.ts` |
@@ -135,21 +139,21 @@
 | B60 | ✅ 已修 | HTTP | **修复：** 解析 qvalue，省略视为 1，未列出且无 `*` 视为不可接受，同名重复取最严格，非法 q 视为禁用。回归覆盖 `*`、`*;q=0`、`br;q=0`、同名重复与畸形 q。原问题：忽略 qvalue，`br;q=0` 仍选 br。 | `internal/presentation/presentation.go`；`compress_test.go` |
 | B61 | ✅ 已修 | HTTP | **修复：** `Vary` 无条件声明；端到端测试按 8 种 Accept-Encoding 校验 Vary、Content-Encoding 与解压结果。原问题：仅压缩分支设置，identity 缺 Vary。 | `internal/transport/server.go`；`server_test.go` |
 | B62 | ✅ 已修 | Sessions | **修复：** trash 存在却执行失败时报错取消，绝不退回 `os.Remove`；只有系统确实没有 trash 才真正删除。两条回归分别覆盖失败与缺失路径。 | `internal/sessions/delete.go`；`delete_test.go` |
-| B63 | ✅ 已修 | Relay | 复核（2026-09-30）：`cmd/pi-bridge` 对非环回监听要求地址落在私有/overlay 网段且必须显式给出 `--public-origin`，空 host 不再能跳过校验。 | `cmd/pi-relay/main.go`；`internal/relay/server.go` |
+| B63 | ⚠️ 重开 | Relay | 之前误用本地桥 PublicOrigin 校验证明 relay 已修。实际 relay 的 --host 默认为空，Host/Origin 校验受 s.host 非空条件保护，CLI 未拒绝非环回空host。需独立修 relay 入口，不能引用桥侧测试作为证据。 | `cmd/pi-relay/main.go`；`internal/relay/server.go` |
 | B64 | ✅ 已修 | Runtime | 复核（2026-09-30）：`CheckRebindTarget` 已成为独立步骤，由 `internal/runtime/identity.go` 在身份切换**之前**调用，冲突时 Pi 还没切走。 | `internal/runtime/identity.go`；`internal/runtime/manager.go` |
 | B65 | ✅ 已修 | Events | **修复：** `resetReplay` 同时更换 epoch；旧 epoch 一律拒绝并强制重新同步，不再用「返回空」假装已同步。new/switch/fork/clone 四条路径都经 `Rebind`，覆盖完整。反例（只归零 seq）验证通过。 | `internal/runtime/identity.go`；`identity_test.go` |
 | B66 | ✅ 已修 | Runtime/UI | 本轮修复：`protocol.Spec` 增加 `Timeout`，`TimeoutFor` 由 `claims.go` 取用。压缩/用户 bash 5 分钟、导出 2 分钟、搜索 1 分钟、网络查询 45–90 秒；前端 `workbench.ts` 的等待上限同步，未标注的方法仍按默认超时。反例：`-run Test长任务命令不被默认超时砍断`（同延迟下 compact 成功、session.stats 超时）。 | `internal/transport/server.go`；`internal/runtime/manager.go`；`pi-webui-htmx/src/modules/bridge.ts` |
 | B67 | ✅ 已修 | Runtime | **修复：** 对话登记移到体积上限检查之前，超大对话也占住记录并可回复；超出 `MaxDialogs` 时明确取消并推送说明。 | `internal/runtime/manager.go`；`dialogs_test.go` |
 | B68 | ✅ 已修 | Runtime/Security | **修复：** Pi/PTY/Git 共用服务环境过滤；真实 spawn/PTY 测试和反向验证通过。保留正常 API、代理及 Pi 环境，不等同同 UID 的 OS 隔离。原问题：Pi 与 PTY 子进程直接继承桥的完整 `os.Environ()`，包括 `PI_BRIDGE_TOKEN`、`PI_BRIDGE_DEVICE_TOKEN`；agent bash、项目扩展或终端命令可读出桥/设备凭据。 | `internal/runtime/manager.go`；`internal/terminal/terminal.go` |
 | B69 | ✅ 已修 | Management/Security | 写入使用随机独占 0600 临时文件、文件 Sync、rename 和目录 Sync；固定路径 symlink 不再被触碰。同步不明返回 outcome_unknown，临时文件统一清理。 | `internal/management/config.go`；`config_safety_test.go` |
-| B70 | 中 | Product | HTMX 有模型配置原始 JSON 编辑和 discover/test，但没有调用已支持的 `config.catalog`；不是 Pi Web 式可视化模型字段编辑器，供应商目录/参数预设未接线。 | `pi-webui-htmx/src/modules/models.ts`；`pi-webui-htmx/src/templates/shell.html`；`pi-webui-htmx/src/types/protocol.ts` |
+| B70 | ⚠️ 部分 | Product | provider/model字段编辑器、思考三态和本地草稿已实现；剩余为config.catalog供应商目录/参数预设接线。不得再以“只有JSON编辑器”为由重做现有表单。 | `pi-webui-htmx/src/modules/models.ts`；`internal/transport/dispatch.go` |
 | B71 | 中 | Sessions | 已声明的部署限制：桥内单 writer 不能约束另一桥或不合作的外部 Pi CLI。保持独立会话目录；合作锁只约束参与者，不能写成已经防住全部外部写入。这是约束项，不是本轮新回归。 | `internal/runtime/manager.go`；`internal/sessions/store.go`；架构 S03 |
 | B72 | ✅ 已修 | Sessions | 本轮修复：`sessions.MaxMatchesLimit=500` 在 `Store.Search` 入口夹紧，客户端只能收紧或放宽到该上限；反例 `-run TestSearch命中数上限被夹紧` 在旧实现下返回 600 条。 | `internal/transport/server.go`；`internal/sessions/search.go`；`search-limit-probe.log` |
 | B73 | ✅ 已修 | Tunnel | 本轮修复，且**原描述不准**：`subs` 早已由 `bridge.mu` 保护并被 `subscribe/unsubscribe` 串行化；真正无锁的是 `terms`（`terminal.open/close` 走并行分发），`-race` 并发终端可复现。同一段代码还有第二处缺陷：`acquire` 在持有 `t.mu` 时调用会再次加锁的 `releaseAll`，命中「dead 已置位、尚未从映射摘除」的窗口会把整个 TunnelBridge 永久锁死（实测卡死超时）。修法：`subs`/`terms` 统一到 `bridge.mu`，「摘取句柄」与「关闭句柄」拆成两步，`acquire` 改为显式解锁。反例：`tunnel_concurrency_test.go` 两条。 | `internal/transport/tunnel.go`；`tunnel-map-race-probe.log` |
 | B74 | ✅ 已修 | Tunnel | 复核（2026-09-30）：`handle` 已按连接持有 `release` 信号量并在满时回 `busy`，且非 urgent 命令同样占用 `Server.operations`。 | `internal/transport/tunnel.go` |
 | B75 | 中 | Terminal | `resolveShell` 只校验 basename，任意命名为 bash 的可执行文件可通过；与声明的 shell 白名单不符。显式 PTY 本来具有执行能力，这不是额外的任意执行提权结论；目标是使用本机固定真实路径表。 | `internal/transport/server.go`；`internal/terminal/terminal.go`；`shell-path-probe.log` |
 | B76 | 中 | Export | 前端导出走 `command()`，会先 `ensureWorker()`；桥的 `session.export_html` 又要求 `manager.Get`。仅导出磁盘历史会启动 Pi 并加载整个长会话；Pi Web 的 `exportFromFile` 直接读 JSONL，不启动 AgentSession。 | `pi-webui-htmx/src/modules/workbench.ts`；`pi-bridge-go/internal/transport/server.go`；`pi-web/app/api/sessions/[id]/export/route.ts` |
-| B77 | ✅ 已修 | Export/Storage | 本轮修复：导出前按数量与字节裁剪最旧的产物（`pruneExports`，32 个 / 256 MiB，给即将写入的文件留一个空位）。顺带修掉夹具缺陷：`fake-pi` 读的是 `message` 而桥发的是 `outputPath`，所以导出成功路径此前从未被端到端覆盖。 | `cmd/pi-bridge/main.go`；`internal/transport/server.go`；Pi Web export route |
+| B77 | ⚠️ 部分，重开 | Export/Storage | 已有导出前32项/256MiB裁剪，但锁在写入前释放，未预留新产物字节、未限制单文件、并发可突破数量。与B45/B76一起实现受限写入、临时产物发布与清理；旧测试仅证明裁剪函数/串行小产物，不证明硬配额。 | `internal/transport/export_store.go`；`internal/transport/dispatch.go:session.export_html` |
 | B78 | ✅ 已修 | Relay | 本轮修复：`persist` 改为落盘成功之后才清 `dirty`，并用 `version` 自增判断「写盘期间是否又有新改动」，有新改动就留给下一次。反例 `-run Test注册表写盘失败后不清脏`：故障解除后不再产生新改动，只重跑写盘，旧实现直接返回 nil 导致设备不落盘。 | `internal/relay/registry.go`；`registry-persist-probe.log` |
 | B79 | ✅ 已修 | Terminal | 本轮修复：`Terminal` 记下 `maxCols/maxRows`，`Resize` 超限夹到上限（而不是像 `Open` 那样回落默认值——窗口尺寸是真实值，静默改成 80×24 会让终端突然缩小）。反例 `-run Test终端尺寸上限对resize同样生效` 在旧实现下读到 65535。 | `internal/terminal/terminal.go`；`internal/transport/server.go` |
 | B80 | ✅ 已修 | Protocol | 本轮修复：发现端点移除写死的 `phase`（阶段早已完成），终端数量与空闲秒数改报 `terminal.Manager.Limits()` 的真实配置。反例 `transport/capabilities_test.go` 用非默认终端配置断言报的是真实值。 | `internal/transport/server.go`；`cmd/pi-bridge/main.go` |

@@ -4,7 +4,7 @@
 
 **仓库边界：** 本仓只含 Go 桥。相邻的 `../pi-webui-htmx`（HTMX 前端与 UI 包）与 `../pi-web`（上游 Pi Web 参考）各自是独立 git 仓库；三者没有共同父仓库，也不要为它们建一个总仓库。跨仓改动分两边提交，配套关系写在 [UI 包契约](../pi-webui-htmx/docs/contract.md)。
 
-**状态（2026-09-30）：** 本地工作台与 relay/tunnel 后端已有实现；P1–P6 的可靠性、安全与交互修复已按批次落地（台账见 [code-audit.md](docs/code-audit.md)，批次与依赖见 [repair-plan.md](docs/repair-plan.md)），但**逐条复核发现台账状态本身会漂移**：判断某个问题是否仍存在时以代码为准。旧 A–E 阶段不再作为完成保证。云端 HTMX 整链路（relay 侧按设备前缀转发 HTTP、前端 basePath）仍未实现，归 P7。
+**状态：** 本地工作台与 relay/tunnel 后端已有实现，多个修复批次已落地，但不能据此声称 P1–P6 全部完成。剩余问题及近期修复边界已重新联合核查，实施顺序见 [剩余问题联合分析](docs/remaining-issues-plan.md)，逐项证据见 [code-audit.md](docs/code-audit.md)。云端 HTMX 的同源 HTTP + WS 整链路仍未实现。
 
 ## 文档入口
 
