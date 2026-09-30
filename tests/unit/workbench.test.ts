@@ -1418,3 +1418,35 @@ describe('命令等待上限', () => {
     expect(fake.request.mock.calls.at(-1)?.[3]).toBe(30_000);
   });
 });
+
+// 直接打开 ?session=… 时不经过 selectSession，侧栏文件树要自己跟上。
+// 这是 D 批次把文件树移进侧栏时留下的缺口：刷新页面后文件区停在空路径，
+// 服务端回退到第一个工作区根，列出的是别的目录。
+describe('启动恢复会话时同步文件树', () => {
+  // 直接打开 ?session=… 不经过 selectSession，侧栏文件树要自己跟上。
+  // 这是 D 批次把文件树移进侧栏时留下的缺口：刷新页面后文件区停在空路径，
+  // 服务端回退到第一个工作区根，列出的是别的目录。
+  const marks = () => workbench as unknown as { cwd: string; sessionId: string; markSelected(): void };
+
+  it('列表刷新后把选中会话的目录推给文件区', () => {
+    const internal = marks();
+    internal.cwd = '';
+    internal.sessionId = 's1';
+    document.body.insertAdjacentHTML('beforeend', '<a class="session-item" data-session="s1" data-cwd="/repo/one" data-title="一"></a>');
+    const filesPath = document.getElementById('files-path') as HTMLInputElement;
+    filesPath.value = '';
+    internal.markSelected();
+    expect(filesPath.value).toBe('/repo/one');
+  });
+
+  it('不覆盖用户已经浏览到的目录', () => {
+    const internal = marks();
+    internal.cwd = '/repo/one';
+    internal.sessionId = 's1';
+    document.body.insertAdjacentHTML('beforeend', '<a class="session-item" data-session="s1" data-cwd="/repo/one"></a>');
+    const filesPath = document.getElementById('files-path') as HTMLInputElement;
+    filesPath.value = '/repo/elsewhere';
+    internal.markSelected();
+    expect(filesPath.value).toBe('/repo/elsewhere');
+  });
+});

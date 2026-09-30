@@ -806,6 +806,14 @@ export class Workbench {
       if (link.dataset.session === this.sessionId && !this.cwd) { this.cwd = link.dataset.cwd ?? ''; this.sessionTitle = link.dataset.title ?? '会话'; }
     }
     el('session-count').textContent = String(document.querySelectorAll('[data-session]').length);
+    // 直接打开 ?session=…（刷新、分享链接、从别处跳回）不会经过 selectSession，
+    // 侧栏文件树就停在空路径上——服务端回退到第一个工作区根，列出的不是这个
+    // 会话的目录。这里补一次，只在文件区还没目录时才推，不覆盖用户手动浏览的位置。
+    const filesPath = document.getElementById('files-path') as HTMLInputElement | null;
+    if (filesPath && !filesPath.value && this.cwd) {
+      filesPath.value = this.cwd;
+      window.htmx.trigger(document.body, 'files-refresh');
+    }
   }
   private async search(query: string): Promise<void> {
     if (!query) { this.refreshSessions(); return; }
