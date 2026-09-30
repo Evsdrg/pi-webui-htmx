@@ -65,6 +65,7 @@ WebSocket 的 origin 白名单与同一规则对齐，否则库层（`Origin.Hos
 | `{diff,truncated}` | `git.diff` |
 | `{text,truncated}` | `session.bash_output` |
 | `{dialogs,ids}` | `session.pending_dialogs`（`dialogs` 是 Pi 的原始载荷，HTTP 端点据此渲染） |
+| `{epoch,statuses}` | `session.ext_status`（插件状态行快照，按 worker 隔离；`epoch` 标识它属于哪一轮工作进程；无 worker 的会话直接拒绝） |
 | `{clearedQueue}` | `session.abort`（原始 JSON，桥不解释队列结构） |
 | `{stopped}` / `{resized}` / `{closed}` / `{renamed}` / `{answered}` / `{path}` / `{kind,mode}` / `{text}` / `{roots}` / `{terminals}` | 各自单一方法 |
 | `{sessionId,trashed,path[,stoppedWorker]}` | `sessions.delete`；`stoppedWorker` 只在本次删除连带停掉了运行中的会话时出现 |
@@ -90,7 +91,7 @@ WebSocket 的 origin 白名单与同一规则对齐，否则库层（`Origin.Hos
 | 压缩与重试 | `session.compact`、`session.set_auto_compaction`、`session.set_auto_retry`、`session.abort_retry` |
 | 分支 | `session.new`、`session.switch`、`session.fork`、`session.clone`、`session.tree`、`session.fork_messages`、`session.entries` |
 | bash | `session.bash`、`session.abort_bash`、`session.bash_output` |
-| 扩展对话 | `session.ui_response`、`session.pending_dialogs` |
+| 扩展对话 | `session.ui_response`、`session.pending_dialogs`、`session.ext_status` |
 | 终端 | `terminal.open`、`terminal.input`、`terminal.resize`、`terminal.close`、`terminal.list` |
 | 文件与 Git | `files.list`、`files.index`、`files.stat`、`files.read`、`files.image`、`files.roots`、`git.status`、`git.diff` |
 | 其他 | `session.stats`、`session.set_name`、`session.last_assistant`、`session.commands`、`session.export_html`、`sessions.search`、`sessions.delete` |

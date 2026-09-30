@@ -83,6 +83,8 @@ var specs = map[string]Spec{
 	"session.entries":         {Method: "session.entries", Class: ClassWorkerRead},
 	"session.bash_output":     {Method: "session.bash_output", Class: ClassWorkerRead},
 	"session.pending_dialogs": {Method: "session.pending_dialogs", Class: ClassWorkerRead},
+	// 扩展状态行快照：页面加载与重订阅时补齐 setStatus（B36）。
+	"session.ext_status": {Method: "session.ext_status", Class: ClassWorkerRead},
 
 	// 文件与目录只读。
 	// 搜索最多扫 200 个文件 × 16 MiB，默认 30 秒偏紧。

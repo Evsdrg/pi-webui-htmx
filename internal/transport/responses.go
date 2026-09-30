@@ -196,6 +196,13 @@ type dialogsReply struct {
 	IDs     []string          `json:"ids"`
 }
 
+// extStatusReply 是 session.ext_status 的回执：插件状态行快照，
+// 以及这份快照所属的 worker epoch（B36）。
+type extStatusReply struct {
+	Epoch    string            `json:"epoch"`
+	Statuses map[string]string `json:"statuses"`
+}
+
 // 事件载荷（WS 的 kind=event / control 帧的 data）。
 //
 // 与回执同理：键名是线上格式，前端按名读取。这里只列桥自己构造的事件；

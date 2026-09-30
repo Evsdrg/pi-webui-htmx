@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"sort"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -434,6 +435,9 @@ type Worker struct {
 	// closing 之后再次 Stop 只等到这个时刻，不再无限期按着 B50。
 	stopDeadline   time.Time
 	pendingDialogs map[string]json.RawMessage
+	// extStatuses 是插件状态行（setStatus）的快照。挂在 worker 上而不是
+	// 传输层：状态行属于「哪个进程」，按 (sessionId, epoch) 天然隔离（B36）。
+	extStatuses map[string]string
 	// dialogOpened 记录每个对话的登记时间，供超时清理使用。
 	dialogOpened map[string]time.Time
 	pending      int
@@ -621,6 +625,18 @@ func (w *Worker) event(raw json.RawMessage) {
 			w.status = statusWaitingInput
 		}
 	}
+	// 扩展状态行（setStatus）由 worker 自己记一份快照：它只在页面
+	// 初次加载与重订阅时用来补齐，WS 增量始终是实时路径。挂在 worker 上
+	// 意味着旧进程的状态不会串到新会话，也不会因无浏览器订阅而漏记（B36）。
+	if ev.Type == "extension_ui_request" && ev.Method == "setStatus" {
+		var st struct {
+			StatusKey  string `json:"statusKey"`
+			StatusText string `json:"statusText"`
+		}
+		if json.Unmarshal(raw, &st) == nil {
+			w.applyStatusLocked(st.StatusKey, st.StatusText)
+		}
+	}
 	if len(raw) > w.cfg.EventBytes {
 		w.publishLocked("bridge.event_omitted", map[string]any{"type": ev.Type, "reason": "事件体积超过上限", "resyncRequired": true})
 		w.mu.Unlock()
@@ -628,6 +644,48 @@ func (w *Worker) event(raw json.RawMessage) {
 	}
 	w.publishLocked("pi.event", raw)
 	w.mu.Unlock()
+}
+
+// maxStatusKeys 是单 worker 能保存的扩展状态行数上限。
+// 与传输层老实现一致：64 条足够多个插件共存，且保证有界。
+const maxStatusKeys = 64
+
+// applyStatusLocked 更新扩展状态快照；空文本表示插件清除了该行。
+// 调用方必须已持有 w.mu。
+func (w *Worker) applyStatusLocked(key, text string) {
+	if key == "" || len(key) > 128 || len(text) > 4096 {
+		return
+	}
+	if w.extStatuses == nil {
+		w.extStatuses = map[string]string{}
+	}
+	if text == "" {
+		delete(w.extStatuses, key)
+		return
+	}
+	if _, exists := w.extStatuses[key]; !exists && len(w.extStatuses) >= maxStatusKeys {
+		// 达到上限时淘汰 key 最小的一项，行为确定（map 遍历无序）。
+		keys := make([]string, 0, len(w.extStatuses))
+		for k := range w.extStatuses {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		delete(w.extStatuses, keys[0])
+	}
+	w.extStatuses[key] = text
+}
+
+// ExtensionStatuses 返回该 worker 的扩展状态快照副本与它所属的 epoch。
+// epoch 让调用方把快照与订阅确认对应起来：旧 worker 的快照不会被当成
+// 当前会话的状态（B36）。
+func (w *Worker) ExtensionStatuses() (string, map[string]string) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	out := make(map[string]string, len(w.extStatuses))
+	for k, v := range w.extStatuses {
+		out[k] = v
+	}
+	return w.epoch, out
 }
 
 // dialogMethods 是需要客户端回复的扩展 UI 方法。

@@ -22,6 +22,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -56,7 +57,7 @@ var SupportedMethods = []string{
 	"session.new", "session.switch", "session.fork", "session.clone",
 	"session.tree", "session.fork_messages", "session.entries",
 	"session.bash", "session.abort_bash", "session.bash_output",
-	"session.ui_response", "session.pending_dialogs",
+	"session.ui_response", "session.pending_dialogs", "session.ext_status",
 	"session.stats", "session.set_name", "session.last_assistant", "session.commands",
 	"session.export_html",
 	"sessions.search", "sessions.delete",
@@ -97,7 +98,6 @@ type Server struct {
 	// 会话 HTML 取回，按 (sessionId, epoch) 缓存以免每次开面板都重导。
 	sessionContexts *sessionContextCache
 	ui              *presentation.Renderer
-	extState        *extensionState
 	receipts        *storage.Receipts
 	metrics         *observe.Metrics
 	token, host     string
@@ -177,7 +177,6 @@ func New(opts Options) (*Server, error) {
 		exportDir:       opts.ExportDir,
 		sessionContexts: newSessionContextCache(),
 		ui:              opts.UI,
-		extState:        newExtensionState(64),
 		receipts:        opts.Receipts,
 		metrics:         opts.Metrics,
 		token:           opts.Token,
@@ -627,7 +626,7 @@ func (s *Server) serveUIFragments(w http.ResponseWriter, r *http.Request, encodi
 		})
 
 	case path == "/ui/extensions/status":
-		html, rerr := s.ui.RenderExtensionStatus(s.extensionStatuses())
+		html, rerr := s.ui.RenderExtensionStatus(s.extensionStatuses(r.URL.Query().Get("sessionId")))
 		if rerr != nil {
 			writeError(w, encoding, 500, rerr)
 			return true
@@ -714,15 +713,26 @@ func (s *Server) pendingDialogsFor(sessionID string) ([]json.RawMessage, error) 
 	return w.PendingDialogPayloads(), nil
 }
 
-// extensionStatuses 汇总所有活跃 worker 的扩展状态行。
-//
-// 当前实现：状态来自 WS 推送的 setStatus，由客户端直接更新 DOM；
-// 这里只在页面初次加载时给一份快照。刷新后状态会从空开始，
-// 直到插件再次 setStatus——这是已知限制，不做假持久化。
-func (s *Server) extensionStatuses() []presentation.StatusItem {
-	out := []presentation.StatusItem{}
-	for _, raw := range s.extState.snapshot() {
-		out = append(out, presentation.StatusItem{Key: raw.key, Text: raw.text})
+// extensionStatuses 取指定会话当前 worker 的扩展状态行。
+// 快照挂在 worker 上（B36），所以这里必须点名会话：worker 不存在时为空，
+// 而不是回退到某份全局状态。
+func (s *Server) extensionStatuses(sessionID string) []presentation.StatusItem {
+	if sessionID == "" {
+		return []presentation.StatusItem{}
+	}
+	worker, err := s.manager.Get(sessionID)
+	if err != nil {
+		return []presentation.StatusItem{}
+	}
+	_, statuses := worker.ExtensionStatuses()
+	keys := make([]string, 0, len(statuses))
+	for k := range statuses {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	out := make([]presentation.StatusItem, 0, len(keys))
+	for _, k := range keys {
+		out = append(out, presentation.StatusItem{Key: k, Text: statuses[k]})
 	}
 	return out
 }
@@ -1400,11 +1410,8 @@ func (s *Server) subscribeWithReplay(c connSink, r protocol.Request) (any, error
 				}
 				return
 			}
-			// 顺手维护扩展状态快照，供页面刷新后立即显示。
-			// 只处理 setStatus，其余扩展方法不进状态表。
-			if key, text, ok := parseSetStatus(eventPayload(m)); ok && key != "" {
-				s.extState.update(key, text)
-			}
+			// 快照由 worker 自己维护（B36）：传输层不再记录扩展状态，
+			// 这里只负责把订阅的事件原样送出。
 			if !c.send(m) {
 				return
 			}

@@ -20,6 +20,9 @@ type frame struct {
 	Method                string `json:"method,omitempty"`
 	Title                 string `json:"title,omitempty"`
 	AssistantMessageEvent any    `json:"assistantMessageEvent,omitempty"`
+	// setStatus 帧的字段：桥的快照就靠它们（B36）。
+	StatusKey  string `json:"statusKey,omitempty"`
+	StatusText string `json:"statusText,omitempty"`
 }
 
 func emit(v any) {
@@ -68,6 +71,12 @@ func main() {
 		}
 	}
 	reader := bufio.NewReader(os.Stdin)
+	// script `set_status`：模拟插件在会话启动时 setStatus 一次。
+	// 它发生在任何命令之前，用来验证「快照不依赖浏览器订阅」（B36）：
+	// 老实现只在转发给浏览器的路径上更新快照，没订阅者就漏记。
+	if script["set_status"] {
+		emit(frame{Type: "extension_ui_request", Method: "setStatus", StatusKey: "mc", StatusText: "mc: 3 (1%) · idle"})
+	}
 	for {
 		line, err := reader.ReadString('\n')
 		if err != nil {

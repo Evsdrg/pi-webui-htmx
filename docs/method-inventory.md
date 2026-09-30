@@ -7,7 +7,7 @@ P0 清单，基于当前 62 个方法及 HTTP 路由。以下分类是 P2 共用
 | 方法 | 执行类别 | 目标来源 | 预算/期限族 |
 |---|---|---|---|
 | `worker.list`、`terminal.list`、`config.models`、`config.models.raw`、`config.settings`、`config.trust` | 本地只读 | 认证设备/配置域 | 元数据读取 |
-| `session.state`、`session.models`、`session.thinking_levels`、`session.stats`、`session.last_assistant`、`session.commands`、`session.tree`、`session.fork_messages`、`session.entries`、`session.bash_output`、`session.pending_dialogs` | 当前 worker 读取 | request.sessionId → 固定 worker 实例 | RPC 读取；tree/entries/output 后续改有界数据通道 |
+| `session.state`、`session.models`、`session.thinking_levels`、`session.stats`、`session.last_assistant`、`session.commands`、`session.tree`、`session.fork_messages`、`session.entries`、`session.bash_output`、`session.pending_dialogs`、`session.ext_status` | 当前 worker 读取 | request.sessionId → 固定 worker 实例 | RPC 读取；tree/entries/output 后续改有界数据通道；ext_status 是插件状态行快照（按 worker 隔离） |
 | `sessions.search`、`files.list`、`files.index`、`files.stat`、`files.read`、`files.image`、`files.roots`、`git.status`、`git.diff` | 文件/目录只读 | 受管目录或 params.path | 磁盘/Git，字节、目录、匹配和时间预算 |
 | `config.models.discover`、`config.models.test`、`config.catalog`、`config.packages` | 联网读取 | 审核后的 origin/配置域 | 出站并发、总时长和响应字节 |
 | `session.subscribe`、`session.unsubscribe` | 连接资源 | peer + 固定 worker/订阅代次 | 订阅数、重放及 live 字节 |

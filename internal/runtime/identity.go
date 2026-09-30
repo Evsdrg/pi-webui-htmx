@@ -208,6 +208,8 @@ func (w *Worker) resetReplay() {
 	defer w.mu.Unlock()
 	w.seq = 0
 	w.epoch = hex.EncodeToString(epoch)
+	// 状态行属于旧进程的快照：换了 epoch 就不再对应当前会话（B36）。
+	w.extStatuses = nil
 	w.replay = newReplayRing(w.cfg)
 }
 

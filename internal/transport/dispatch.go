@@ -808,6 +808,14 @@ func (s *Server) dispatchDialogs(ctx context.Context, r protocol.Request, w *run
 		items := make([]json.RawMessage, 0, len(payloads))
 		items = append(items, payloads...)
 		return dialogsReply{Dialogs: items, IDs: w.PendingDialogs()}, nil
+
+	case "session.ext_status":
+		if err := decodeEmpty(r.Params); err != nil {
+			return nil, err
+		}
+		// 快照自带 epoch：客户端用它确认这份状态属于哪一轮 worker（B36）。
+		epoch, statuses := w.ExtensionStatuses()
+		return extStatusReply{Epoch: epoch, Statuses: statuses}, nil
 	}
 	return nil, errUnhandled(r.Method)
 }
