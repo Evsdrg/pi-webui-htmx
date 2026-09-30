@@ -142,7 +142,6 @@ export type Method =
 /** capabilities 响应。UI 加载时据此判断兼容性。 */
 export interface Capabilities {
   version: number;
-  phase: string;
   piBaseline: string;
   methods: Method[];
   replay: boolean;

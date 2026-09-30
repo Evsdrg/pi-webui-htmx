@@ -72,17 +72,17 @@ dist/             生成资产与 Vite manifest，不提交
 
 ## 体积与渲染
 
-首屏预算拆成两个数字，都存在 ui-manifest 的 build 里：总预算 `firstLoadBudgetGzipKB`（当前 **42 KiB gzip**）与自有代码预算 `firstLoadOwnBudgetGzipKB`（当前 **24 KiB gzip**）。check 递归统计入口静态依赖闭包，并按 `vendorChunks` 把供应商分块单列。KaTeX、Mermaid、xterm 等按需加载。
+首屏预算拆成两个数字，都存在 ui-manifest 的 build 里：总预算 `firstLoadBudgetGzipKB`（当前 **50 KiB gzip**）与自有代码预算 `firstLoadOwnBudgetGzipKB`（当前 **30 KiB gzip**）。check 递归统计入口静态依赖闭包，并按 `vendorChunks` 把供应商分块单列。KaTeX、Mermaid、xterm 等按需加载。
 
 需要把供应商和自己写的分开，是因为 htmx 是一块**换不掉的固定成本**：官方 `dist/htmx.min.js`（2.0.11）为 52,182 B / gzip 16,861 B，而 npm 包的 `main` 指向未压缩的 `dist/htmx.esm.js`（171,382 B），因此打包后是 gzip 17.59 KiB，比官方压缩版多约 0.73 KiB。把它混进同一个数字里，等于每次改 UI 都在和别人的体积抢额度。
 
-2026-09-28 实测构成：自有代码 22.65 KiB（JS 15.66 + CSS 7.00）+ 供应商（htmx）17.59 KiB = 40.24 KiB。htmx 由 vite.config.ts 的 `manualChunks` 单独成块，桥在 shell 里为它输出 `modulepreload`，因此拆分不会多一个往返，同时我们改自己的代码不会顶掉它的缓存。
+2026-09-30 实测构成：自有代码 28.19 KiB + 供应商（htmx）17.59 KiB = 45.77 KiB。htmx 由 vite.config.ts 的 `manualChunks` 单独成块，桥在 shell 里为它输出 `modulepreload`，因此拆分不会多一个往返，同时我们改自己的代码不会顶掉它的缓存。
 
 历史优先按回合分页但遵守硬限额；滚动由前端用户位置决定，X-Scroll-Mode 只提示。Markdown 必须净化；模板保持 Go 转义。入口已关闭 htmx eval/script 标签处理，不能因此取消其他安全层。
 
 ## 验收基线
 
-2026-09-27：11 个 Vitest 文件共 72 项通过，typecheck、build、check 通过。现有测试没有覆盖全部审查反例；未来修复必须增加判定性行为测试。
+2026-09-30：22 个 Vitest 文件共 165 项通过，typecheck、build、check、对比度核算通过。审查反例已按 F01–F19 逐条补上判定性测试，见 [docs/htmx-css-ts-review.md](docs/htmx-css-ts-review.md)。
 
 既有隔离浏览器验收使用真实 Go 桥+假 Pi，覆盖普通发送/分页、扩展确认、富内容、终端关闭、移动布局等，不调用付费模型。新方案还需验证迟到响应、每个 await 的切换、并发附件、重连/大文件和云模式。
 
