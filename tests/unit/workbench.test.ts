@@ -23,6 +23,10 @@ const methods = ['session.start','session.prompt','session.abort','session.fork'
 function emit(type: string, extra: Record<string, unknown> = {}) {
  fake.instance!.dispatchEvent(new CustomEvent('message', { detail: { version:1,kind:'event',event:'pi.event',sessionId:'s1',epoch:'test',seq:++sequence,data:{type,...extra} } }));
 }
+// emitRaw 指定 epoch 与 seq：用于区分「当前 worker」与「上一个 worker 的延迟帧」。
+function emitRaw(epoch: string, seq: number, data: Record<string, unknown>) {
+ fake.instance!.dispatchEvent(new CustomEvent('message', { detail: { version:1,kind:'event',event:'pi.event',sessionId:'s1',epoch,seq,data } }));
+}
 function mount() {
  document.body.innerHTML = `<form id=auth-form><input id=bridge-token><button>连接</button></form><dialog id=auth-dialog></dialog><div id=auth-error></div>
  <form id=composer><textarea id=prompt></textarea><div id=attachments hidden></div><p id=composer-drop hidden></p><input id=attach-input type=file><button id=send-button></button><button id=abort-button></button><select id=model-select><option value="">Pi 默认模型</option></select><select id=thinking-select></select><select id=tool-preset-quick><option value=chat-only>仅聊天</option><option value=read-only>只读</option><option value=default selected>默认</option><option value=full>完整</option></select></form>
@@ -1246,6 +1250,29 @@ describe('模型配置的两级树与字段表单', () => {
     await (workbench as unknown as { action(a: string, b: HTMLElement): Promise<void> }).action('models-toggle-secret', button);
     expect(input.type).toBe('password');
     expect(button.textContent).toBe('显示');
+  });
+});
+
+describe('事件游标的 epoch 归属', () => {
+  // U16：EventCursor 以前接受任意新 epoch 并把 seq 归零，于是上一个 worker
+  // 的延迟帧能把游标切回去，旧事件被当成新事件应用。
+  it('epoch 只由订阅确认切换，事件流里的旧 epoch 被丢弃', async () => {
+    fake.request.mockImplementation(async (method: string) => method === 'session.subscribe' ? { subscribed: true, epoch: 'live-1', seq: 5 } : {});
+    const internal = workbench as unknown as { subscribed: string; subscribe(): Promise<void>; cursor: { epoch: string; seq: number } };
+    // 初始化流程可能已经订阅过同一会话，直接调 subscribe 会被幂等短路。
+    internal.subscribed = '';
+    await internal.subscribe();
+    const cursor = internal.cursor;
+    expect(cursor.epoch).toBe('live-1');
+    expect(cursor.seq).toBe(5);
+    // 上一个 worker 的延迟帧：序号更大也不能接受。
+    emitRaw('stale', 99, { type: 'agent_start' });
+    expect(cursor.epoch).toBe('live-1');
+    expect(cursor.seq).toBe(5);
+    // 当前 epoch 的正常帧照常推进。
+    emitRaw('live-1', 6, { type: 'agent_start' });
+    expect(cursor.seq).toBe(6);
+    expect(cursor.epoch).toBe('live-1');
   });
 });
 

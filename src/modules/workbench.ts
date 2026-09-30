@@ -447,12 +447,17 @@ export class Workbench {
   private async subscribe(): Promise<void> {
     const id = this.sessionId; if (!id || this.subscribed === id) return;
     const saved = this.cursor.epoch ? { epoch: this.cursor.epoch, afterSeq: this.cursor.seq } : {};
-    try { await this.request('session.subscribe', saved, id); } catch (error) {
+    // 确认帧里的 epoch/seq 是权威起点：它是桥对「这条订阅属于哪个工作进程」
+    // 的回答，也是游标唯一允许切换 epoch 的地方（U16）。
+    const begin = (ack: { epoch?: string; seq?: number } | undefined): void => {
+      if (ack?.epoch) this.cursor.begin(ack.epoch, ack.seq ?? 0);
+    };
+    try { begin(await this.request<{ epoch?: string; seq?: number }>('session.subscribe', saved, id)); } catch (error) {
       if (!(error instanceof BridgeError) || error.code !== 'resync_required') throw error;
       if (id !== this.sessionId) return;
       this.cursor.reset(); this.live.clear();
       this.notice('实时事件已超出补发窗口，已重新读取历史；生成中的缺失内容将在本轮完成后同步。');
-      await this.refreshHistory(); await this.request('session.subscribe', {}, id);
+      await this.refreshHistory(); begin(await this.request<{ epoch?: string; seq?: number }>('session.subscribe', {}, id));
     }
     if (id === this.sessionId) this.subscribed = id;
   }

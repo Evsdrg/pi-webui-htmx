@@ -20,12 +20,31 @@ export function runStateAfter(state: RunState, event: Record<string, unknown>): 
 }
 export class EventCursor {
   epoch = ''; seq = 0;
+
+  /**
+   * begin 用订阅确认里的 epoch/seq 重设游标。
+   *
+   * **切换 epoch 只走这里**：确认帧里的 epoch 是桥对「这条订阅属于哪个
+   * 工作进程」的权威回答，而事件流里出现的其它 epoch 一律视为上一个
+   * worker 的延迟帧（U16）。
+   */
+  begin(epoch: string, seq = 0): void {
+    if (!epoch) return;
+    this.epoch = epoch;
+    this.seq = Number.isSafeInteger(seq) && seq > 0 ? seq : 0;
+  }
+
   accept(epoch: string, seq: number): boolean {
     if (!epoch || !Number.isSafeInteger(seq) || seq <= 0) return false;
-    if (epoch !== this.epoch) { this.epoch = epoch; this.seq = 0; }
+    // 还没有权威 epoch 时以第一条事件为准（例如页面直接接上已有订阅）。
+    if (!this.epoch) { this.epoch = epoch; this.seq = seq; return true; }
+    // 不同 epoch 一律丢弃。旧实现遇到新 epoch 就把 seq 归零并接收，
+    // 于是上一个 worker 的延迟帧能把游标切回去，旧事件被当成新的应用。
+    if (epoch !== this.epoch) return false;
     if (seq <= this.seq) return false;
     this.seq = seq; return true;
   }
+
   reset(): void { this.epoch = ''; this.seq = 0; }
 }
 const MAX_LIVE_CHARS = 200_000;
