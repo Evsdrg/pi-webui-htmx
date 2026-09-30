@@ -48,7 +48,11 @@ for(const [name,relative] of Object.entries(manifest.templates??{})){
  walk(dir);
  for(const file of files){
   const body=readFileSync(file,'utf8');
-  for(const mm of body.matchAll(/\b(hx-(?:get|post|put|delete)|action)="(\/[^"]*)"/g)){
+  // 覆盖一切会**发起请求**的属性：hx-*、action、href、src。
+  // 只查 hx-* 曾经漏掉 href="/?session=…"——在设备前缀形态下（relay 的
+  // /d/{id}/）点会话会跳出前缀，而 caddy 反代形态的前缀就是 "/"，
+  // 本地与反代都测不出来（B54）。
+  for(const mm of body.matchAll(/\b(hx-(?:get|post|put|delete)|action|href|src)="(\/[^"]*)"/g)){
    fail(`${file.replace(root+'/','')} 里的 ${mm[1]} 是根绝对路径：${mm[2]}（应写成相对路径）`);
   }
  }

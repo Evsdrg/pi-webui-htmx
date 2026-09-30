@@ -8,7 +8,7 @@ import type { TopbarHost } from './topbar';
 import { closeDialog, el, openDialog } from './dom';
 import { mountFragmentRequests } from './fragment-requests';
 import { SessionScope } from './scope';
-import { relativeSocketUrl } from '../lib/url';
+import { absoluteUrl, relativeSocketUrl } from '../lib/url';
 import type { Scope } from './scope';
 
 const DIALOGS = new Set(['select','confirm','input','editor']);
@@ -1082,7 +1082,9 @@ export class Workbench {
         const file = text(result.path).split('/').pop() || name;
         this.notify('已导出，开始下载。');
         // 走普通导航而不是 fetch：需要浏览器弹出下载，且要带登录 Cookie。
-        location.assign(`/ui/exports/${encodeURIComponent(file)}`);
+        // 用文档基地址解析：`location.assign` 不受 <base href> 影响，
+        // 写根绝对路径在设备前缀形态下会跳出前缀，下载 404（B54）。
+        location.assign(absoluteUrl(`ui/exports/${encodeURIComponent(file)}`).toString());
         break;
       }
       case 'abort-retry': await this.command('session.abort_retry'); this.notify('已请求中止重试。'); await this.reconcile(); break;

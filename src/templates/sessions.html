@@ -1,5 +1,5 @@
 {{range .Items}}
-<a class="session-item{{if eq .ID $.Selected}} selected{{end}}" href="/?session={{.ID}}" data-session="{{.ID}}" data-cwd="{{.Cwd}}" data-title="{{.Title}}">
+<a class="session-item{{if eq .ID $.Selected}} selected{{end}}" href="?session={{.ID}}" data-session="{{.ID}}" data-cwd="{{.Cwd}}" data-title="{{.Title}}">
   <span class="session-title">{{.Title}}</span>
   <span class="session-meta"><time>{{.Modified}}</time><span title="{{.Cwd}}">{{.Cwd}}</span></span>
 </a>
