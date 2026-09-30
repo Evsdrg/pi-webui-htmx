@@ -51,12 +51,16 @@ type Info struct {
 
 // Terminal 是一个 PTY 会话。
 type Terminal struct {
-	id      string
-	cwd     string
-	cmd     *exec.Cmd
-	ptmx    *os.File
-	cols    uint16
-	rows    uint16
+	id   string
+	cwd  string
+	cmd  *exec.Cmd
+	ptmx *os.File
+	cols uint16
+	rows uint16
+	// maxCols/maxRows 与 Open 用同一组上限：Resize 不能成为绕过它的口子，
+	// 否则 65535×65535 会让 PTY 按这个尺寸分配渲染缓冲（B79）。
+	maxCols uint16
+	maxRows uint16
 	closed  atomic.Bool
 	lastUse time.Time
 	done    chan struct{}
@@ -207,6 +211,8 @@ func (m *Manager) Open(cwd, shell string, cols, rows uint16) (*Terminal, error) 
 		ptmx:    ptmx,
 		cols:    cols,
 		rows:    rows,
+		maxCols: m.cfg.MaxCols,
+		maxRows: m.cfg.MaxRows,
 		lastUse: time.Now(),
 		done:    make(chan struct{}),
 		subs:    map[*Subscription]struct{}{},
@@ -449,6 +455,14 @@ func (t *Terminal) Resize(cols, rows uint16) error {
 	}
 	if cols == 0 || rows == 0 {
 		return protocol.E("invalid_params", "cols 与 rows 必须大于 0")
+	}
+	// 超限夹到上限，而不是像 Open 那样回落默认值：resize 反映的是当前窗口的
+	// 真实尺寸，静默改成 80×24 会让用户看到终端突然缩小。
+	if t.maxCols > 0 && cols > t.maxCols {
+		cols = t.maxCols
+	}
+	if t.maxRows > 0 && rows > t.maxRows {
+		rows = t.maxRows
 	}
 	t.mu.Lock()
 	t.cols, t.rows = cols, rows
