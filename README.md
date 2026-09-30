@@ -98,7 +98,12 @@ config.packages 只读清单与版本，不安装/更新。只读 Git 同样要�
 
 ## 云端部署状态
 
-当前 cmd/pi-relay、主动 tunnel 和设备路由存在，但凭据持久化、配对 TTL、HTTPS 反代及连接生命周期等尚有问题，HTMX 客户端也未完成云链路。旧的“一次性 add-user 后直接启动即可使用”流程不能作为已验收部署教程。
+当前 cmd/pi-relay、主动 tunnel 和设备路由存在，但配对 TTL、HTTPS 反代及连接生命周期等尚有问题，HTMX 客户端也未完成云链路（B54/B53 剩余的资源边界见台账）。旧的“一次性 add-user 后直接启动即可使用”流程不能作为已验收部署教程。
+
+relay 启动的两条硬约束（都会在启动期失败，不留到运行期）：
+
+- `--host` **必填**，值是精确的 Host 头（`relay.example.com`，或带端口 `relay.example.com:30143` 表示精确匹配；不带端口则忽略请求端口）。没有它就不允许启动——旧行为在 `--host` 为空时把 Host 与 Origin 两道校验一起跳过（B63）。
+- `--state-dir` 默认是 `$XDG_STATE_HOME/pi-relay`（回退 `~/.local/state/pi-relay`）；设备注册表与用户表是持久身份，显式指到临时目录时启动会打 WARN。
 
 目标部署：持久状态目录、明确 public origin、受信反代、WSS、upgrade 认证、原子持久化凭据、按设备授权的同源 HTTP/WS 适配。新增 CLI 配置和 HTTP tunnel 尚未落地，不提供虚构可用的参数示例。TLS relay 可见转发明文；不落盘不等于端到端加密。
 

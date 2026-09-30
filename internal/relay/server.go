@@ -6,7 +6,9 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"net"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"sync"
@@ -158,15 +160,62 @@ func Unwrap(frame []byte) (routeFrame, bool) {
 	return rf, true
 }
 
+// Config 是转发器的入口约束。
+type Config struct {
+	// Host 是**精确的 Host 头值**（含端口，若对外带端口）。
+	// 必填：没有它就无法把请求绑定到预期来源（B63）。
+	Host string
+}
+
+// Validate 检查入口约束是否完整。
+func (c Config) Validate() error {
+	if strings.TrimSpace(c.Host) == "" {
+		return protocol.E("invalid_params", "必须声明 --host：转发器只接受显式声明的来源")
+	}
+	if strings.ContainsAny(c.Host, " \t/") {
+		return protocol.E("invalid_params", "--host 只能是主机名与可选端口，不含协议与路径")
+	}
+	return nil
+}
+
+// hostMatches 比较声明的主机与请求里的 Host。
+//
+// 语义：声明里**带端口**（含 `:`）就精确比对；不带端口则忽略请求里的端口。
+// 放过端口是有意的——它不影响这套校验要挡的东西（DNS rebinding：
+// 攻击者让浏览器访问解析到转发器 IP 的域名，Host 是那个域名而非本机名），
+// 而端口是部署细节，写死会让同一实例换端口就整体失效。
+// IPv6 字面量请写成带方括号与端口的形式（`[::1]:30143`）。
+func hostMatches(declared, actual string) bool {
+	if declared == "" {
+		return false
+	}
+	if strings.Contains(declared, ":") {
+		return declared == actual
+	}
+	host, _, err := net.SplitHostPort(actual)
+	if err != nil {
+		// 没有端口，直接比。
+		return strings.EqualFold(declared, actual)
+	}
+	return strings.EqualFold(declared, host)
+}
+
 // NewServer 构造转发器。
-func NewServer(registry *Registry, users *Users, host string) *Server {
+//
+// 与旧签名的差别是有意的：host 从「可选、为空就不校验」变成**必填**。
+// 旧行为在 host 为空时把 Host 与 Origin 两道校验一起跳过，
+// 于是任意来源都能访问公网 relay（DNS rebinding 与反代滥用的入口，B63）。
+func NewServer(registry *Registry, users *Users, cfg Config) (*Server, error) {
+	if err := cfg.Validate(); err != nil {
+		return nil, err
+	}
 	return &Server{
 		registry: registry,
 		users:    users,
-		host:     host,
+		host:     cfg.Host,
 		tunnels:  map[string]*tunnelConn{},
 		clients:  map[string]*clientConn{},
-	}
+	}, nil
 }
 
 // Close 关闭全部隧道与连接。
@@ -252,14 +301,17 @@ func (s *Server) userAuth(r *http.Request) (string, bool) {
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("X-Content-Type-Options", "nosniff")
-	if s.host != "" && r.Host != s.host {
+	// 构造期已保证 host 非空，所以这两道校验**不再有「跳过」分支**（B63）。
+	if !hostMatches(s.host, r.Host) {
 		writeRelayError(w, 403, protocol.E("host_denied", "Host 不在预期范围内"))
 		return
 	}
-	scheme := requestScheme(r)
-	if origin := r.Header.Get("Origin"); origin != "" && s.host != "" && origin != scheme+"://"+s.host {
-		writeRelayError(w, 403, protocol.E("origin_denied", "未启用跨源访问"))
-		return
+	if origin := r.Header.Get("Origin"); origin != "" {
+		parsed, err := url.Parse(origin)
+		if err != nil || !strings.EqualFold(parsed.Scheme, requestScheme(r)) || !hostMatches(s.host, parsed.Host) {
+			writeRelayError(w, 403, protocol.E("origin_denied", "未启用跨源访问"))
+			return
+		}
 	}
 	switch {
 	case r.Method == http.MethodGet && r.URL.Path == "/healthz":

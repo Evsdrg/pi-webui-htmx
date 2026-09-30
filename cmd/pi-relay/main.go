@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -26,16 +27,41 @@ func main() {
 	}
 }
 
+// defaultStateDir 返回用户持久目录下的状态路径。
+// Go 标准库没有 XDG_STATE_HOME 的 helper，这里与桥的 state-dir 同风格：
+// 优先 $XDG_STATE_HOME，其次 ~/.local/state，最后才退回家目录。
+func defaultStateDir() string {
+	if dir := os.Getenv("XDG_STATE_HOME"); dir != "" {
+		return filepath.Join(dir, "pi-relay")
+	}
+	if home, err := os.UserHomeDir(); err == nil && home != "" {
+		return filepath.Join(home, ".local", "state", "pi-relay")
+	}
+	return filepath.Join(os.TempDir(), "pi-relay")
+}
+
 func serve() error {
 	listen := flag.String("listen", "127.0.0.1:30143", "监听地址")
-	stateDir := flag.String("state-dir", filepath.Join(os.TempDir(), "pi-relay"), "转发器自有状态目录")
-	host := flag.String("host", "", "期望的 Host；为空表示不校验（仅限本机测试）")
+	// 默认放用户持久目录：设备注册表与用户表是**持久身份**，
+	// 放系统临时目录会在重启或清理 /tmp 后整体消失（B55）。
+	stateDir := flag.String("state-dir", defaultStateDir(), "转发器自有状态目录（持久；放临时目录会丢设备注册表）")
+	host := flag.String("host", "", "必填：对外访问的精确 Host（含端口，例如 relay.example.com 或 1.2.3.4:30143）")
 	addUser := flag.String("add-user", "", "添加用户并打印一次性令牌")
 	addDevice := flag.String("add-device", "", "为设备登记预共享密钥并打印一次性密钥")
 	flag.Parse()
 
-	if err := os.MkdirAll(*stateDir, 0700); err != nil {
+	stateRoot, err := filepath.Abs(*stateDir)
+	if err != nil {
 		return err
+	}
+	if err := os.MkdirAll(stateRoot, 0700); err != nil {
+		return err
+	}
+	// 显式把持久身份放进临时目录时明确警告：重启即失效。
+	if tmp := os.TempDir(); tmp != "" {
+		if rel, err := filepath.Rel(tmp, stateRoot); err == nil && !strings.HasPrefix(rel, "..") {
+			slog.Warn("状态目录位于临时目录，重启或清理后设备注册表会丢失", "stateDir", stateRoot)
+		}
 	}
 	secret := os.Getenv("PI_RELAY_SECRET")
 	if len(secret) < 32 {
@@ -43,7 +69,7 @@ func serve() error {
 	}
 	// 用户表落盘到 state-dir：--add-user/--add-device 是一次性 CLI 进程，
 	// 不持久化的话服务进程重建后刚签发的凭据全部失效（B19）。
-	users, err := relay.NewUsers(secret, filepath.Join(*stateDir, "users.json"))
+	users, err := relay.NewUsers(secret, filepath.Join(stateRoot, "users.json"))
 	if err != nil {
 		return err
 	}
@@ -72,13 +98,17 @@ func serve() error {
 	if _, _, err := net.SplitHostPort(*listen); err != nil {
 		return err
 	}
-	registry, err := relay.NewRegistry(*stateDir, relay.DefaultLimits())
+	registry, err := relay.NewRegistry(stateRoot, relay.DefaultLimits())
 	if err != nil {
 		return err
 	}
 	defer registry.Close()
 
-	handler := relay.NewServer(registry, users, *host)
+	handler, err := relay.NewServer(registry, users, relay.Config{Host: *host})
+	if err != nil {
+		// 启动期就暴露，而不是运行期用 403 掩盖误配置（B63）。
+		return fmt.Errorf("入口约束不完整: %w", err)
+	}
 	server := &http.Server{
 		Handler:           handler,
 		ReadHeaderTimeout: 5 * time.Second,

@@ -14,6 +14,10 @@ import (
 
 const testRelaySecret = "0123456789abcdef0123456789abcdef"
 
+// testRelayHost 声明入口来源。不含端口：httptest 的随机端口因此仍可访问，
+// 而域名不匹配的请求会被拒绝（B63 的严格用例见 host_guard_test.go）。
+const testRelayHost = "127.0.0.1"
+
 func newRelayServer(t *testing.T) (*Server, *Registry, *Users) {
 	t.Helper()
 	registry, err := NewRegistry(t.TempDir(), DefaultLimits())
@@ -25,7 +29,10 @@ func newRelayServer(t *testing.T) (*Server, *Registry, *Users) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	s := NewServer(registry, users, "")
+	s, err := NewServer(registry, users, Config{Host: testRelayHost})
+	if err != nil {
+		t.Fatal(err)
+	}
 	t.Cleanup(s.Close)
 	return s, registry, users
 }
