@@ -89,11 +89,14 @@ func (s *Store) Search(ctx context.Context, query string, limits SearchLimits) (
 			return errStopWalk
 		}
 		if size > limits.MaxFileBytes {
+			// 跳过的超大文件也占访问预算：否则一个装满大文件的目录
+			// 会把每个都 stat 一遍才停（B43）。
+			scanned++
 			out.Truncated = true
 			return nil
 		}
 		scanned++
-		return s.searchFile(path, needle, limits, &out)
+		return s.searchFile(ctx, path, needle, limits, &out)
 	})
 	if walkErr != nil && !isStopWalk(walkErr) {
 		return SearchResult{}, walkErr
@@ -106,7 +109,9 @@ func (s *Store) Search(ctx context.Context, query string, limits SearchLimits) (
 }
 
 // searchFile 在单个会话文件内搜索。
-func (s *Store) searchFile(path, needle string, limits SearchLimits, out *SearchResult) error {
+// ctx 逐行检查：单文件搜索以前只在文件之间响应取消，
+// 一个大文件就能把取消拖到扫描完（B43）。
+func (s *Store) searchFile(ctx context.Context, path, needle string, limits SearchLimits, out *SearchResult) error {
 	f, err := s.root.Open(path)
 	if err != nil {
 		return nil
@@ -114,6 +119,12 @@ func (s *Store) searchFile(path, needle string, limits SearchLimits, out *Search
 	defer f.Close()
 	st, err := f.Stat()
 	if err != nil || !st.Mode().IsRegular() {
+		return nil
+	}
+	// 句柄上的真实尺寸与目录项可能不同：还在增长的文件在这里再判一次，
+	// 否则「目录项当时很小」的文件会把整个大文件读进来（B43）。
+	if st.Size() > limits.MaxFileBytes {
+		out.Truncated = true
 		return nil
 	}
 	r := bufio.NewReader(io.LimitReader(f, st.Size()))
@@ -131,7 +142,13 @@ func (s *Store) searchFile(path, needle string, limits SearchLimits, out *Search
 	}()
 	// 复用缓冲：命中只产出 string（摘要/标题），不保留原始字节。
 	var reader jsonl.Reusable
-	for {
+	for i := 0; ; i++ {
+		// 每 64 行响应一次取消：扫描成本主要在解析，而不是 I/O。
+		if i%64 == 0 {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+		}
 		b, _, e := reader.Read(r, limits.LineBytes)
 		if e != nil {
 			// 末尾半行忽略，那是 Pi 正在追加的正常状态。

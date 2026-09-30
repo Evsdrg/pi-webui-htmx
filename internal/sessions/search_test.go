@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 )
 
 func writeSearchSession(t *testing.T, sessionDir, cwd, id, body string) {
@@ -260,5 +261,64 @@ func TestSearch多条命中各自摘要不串行(t *testing.T) {
 		if again.Matches[i] != out.Matches[i] {
 			t.Fatalf("第 %d 条在重复搜索后不同:\n%+v\n%+v", i, out.Matches[i], again.Matches[i])
 		}
+	}
+}
+
+// B43：跳过的超大文件也要占访问预算。
+// 老实现里它们既不扫描也不计数，于是一个装满大文件的目录会被逐个 stat 到底。
+func Test搜索跳过超大文件也计入访问预算(t *testing.T) {
+	cwd := t.TempDir()
+	store, sessionDir := newStore(t, cwd)
+	dir := filepath.Join(sessionDir, replaceAll("--"+filepath.ToSlash(cwd)+"--", "/", "-"))
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	// 稀疏文件：只占 stat 尺寸，不实际写盘。
+	for i := 0; i < 20; i++ {
+		f, err := os.Create(filepath.Join(dir, fmt.Sprintf("2026-01-01T00-00-%02d.000Z_big%d.jsonl", i, i)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := f.Truncate(8 << 20); err != nil {
+			t.Fatal(err)
+		}
+		f.Close()
+	}
+	limits := DefaultSearchLimits()
+	limits.MaxFiles = 5
+	limits.MaxFileBytes = 1 << 20
+	out, err := store.Search(context.Background(), "任意", limits)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out.Scanned != 5 {
+		t.Fatalf("超大文件也应计入访问预算：scanned=%d，期望 5", out.Scanned)
+	}
+	if !out.Truncated {
+		t.Fatal("应标记 truncated")
+	}
+}
+
+// B43：单文件搜索期间取消必须生效。
+// 老实现只在文件之间检查取消，一个文件就能把取消拖到扫完。
+func Test搜索在单文件内响应取消(t *testing.T) {
+	cwd := t.TempDir()
+	store, sessionDir := newStore(t, cwd)
+	line := `{"type":"message","id":"x","parentId":null,"timestamp":"2026-01-01T00:00:01.000Z","message":{"role":"user","content":"` + strings.Repeat("填充文本", 200) + `"}}`
+	var body strings.Builder
+	for body.Len() < 12<<20 {
+		body.WriteString(line)
+		body.WriteString("\n")
+	}
+	writeSearchSession(t, sessionDir, cwd, "big", body.String())
+
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		time.Sleep(5 * time.Millisecond)
+		cancel()
+	}()
+	_, err := store.Search(ctx, "填充", DefaultSearchLimits())
+	if err == nil {
+		t.Fatal("取消后搜索应返回错误，而不是静默给出完整结果")
 	}
 }

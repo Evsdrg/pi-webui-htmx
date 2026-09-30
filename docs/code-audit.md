@@ -23,6 +23,11 @@
 - **缺口比原文更大**：B54（relay 侧缺设备前缀 HTTP 转发，前端缺 basePath，S09 目标形态两端都未实现）。
 - **复核后仍确认未修**：U04、U15、U16、U18、B33、B36、B37、B38、B40、B43、B45、B50、B51、B53、B54、B55、B70、B75、B76、B77、B80、D01。
 
+### 2026-10-01 第三、四批修复
+
+- **本轮修完**：U15、U16、U18、B36、B51、B43，并补了图片 blob URL 与分支监听的释放（R01）。
+- **B63/U16/B77 曾标为已修但复核后重开**：B63 当时误用本地桥的 public-origin 校验当作 relay 已修的证据；U16 的确认帧仍缺会话代次守卫；B77 仅做导出前裁剪，不含单文件与并发硬配额。三项在 [remaining-issues-plan.md](remaining-issues-plan.md) 登记后重新打开。
+
 这轮复核本身也说明一件事：**台账状态会漂移**，判断某个问题是否还存在时，先看代码，别只看这里的状态列。
 
 ### 2026-09-30 第二轮修复
@@ -97,7 +102,7 @@
 | B40 | 高 | Runtime | Linux `Pdeathsig=SIGTERM` 只作用于 Pi/terminal 的直接子进程，不会发给整个进程组；桥被 SIGKILL 后，忽略 SIGTERM 的 shell/扩展后代仍存活。带孙进程的 helper 反例已复现。 | `internal/runtime/process_linux.go`；`internal/terminal/terminal.go`；`pdeath-probe.log` |
 | B41 | ✅ 已修 | Relay | **修复：** `Close()` 遍历 `s.clients` 一并 cancel 并关闭，浏览器不再挂到对端超时。回归断言必须读到「连接已关闭」而非读超时。 | `internal/relay/server.go`；`relay_limits_test.go` |
 | B42 | ✅ 已修 | Bridge | **修复：** 状态设 64 KiB 原始字节及条目双限，预留 JSON/WS 空间，返回完整记录及 truncated，UI 显示截断。精确边界及转义预算回归通过。原问题：`GitStatus` 的 2 MiB stdout 截断被 `gitOutput` 丢弃；10000 个未跟踪文件的探针只返回 9119 条且无 `truncated` 字段，接口静默显示不完整状态。超过 512 KiB 的列表还会超出 WS 响应帧上限。 | `internal/workspace/git.go`；`git-status-limit-probe.log` |
-| B43 | 中 | Bridge | 复核（2026-09-30，描述修正）：超过 `MaxFileBytes` 的文件只被 stat、**不读内容**（回调直接返回），所以争的是遍历次数与 stat 预算，不是磁盘读放大；`ctx` 只在文件之间检查、单文件扫描期间不响应取消这两点仍成立。 | `internal/sessions/search.go` |
+| B43 | ✅ 已修 | Bridge | 本轮修复：① 跳过的超大文件也计入访问预算（`scanned++`），否则装满大文件的目录会被逐个 stat 到底；② `searchFile` 接 ctx 并每 64 行检查一次取消；③ 打开句柄后按真实尺寸再判一次 `MaxFileBytes`（目录项尺寸与读时可能不同）。反例：`search_test.go` 两条——稀疏大文件目录的 `scanned=5`、12 MiB 单文件在 5ms 后取消必须返回错误。 | `internal/sessions/search.go`；`search_test.go` |
 | B44 | ✅ 已修 | Build | **修复：** 终端平台差异收敛到 `proc_lin.go`/`proc_oth.go`，非 Linux 显式报错。linux/darwin/windows 三平台 `go build` 与 `go vet` 均通过。 | `internal/terminal/{terminal,proc_lin,proc_oth}.go` |
 | B45 | 中 | Bridge | Pi Web 为 Pi 导出的 HTML 把 `sortChildren/mapNodes/markActive` 改为迭代实现，专门修复 5000+ 深树栈溢出；桥直接透传 Pi `export_html` 文件，没有同等处理，长线性会话导出后浏览器仍可能栈溢出。 | `internal/runtime/session_ops.go`；`pi-web/app/api/sessions/[id]/export/route.ts` |
 | B46 | ✅ 已修 | Relay | **修复：** Cookie 属主改 base64url 编码，彻底消除 '.' 分隔符冲突；同时限定 owner/deviceId 字符集（拒绝控制字符与空白，允许 '.'）。 | `internal/relay/users.go`；`users_persist_test.go` |
@@ -127,7 +132,7 @@
 | B48 | ✅ 已修 | Runtime | **修复：** 记录每个对话的登记时间，回收协程里清理超过自身 `timeout` 的对话并通知前端；无 timeout 字段的对话不误清。回归验证清理后 `busyLocked()` 为假、空闲回收恢复。 | `internal/runtime/dialogs.go`；`manager.go`；`dialogs_test.go` |
 | B49 | ✅ 已修 | Management | 模型摘要按 Pi 数组计数并对总输出应用限额，稳定排序 provider，保留原始 modelCount 并标记截断；旧对象夹具已改为真实数组。 | `internal/management/config.go`；`config_safety_test.go` |
 | B50 | ✅ 已修 | Runtime | 本轮修复：`stop` 分级停止改成步骤表，总预算 = 步骤数 × StopGrace 由结构保证；`closing` 之后再次 `Stop` 不再无条件等 `done`，改为等到该预算的终点（`awaitStopped`）。反例 `runtime/stop_test.go` 两条：旧实现下第二条 Stop 阻塞满 3 秒判定超时。 | `internal/runtime/manager.go` |
-| B51 | ⚠️ 部分修复 | Management/Workspace | 配置读取已限制实际 reader 并检查打开的文件类型；workspace 文件/图片路径仍待修复，不能因配置侧完成就关闭此项。 | `internal/management/config.go`；`internal/workspace/files.go` |
+| B51 | ✅ 已修 | Management/Workspace | 本轮修完：`Files.Read`/`Files.Image` 改为「打开句柄 → 句柄上 stat → 按上限截断读取」（`readAtMost` 用 LimitReader，最多读 limit+1 字节）。反例：`files_test.go` 的两条——超一个字节拒绝、恰好等于上限成功；计数 reader 证明最多读 65 字节（旧实现读了 1048576）。配置侧的实际 reader 限制不变。 | `internal/workspace/files.go`；`files_test.go` |
 | B52 | ✅ 已修 | Sessions | **修复：** `walkDir`/`computeFingerprint` 接收 context（入口与内层双检），深度上限 32；空目录不计入文件上限。 | `internal/sessions/index.go`；`index_test.go` |
 | B53 | ✅ 已修 | Tunnel | 本轮修复，**缺口比原文更大**：relay 与隧道客户端各自写死 1 MiB，而桥允许浏览器发 8×12 MiB 的图片附件——两处都会把合法帧当成超限帧，表现是「发图片就断隧道」。现在帧上限由 `protocol.BrowserFrameLimit` 统一给出（`transport.wsReadLimit`、`tunnel.maxFrame`、`relay.maxFrame`），relay 的路由封装改为不做 HTML 转义（否则载荷里的 `<` 会膨胀到 6 倍），队列放行线改为「预算与本帧大小的较大值」（否则最大帧被 4 MiB 队列预算自己挤掉）。 | `internal/relay/server.go`；`internal/transport/tunnel.go` |
 | B54 | 高 | Product | 复核（2026-09-30，缺口比原文更大）：relay 侧只有 WS 中继 `/client?deviceId=&clientId=`（`relay.RouteTo`/`Unwrap`）与设备侧 `/tunnel`，**没有**按设备前缀转发 HTTP 的入口，而 UI 外壳、`/ui/*` 片段、`/assets/*` 都是 HTTP；前端 `BridgeClient` 也固定连当前站点且无 basePath 概念。所以「同源 HTTP + WS 透明适配」（architecture.md S09）在服务端与前端都还没实现，不是只差前端登录/设备选择。属于 P7，依赖 P2–P6。 | `pi-webui-htmx/src/modules/workbench.ts`；`pi-bridge-go/internal/relay/server.go` |

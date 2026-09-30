@@ -1,6 +1,7 @@
 package workspace
 
 import (
+	"errors"
 	"io"
 	"os"
 	"os/exec"
@@ -211,6 +212,24 @@ func (f *Files) List(path string) ([]Entry, bool, error) {
 
 // Read 读取文件内容，超出上限时只返回头部并标记 truncated。
 // 只读取文本可安全展示的大小；二进制与超大文件一律拒绝。
+// errTooLarge 表示读取过程中文件超过了限额。
+var errTooLarge = errors.New("读取超过体积上限")
+
+// readAtMost 最多读 limit 字节；多出一个字节就判定超限。
+// 用 LimitReader 而不是 ReadFile：后者按 stat 的尺寸一次分配，
+// 而 stat 与读之间文件可以增长，增长后的内容会被无上限地读进来（B51）。
+func readAtMost(r io.Reader, limit int64) ([]byte, error) {
+	b, err := io.ReadAll(io.LimitReader(r, limit+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(b)) > limit {
+		return nil, errTooLarge
+	}
+	return b, nil
+}
+
+// Read 以文本形式读取文件。上限作用于实际读取字节，而不只是 stat 结论（B51）。
 func (f *Files) Read(path string) (string, bool, int64, error) {
 	root, rel, err := f.resolve(path)
 	if err != nil {
@@ -220,7 +239,13 @@ func (f *Files) Read(path string) (string, bool, int64, error) {
 	if err != nil {
 		return "", false, 0, err
 	}
-	info, err := r.Stat(rel)
+	file, err := r.Open(rel)
+	if err != nil {
+		return "", false, 0, protocol.E("not_found", "路径不存在")
+	}
+	defer file.Close()
+	// 在打开后的句柄上取元数据：与接下来读的是同一个 inode。
+	info, err := file.Stat()
 	if err != nil {
 		return "", false, 0, protocol.E("not_found", "路径不存在")
 	}
@@ -231,8 +256,11 @@ func (f *Files) Read(path string) (string, bool, int64, error) {
 	if size > f.limits.MaxReadByte {
 		return "", false, size, protocol.E("limit_exceeded", "文件超过可读取体积上限")
 	}
-	b, err := r.ReadFile(rel)
+	b, err := readAtMost(file, f.limits.MaxReadByte)
 	if err != nil {
+		if errors.Is(err, errTooLarge) {
+			return "", false, size, protocol.E("limit_exceeded", "文件超过可读取体积上限")
+		}
 		return "", false, size, protocol.E("pi_error", "读取失败")
 	}
 	// 二进制不当文本读。此前 PNG 会被 string(b) 转成乱码返回，
@@ -254,7 +282,12 @@ func (f *Files) Image(path string) ([]byte, string, error) {
 	if err != nil {
 		return nil, "", err
 	}
-	info, err := r.Stat(rel)
+	file, err := r.Open(rel)
+	if err != nil {
+		return nil, "", protocol.E("not_found", "路径不存在")
+	}
+	defer file.Close()
+	info, err := file.Stat()
 	if err != nil {
 		return nil, "", protocol.E("not_found", "路径不存在")
 	}
@@ -264,8 +297,11 @@ func (f *Files) Image(path string) ([]byte, string, error) {
 	if info.Size() > f.limits.MaxReadByte {
 		return nil, "", protocol.E("limit_exceeded", "图片超过体积上限")
 	}
-	b, err := r.ReadFile(rel)
+	b, err := readAtMost(file, f.limits.MaxReadByte)
 	if err != nil {
+		if errors.Is(err, errTooLarge) {
+			return nil, "", protocol.E("limit_exceeded", "图片超过体积上限")
+		}
 		return nil, "", protocol.E("pi_error", "读取失败")
 	}
 	mime := ImageMime(b)

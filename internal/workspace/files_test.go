@@ -1,7 +1,10 @@
 package workspace
 
 import (
+	"bytes"
 	"context"
+	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -268,5 +271,75 @@ func Test超大目录不整体载入(t *testing.T) {
 		if i > 0 && entries[i-1].IsDir && entries[i-1].Name > e.Name {
 			t.Fatalf("目录未按名称有序: %s > %s", entries[i-1].Name, e.Name)
 		}
+	}
+}
+
+// countingReader 记录底层被读走多少字节：
+// 用它证明「读取上限」作用在实际 I/O 上，而不只是事后判定。
+type countingReader struct {
+	n    int
+	data []byte
+}
+
+func (c *countingReader) Read(p []byte) (int, error) {
+	if c.n >= len(c.data) {
+		return 0, io.EOF
+	}
+	k := copy(p, c.data[c.n:])
+	c.n += k
+	return k, nil
+}
+
+// readAtMost 是 B51 的兜底：读取上限作用在实际读取上，
+// 文件在 stat 之后增长也不会被无界读进来。
+func Test读取工具按上限截断(t *testing.T) {
+	if _, err := readAtMost(bytes.NewReader(bytes.Repeat([]byte("x"), 100)), 64); !errors.Is(err, errTooLarge) {
+		t.Fatalf("超过上限应报错，实际 %v", err)
+	}
+	b, err := readAtMost(bytes.NewReader(bytes.Repeat([]byte("x"), 64)), 64)
+	if err != nil || len(b) != 64 {
+		t.Fatalf("恰好等于上限应成功: %v %d", err, len(b))
+	}
+	// 最关键的断言：最多读 limit+1 字节。
+	// 无上限的 ReadAll 会把整个输入拉进内存（1 MiB），这正是 B51 要堵的。
+	r := &countingReader{data: bytes.Repeat([]byte("x"), 1<<20)}
+	if _, err := readAtMost(r, 64); !errors.Is(err, errTooLarge) {
+		t.Fatalf("超过上限应报错，实际 %v", err)
+	}
+	if r.n != 65 {
+		t.Fatalf("最多读 65 字节，实际读了 %d", r.n)
+	}
+}
+
+// B51：读取端点以前只按 stat 结论判限，读本身没有上限。
+// 现在边界仍然按行为锁住：超一个字节拒绝，恰好等于上限成功。
+func Test读取边界按实际字节生效(t *testing.T) {
+	root := t.TempDir()
+	p, err := New([]string{root})
+	if err != nil {
+		t.Fatal(err)
+	}
+	limits := DefaultLimits()
+	limits.MaxReadByte = 64
+	f, err := NewFiles(p, limits)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+
+	over := filepath.Join(root, "over.txt")
+	if err := os.WriteFile(over, bytes.Repeat([]byte("x"), 65), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, size, err := f.Read(over); err == nil || size != 65 {
+		t.Fatalf("超出一个字节应拒绝并回报真实尺寸: %v %d", err, size)
+	}
+	exact := filepath.Join(root, "exact.txt")
+	if err := os.WriteFile(exact, bytes.Repeat([]byte("x"), 64), 0644); err != nil {
+		t.Fatal(err)
+	}
+	text, _, size, err := f.Read(exact)
+	if err != nil || size != 64 || len(text) != 64 {
+		t.Fatalf("恰好等于上限应成功: %v %d %d", err, size, len(text))
 	}
 }
