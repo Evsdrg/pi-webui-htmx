@@ -430,7 +430,10 @@ type Worker struct {
 	done                               chan struct{}
 	active, queued, uncertain, closing bool
 	waitingInput                       bool
-	pendingDialogs                     map[string]json.RawMessage
+	// stopDeadline 是第一次停止流程（三档信号）的总预算终点。
+	// closing 之后再次 Stop 只等到这个时刻，不再无限期按着 B50。
+	stopDeadline   time.Time
+	pendingDialogs map[string]json.RawMessage
 	// dialogOpened 记录每个对话的登记时间，供超时清理使用。
 	dialogOpened map[string]time.Time
 	pending      int
@@ -776,9 +779,13 @@ func (w *Worker) stopIfIdle() error { return w.stop(false, true) }
 func (w *Worker) stop(force, idleOnly bool) error {
 	w.mu.Lock()
 	if w.closing {
+		// 已有停止流程在跑（或已跑完）。不能无条件等 done：
+		// 第一次强停超时后进程可能永远不退出，那时 done 永不关闭，
+		// 而调用者是回复 session.stop 的请求协程——它会连同请求号
+		// 一起永久挂住（B50）。改用同一份预算作为上限。
+		deadline := w.stopDeadline
 		w.mu.Unlock()
-		<-w.done
-		return nil
+		return w.awaitStopped(deadline)
 	}
 	if !force && w.busyLocked() {
 		w.mu.Unlock()
@@ -798,30 +805,63 @@ func (w *Worker) stop(force, idleOnly bool) error {
 	w.pendingDialogs = map[string]json.RawMessage{}
 	w.dialogOpened = map[string]time.Time{}
 	w.waitingInput = false
+	// 预算与下面的步骤数同源，不另写常量——否则改了步骤就会漂。
+	steps := w.stopSteps()
+	w.stopDeadline = time.Now().Add(time.Duration(len(steps)) * w.cfg.StopGrace)
 	w.publishLocked("bridge.worker_state", w.infoLocked())
 	w.mu.Unlock()
 	for _, id := range dialogs {
 		_ = w.client.Notify(map[string]any{"type": "extension_ui_response", "id": id, "cancelled": true})
 	}
-	w.client.CloseInput()
-	select {
-	case <-w.done:
-		return nil
-	case <-time.After(w.cfg.StopGrace):
+	for _, step := range steps {
+		step.act()
+		select {
+		case <-w.done:
+			return nil
+		case <-time.After(w.cfg.StopGrace):
+		}
 	}
-	signalGroup(w.cmd, false)
-	select {
-	case <-w.done:
-		return nil
-	case <-time.After(w.cfg.StopGrace):
+	return protocol.E("timeout", "强杀后工作进程仍未退出")
+}
+
+// stopStep 是分级停止的一步：先发出动作，再等一个宽限期。
+// 拆成数据是为了让「总预算 = 步骤数 × 宽限期」由结构保证，
+// 而不是靠两处各自维护的数字对齐。
+// 最后一步超时才算失败：进程在 SIGKILL 之后仍不退出，桥已经无能为力。
+type stopStep struct {
+	act func()
+}
+
+func (w *Worker) stopSteps() []stopStep {
+	return []stopStep{
+		{act: func() { w.client.CloseInput() }},
+		{act: func() { signalGroup(w.cmd, false) }},
+		{act: func() {
+			signalGroup(w.cmd, true)
+			w.client.Close()
+		}},
 	}
-	signalGroup(w.cmd, true)
-	w.client.Close()
+}
+
+// awaitStopped 等进程退出，但不越过第一次停止流程的总预算。
+// 预算已耗尽时不再干等：桥已经把三档信号都发过了。
+func (w *Worker) awaitStopped(deadline time.Time) error {
 	select {
 	case <-w.done:
 		return nil
-	case <-time.After(w.cfg.StopGrace):
-		return protocol.E("timeout", "强杀后工作进程仍未退出")
+	default:
+	}
+	remaining := time.Until(deadline)
+	if remaining <= 0 {
+		return protocol.E("timeout", "停止流程已超时，工作进程仍未退出")
+	}
+	timer := time.NewTimer(remaining)
+	defer timer.Stop()
+	select {
+	case <-w.done:
+		return nil
+	case <-timer.C:
+		return protocol.E("timeout", "停止流程已超时，工作进程仍未退出")
 	}
 }
 
