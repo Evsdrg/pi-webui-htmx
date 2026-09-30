@@ -536,6 +536,7 @@ func (t *Terminal) close(force bool) error {
 	if t.closed.Swap(true) {
 		if force && t.cmd.Process != nil {
 			killGroup(t.cmd.Process.Pid, syscall.SIGKILL)
+			killSession(t.cmd.Process.Pid, syscall.SIGKILL)
 		}
 		select {
 		case <-t.done:
@@ -551,7 +552,10 @@ func (t *Terminal) close(force bool) error {
 	case <-time.After(grace):
 	}
 	if t.cmd.Process != nil {
+		// 两步：先按进程组（shell 自己那组），再按会话（job control
+		// 把后台作业放进了各自的进程组，只杀组会留下它们）。
 		killGroup(t.cmd.Process.Pid, syscall.SIGTERM)
+		killSession(t.cmd.Process.Pid, syscall.SIGTERM)
 	}
 	select {
 	case <-t.done:
@@ -559,6 +563,11 @@ func (t *Terminal) close(force bool) error {
 	}
 	if t.cmd.Process != nil && force {
 		killGroup(t.cmd.Process.Pid, syscall.SIGKILL)
+		killSession(t.cmd.Process.Pid, syscall.SIGKILL)
+	}
+	// 宽限期后即使 shell 已退出，也要回收残留的会话成员。
+	if t.cmd.Process != nil && !force {
+		killSession(t.cmd.Process.Pid, syscall.SIGKILL)
 	}
 	select {
 	case <-t.done:

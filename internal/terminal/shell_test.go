@@ -1,9 +1,13 @@
 package terminal
 
 import (
+	"context"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"testing"
+	"time"
 )
 
 // B75：shell 必须来自本机固定受信路径表。
@@ -53,5 +57,51 @@ func Test相对路径shell一律拒绝(t *testing.T) {
 	// 裸名字仍可用（走受信表）。
 	if _, err := resolveShell("sh"); err != nil {
 		t.Fatalf("裸名字 sh 应可用: %v", err)
+	}
+}
+
+// 会话成员清点是 killSession 的基础：交互 shell 的后台作业在
+// **自己的进程组**里，但 sid 仍是 shell 的 pid。按进程组杀必然漏掉它。
+func Test会话成员含同会话后台作业(t *testing.T) {
+	m := NewManager(Defaults())
+	defer m.Close()
+	term, err := m.Open(t.TempDir(), "/bin/sh", 80, 24)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sub, err := term.Subscribe(64, 1<<20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sub.Close()
+	if err := term.Write([]byte("sleep 300 & echo CHILD=$!\n")); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	child := 0
+	out := strings.Builder{}
+	for child == 0 {
+		chunk, err := sub.Next(ctx)
+		if err != nil {
+			t.Fatalf("未读到后代 PID: %q (%v)", out.String(), err)
+		}
+		out.Write(chunk)
+		if mm := childPIDPattern.FindStringSubmatch(out.String()); mm != nil {
+			child, _ = strconv.Atoi(mm[1])
+		}
+	}
+	shell := term.Info().PID
+	members := sessionMembers(shell)
+	found := map[int]bool{}
+	for _, pid := range members {
+		found[pid] = true
+	}
+	if !found[shell] || !found[child] {
+		t.Fatalf("会话成员应含 shell(%d) 与后台作业(%d): %v", shell, child, members)
+	}
+	// 关键差异：作业不在 shell 的进程组里，所以「按会话」这一步是必需的。
+	if got := sessionOf(child); got != shell {
+		t.Fatalf("作业应与 shell 同会话: sid=%d shell=%d", got, shell)
 	}
 }

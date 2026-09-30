@@ -21,3 +21,7 @@ func startPTY(cmd *exec.Cmd, size *pty.Winsize) (*os.File, error) {
 
 // killGroup 在非 Linux 上无进程组语义可用。
 func killGroup(pid int, sig any) {}
+
+// killSession 在非 Linux 上无 /proc 可查，只能退化为进程组语义
+// （见 killGroup）。平台差异收敛在这里，调用方不必分支。
+func killSession(pid int, sig any) {}

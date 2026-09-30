@@ -2,6 +2,8 @@ package terminal
 
 import (
 	"context"
+	"regexp"
+	"strconv"
 	"strings"
 	"syscall"
 	"testing"
@@ -171,3 +173,52 @@ func Test环境变量可覆盖默认shell(t *testing.T) {
 		t.Fatal("终端缺少工作目录")
 	}
 }
+
+// B40（终端侧）：关闭终端时回收整个进程组。
+// shell 用 `&` 起的后台作业仍在同一进程组里；只杀直接子进程会把它留成孤儿。
+func Test关闭终端回收同组后代(t *testing.T) {
+	m := NewManager(Defaults())
+	dir := t.TempDir()
+	term, err := m.Open(dir, "/bin/sh", 80, 24)
+	if err != nil {
+		t.Fatalf("打开终端失败: %v", err)
+	}
+	sub, err := term.Subscribe(64, 1<<20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sub.Close()
+	if err := term.Write([]byte("sleep 300 & echo CHILD=$!\n")); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	child := 0
+	got := strings.Builder{}
+	for child == 0 {
+		chunk, err := sub.Next(ctx)
+		if err != nil {
+			t.Fatalf("未读到后代 PID: %q (%v)", got.String(), err)
+		}
+		got.Write(chunk)
+		if m := childPIDPattern.FindStringSubmatch(got.String()); m != nil {
+			child, _ = strconv.Atoi(m[1])
+		}
+	}
+	if !processAlive(child) {
+		t.Fatalf("后代进程未启动: pid=%d", child)
+	}
+	// 走管理器关闭路径：与桥停止时一致。
+	m.Close()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) && processAlive(child) {
+		time.Sleep(20 * time.Millisecond)
+	}
+	if processAlive(child) {
+		_ = syscall.Kill(child, syscall.SIGKILL)
+		t.Fatalf("关闭终端后同组后代仍存活: pid=%d", child)
+	}
+}
+
+// childPIDPattern 匹配 shell 回显的后代 PID。
+var childPIDPattern = regexp.MustCompile(`CHILD=(\d+)`)
