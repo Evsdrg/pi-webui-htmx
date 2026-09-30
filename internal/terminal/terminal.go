@@ -338,6 +338,12 @@ func resolveShell(shell string) (string, error) {
 	if strings.ContainsAny(shell, forbiddenShellChars) {
 		return "", protocol.E("invalid_params", "shell 不能包含参数或 shell 元字符")
 	}
+	// 相对路径（含 "bin/sh"、"./sh"、"../bin/sh"）一律拒绝：
+	// 它的解析结果取决于进程当前工作目录，等于让调用方间接挑二进制。
+	// 只接受裸名字（查受信表）或绝对路径（必须是表内候选的同一文件）。
+	if !filepath.IsAbs(shell) && strings.ContainsRune(shell, os.PathSeparator) {
+		return "", protocol.E("invalid_params", "shell 必须是名字或绝对路径")
+	}
 	base := strings.ToLower(filepath.Base(shell))
 	candidates, ok := shellCandidates[base]
 	if !ok {

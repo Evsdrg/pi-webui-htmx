@@ -40,3 +40,18 @@ func Test伪装成bash的可执行文件被拒绝(t *testing.T) {
 		t.Fatal("表外 shell 应被拒绝")
 	}
 }
+
+// 相对路径（含分隔符但不是绝对路径）依赖进程 cwd 解析，等于让调用方
+// 间接挑二进制："."、"./sh"、"bin/sh"、"../bin/sh" 全部拒绝。
+// 只有裸名字（查受信表）与绝对路径（必须是表内候选的同一文件）可用。
+func Test相对路径shell一律拒绝(t *testing.T) {
+	for _, bad := range []string{"./sh", "bin/sh", "../bin/sh", "./bash", "sub/sh"} {
+		if _, err := resolveShell(bad); err == nil {
+			t.Fatalf("相对路径 %q 应被拒绝", bad)
+		}
+	}
+	// 裸名字仍可用（走受信表）。
+	if _, err := resolveShell("sh"); err != nil {
+		t.Fatalf("裸名字 sh 应可用: %v", err)
+	}
+}
