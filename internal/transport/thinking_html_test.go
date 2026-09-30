@@ -13,7 +13,7 @@ func Test思考正文HTML转义且保留旧JSON协议(t *testing.T) {
 	s := newTestServerWithUI(t)
 	rows := []any{
 		map[string]any{"type": "session", "version": 3, "id": "thought", "cwd": s.files.Roots()[0]},
-		map[string]any{"type": "message", "id": "a1", "message": map[string]any{"role": "assistant", "content": []any{map[string]any{"type": "thinking", "thinking": "<script>unsafe</script>\nfull"}}}},
+		map[string]any{"type": "message", "id": "a1", "parentId": nil, "message": map[string]any{"role": "assistant", "content": []any{map[string]any{"type": "thinking", "thinking": "<script>unsafe</script>\nfull"}}}},
 	}
 	var content []byte
 	for _, row := range rows {

@@ -26,6 +26,7 @@
 ### 2026-10-01 第三、四批修复
 
 - **本轮修完**：U15、U16、U18、B36、B51、B43，并补了图片 blob URL 与分支监听的释放（R01）。
+- **D 批（共用磁盘读取）**：B37（标题两端读）、B38/O03（惰性读取复用扫描索引）、O04（扫描缓存 4 槽 + 总预算 + LRU 淘汰）、U04（磁盘树投影）。
 - **B63/U16/B77 曾标为已修但复核后重开**：B63 当时误用本地桥的 public-origin 校验当作 relay 已修的证据；U16 的确认帧仍缺会话代次守卫；B77 仅做导出前裁剪，不含单文件与并发硬配额。三项在 [remaining-issues-plan.md](remaining-issues-plan.md) 登记后重新打开。
 
 这轮复核本身也说明一件事：**台账状态会漂移**，判断某个问题是否还存在时，先看代码，别只看这里的状态列。
@@ -66,7 +67,7 @@
 | U01 | ✅ 已修 | UI | **修复：** `selectSession` 切换时清空附件，附件不再跨会话残留；发送进行中仍保留输入以便重发。 | `src/modules/workbench.ts`；`tests/unit/workbench.test.ts` |
 | U02 | ✅ 已修 | UI | 发送前固定用户所选模型，不受 `ensureWorker()` 内的状态刷新覆盖；Pi 恢复模型为 `unknown/unknown` 时显示历史标识为不可用、保留草稿并阻止误发。真实会话隔离副本与前端回归均覆盖。 | `pi-webui-htmx/src/modules/workbench.ts`；`internal/sessions/store.go` |
 | U03 | ✅ 已修 | UI | **修复：** 新增 `SessionScope`；`command()` 固定发起时归属的会话，切换后不再改投。 | `src/modules/scope.ts`；`src/modules/workbench.ts` |
-| U04 | 中 | UI/Bridge | 无 worker 的历史会话打开分支面板时，`session.tree` 被桥拒绝；历史树浏览依赖显式启动会话。 | `pi-webui-htmx/src/modules/branch.ts`；`pi-bridge-go/internal/transport/server.go` |
+| U04 | ✅ 已修 | UI/Bridge | 本轮修复：新增 `Store.Tree` 从磁盘投影会话树（形状与 Pi `get_tree` 对齐，迭代摊平防深链栈溢出），`/ui/branch` 无 worker 时走它；有 worker 时仍用 Pi 实时树。差异如实标出：不含内存态、fork 列表为空（fork 仍是写操作）。反例：`branch_disk_test.go`——无 worker 时片段含 `data-branch-goto`、不启动进程、不再提示「请先显式启动会话」。 | `internal/sessions/tree.go`；`internal/transport/server.go`；`branch_disk_test.go` |
 | U05 | ✅ 已修 | UI/Bridge | **修复：** WS 读上限从 1 MiB 提升到与附件预算对齐（`pi.MaxImages × pi.MaxImageDataLen + 1 MiB`），前端发送前按 base64 总量预检并给出可读错误，不再以断线形式失败。 | `internal/transport/server.go`；`pi-webui-htmx/src/modules/attachments.ts`；`src/modules/workbench.ts` |
 
 ## 继续审查发现（源码核对/定向复现）
@@ -96,8 +97,8 @@
 | B35 | ✅ 已修 | Relay | **修复：** scheme 推断信任 `X-Forwarded-Proto`（仅接受明确 https，其余按 http），Cookie `Secure` 同步跟随；无代理头时仍按 r.TLS。 | `internal/relay/server.go`；`relay_transport_test.go` |
 | B35b | ✅ 已实现 | Transport | **修复：** 桥自身 HTTP/WS 路径原先只接受环回监听，且 Host/Origin 与监听地址逐字比较、`scheme` 只看 `r.TLS`——反代终止 TLS 时恒为 http，https 页面必被 403。现由 `--public-origin` 显式声明对外来源：非环回监听仅在该开关下放行且只接受私有/overlay 网段；Host/Origin 额外接受该来源；Cookie `Secure` 跟随其 scheme；WebSocket origin 白名单与同一规则对齐。不信任任何 `X-Forwarded-*`（S09）。 | `internal/transport/public_origin.go`、`cmd/pi-bridge/main.go`；`public_origin_test.go` |
 | B36 | 中 | Bridge | `setStatus` 快照只按 key 全局存储，不含 sessionId；不同 Pi worker 的同名状态互相覆盖，切换会话可能看到另一会话的扩展状态。Pi Web 将状态保存在 per-session state。 | `internal/transport/extension_state.go`；`internal/transport/server.go`；`pi-web/hooks/useAgentSession.ts` |
-| B37 | 中 | Bridge | 会话列表首次补标题时，`titleForPage` 为每条当前页会话从文件头扫描到尾，以找最新 `session_info`。多个长会话时列表请求重复读取大量完整 JSONL；这条路径不使用 History 的 scan cache。 | `internal/sessions/metadata.go`；`internal/sessions/index.go` |
-| B38 | 中 | Bridge | 每次惰性加载 thinking/tool image 都由 `rawEntry` 从 JSONL 文件头逐行扫描到目标条目；History 建好的偏移索引/scan cache 未复用，展开多个旧块会重复扫描长会话。 | `internal/sessions/lazy.go`；`internal/sessions/cache.go` |
+| B37 | ✅ 已修 | Bridge | 本轮修复：标题改从文件两端取——头部窗口读第一条用户文本，尾部反向按块找最新 `session_info`（块间重叠 4 KiB，最多 64 块）。反例：`title_test.go` 两条——计数 ReaderAt 证明 8 MiB 文件只读 < 1 MiB（旧实现扫全文）；8 种偏移覆盖跨块边界。末尾半行沿用「未写完不算」语义。 | `internal/sessions/title.go`；`title_test.go` |
+| B38 | ✅ 已修 | Bridge | 本轮修复（与 O03 合并）：`rawEntry` 走 `scanNodes`（与 History 同一缓存键），命中后按 offset/size ReadAt 单条并核对记录 ID；冷路径全扫一次写缓存，校验失败回退线性扫描。**语义变化**：坏文件（如缺 `parentId`）现在与历史页同样报 `invalid_history`，不再被宽松跳过——三处测试夹具因此按真实 Pi 格式修正。反例：`Test惰性读取复用扫描索引`（旧实现 `scan.stats()` 为 0）。 | `internal/sessions/lazy.go`；`store.go`；`lazy_test.go` |
 | B39 | ✅ 已修 | Bridge | **修复：** 压缩命中先返回缓存，未命中才读原文；回归用「预热后删除原文件仍可命中」验证。原问题：命中前仍 `os.ReadFile` 并分配完整 JS/CSS。 | `internal/presentation/presentation.go`；`compress_test.go` |
 | B40 | 高 | Runtime | Linux `Pdeathsig=SIGTERM` 只作用于 Pi/terminal 的直接子进程，不会发给整个进程组；桥被 SIGKILL 后，忽略 SIGTERM 的 shell/扩展后代仍存活。带孙进程的 helper 反例已复现。 | `internal/runtime/process_linux.go`；`internal/terminal/terminal.go`；`pdeath-probe.log` |
 | B41 | ✅ 已修 | Relay | **修复：** `Close()` 遍历 `s.clients` 一并 cancel 并关闭，浏览器不再挂到对端超时。回归断言必须读到「连接已关闭」而非读超时。 | `internal/relay/server.go`；`relay_limits_test.go` |

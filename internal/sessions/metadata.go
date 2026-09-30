@@ -1,90 +1,39 @@
 package sessions
 
 import (
-	"bufio"
-	"bytes"
 	"context"
-	"encoding/json"
-	"errors"
-	"io"
-	"pi-bridge-go/internal/jsonl"
 	"strings"
 	"unicode"
 )
 
 // titleForPage 仅为当前列表页读取标题；不保存正文，不启动 Pi。
 // Pi 把重命名写成 session_info，不能只读取第一行 session 头。
+//
+// 两条信息分别在文件两端：第一条用户消息在头部，最新一次重命名在尾部。
+// 所以这里不再全文件扫描（B37）：头部有界读一次，尾部反向按块找一次。
+// 全局扫描的等价物由会话目录索引的 TTL 缓存承担，不在这里重复。
 func (x *Index) titleForPage(ctx context.Context, e indexEntry) (indexEntry, error) {
 	if e.titleRead || e.size > x.limits.FileBytes {
 		return e, nil
+	}
+	if err := ctx.Err(); err != nil {
+		return e, err
 	}
 	f, err := x.root.Open(e.path)
 	if err != nil {
 		return e, nil
 	}
 	defer f.Close()
-	reader := bufio.NewReader(io.LimitReader(f, e.size))
-	// 复用缓冲：本循环只产出 string（标题/摘要），不保留原始字节。
-	var reusable jsonl.Reusable
-	var firstText string
-	for count := 0; count < x.limits.Entries; count++ {
-		if err := ctx.Err(); err != nil {
-			return e, err
-		}
-		line, _, err := reusable.Read(reader, x.limits.LineBytes)
-		if errors.Is(err, io.EOF) || errors.Is(err, jsonl.ErrIncomplete) {
-			break
-		}
-		if err != nil {
-			return e, nil
-		}
-		if !bytes.Contains(line, []byte("\"session_info\"")) && (firstText != "" || !bytes.Contains(line, []byte("\"user\""))) {
-			continue
-		}
-		var row struct {
-			Type    string `json:"type"`
-			Name    string `json:"name"`
-			Message struct {
-				Role    string          `json:"role"`
-				Content json.RawMessage `json:"content"`
-			} `json:"message"`
-		}
-		if json.Unmarshal(line, &row) != nil {
-			continue
-		}
-		if row.Type == "session_info" {
-			e.name = shortTitle(row.Name, 160)
-		}
-		if firstText == "" && row.Type == "message" && row.Message.Role == "user" {
-			// 形状由首字节判断：不再靠 unmarshal 失败去区分字符串/块数组。
-			switch shapeOf(row.Message.Content) {
-			case shapeString:
-				var text string
-				if json.Unmarshal(row.Message.Content, &text) == nil {
-					firstText = shortTitle(text, 80)
-				}
-			case shapeArray:
-				var parts []struct {
-					Type string `json:"type"`
-					Text string `json:"text"`
-				}
-				if json.Unmarshal(row.Message.Content, &parts) == nil {
-					for _, part := range parts {
-						if part.Type != "text" {
-							continue
-						}
-						firstText = shortTitle(part.Text, 80)
-						if firstText != "" {
-							break
-						}
-					}
-				}
-			}
+	name := ""
+	if value, ok := lastSessionInfoName(f, e.size); ok {
+		name = shortTitle(value, 160)
+	}
+	if name == "" {
+		if value, ok := firstUserText(f, e.size); ok {
+			name = shortTitle(value, 80)
 		}
 	}
-	if e.name == "" {
-		e.name = firstText
-	}
+	e.name = name
 	e.titleRead = true
 	x.mu.Lock()
 	if current, ok := x.entries[e.id]; ok && current.path == e.path && current.size == e.size && current.modified.Equal(e.modified) {

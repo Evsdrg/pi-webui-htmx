@@ -269,6 +269,22 @@ type node struct {
 	isUser bool
 }
 
+// scanNodes 返回会话文件的父链索引：命中扫描缓存就直接用，
+// 否则全扫一次并写入缓存。History、惰性读取与磁盘树共用它（O03/O04）。
+func (s *Store) scanNodes(ctx context.Context, h Header, f *os.File, size, mtime int64) (map[string]node, string, error) {
+	// 缓存键用绝对路径：索引里存的是相对路径。
+	abs := filepath.Join(s.dir, filepath.FromSlash(h.path))
+	if nodes, last, ok := s.scan.get(abs, size, mtime); ok {
+		return nodes, last, nil
+	}
+	nodes, last, err := s.scanFile(ctx, f, size, h.ID, h.Cwd)
+	if err != nil {
+		return nil, "", err
+	}
+	s.scan.put(abs, size, mtime, nodes, last)
+	return nodes, last, nil
+}
+
 // History 读取所选分支上的一页历史。
 // leaf 缺省取磁盘上可恢复的叶子；before 必须是该分支的祖先条目。
 // 忽略末尾没有 LF 的半行，但完整的损坏行一律显式报错。
@@ -294,16 +310,9 @@ func (s *Store) History(ctx context.Context, id, leaf, before string, limit int)
 	}
 	// 先查缓存：翻页与切标签时文件不变，可省掉整个解析阶段。
 	// 失效判定见 scanCache 的说明——size、mtime 与文件身份都要一致。
-	// 文件身份必须用绝对路径取：索引里存的是相对路径。
-	abs := filepath.Join(s.dir, filepath.FromSlash(h.path))
-	nodes, last, cached := s.scan.get(abs, st.Size(), st.ModTime().UnixNano())
-	if !cached {
-		var scanErr error
-		nodes, last, scanErr = s.scanFile(ctx, f, st.Size(), id, h.Cwd)
-		if scanErr != nil {
-			return Page{}, scanErr
-		}
-		s.scan.put(abs, st.Size(), st.ModTime().UnixNano(), nodes, last)
+	nodes, last, err := s.scanNodes(ctx, h, f, st.Size(), st.ModTime().UnixNano())
+	if err != nil {
+		return Page{}, err
 	}
 	if leaf == "" {
 		leaf = last

@@ -145,7 +145,9 @@ func Test大条目跨缓冲区仍能读到(t *testing.T) {
 	lines := []string{}
 	hb, _ := json.Marshal(header)
 	lines = append(lines, string(hb))
-	parent := "null"
+	// parent 用真正的 JSON null 起始：写成字符串 "null" 是坏数据，
+	// 扫描索引会（正确地）按父链断裂拒绝。
+	var parent any
 	// 每条 40 KB 以上的思考，远超 32 KB 读缓冲，且数量足够跨多个缓冲区。
 	for i := 0; i < 12; i++ {
 		eid := "big" + string(rune('a'+i))
@@ -170,5 +172,37 @@ func Test大条目跨缓冲区仍能读到(t *testing.T) {
 	}
 	if len(got) != 60000 { // "思" 为 3 字节
 		t.Fatalf("思考内容长度异常: %d", len(got))
+	}
+}
+
+// B38/O03：惰性读取复用 History 的扫描索引。
+// 老实现每次从文件头线性扫到目标条目，展开多个旧思考块会把长会话反复扫很多遍。
+func Test惰性读取复用扫描索引(t *testing.T) {
+	store, id := writeLazySession(t, []map[string]any{
+		{"type": "message", "id": "u1", "parentId": nil, "message": map[string]any{"role": "user", "content": "问题"}},
+		{"type": "message", "id": "a1", "parentId": "u1", "message": map[string]any{"role": "assistant", "content": []map[string]any{
+			{"type": "thinking", "thinking": "第一段思考"},
+			{"type": "text", "text": "回答一"},
+		}}},
+		{"type": "message", "id": "a2", "parentId": "a1", "message": map[string]any{"role": "assistant", "content": []map[string]any{
+			{"type": "thinking", "thinking": "第二段思考"},
+			{"type": "text", "text": "回答二"},
+		}}},
+	})
+	ctx := context.Background()
+	// 冷路径：第一次读取做一次完整扫描，并写入扫描缓存。
+	if got, err := store.Thinking(ctx, id, "a1", 0); err != nil || got != "第一段思考" {
+		t.Fatalf("冷路径读取失败: %q %v", got, err)
+	}
+	nodes, _ := store.scan.stats()
+	if nodes == 0 {
+		t.Fatal("惰性读取应复用扫描索引（旧实现完全不碰缓存）")
+	}
+	// 热路径：另一条从缓存按偏移直接读，内容仍必须正确。
+	if got, err := store.Thinking(ctx, id, "a2", 0); err != nil || got != "第二段思考" {
+		t.Fatalf("热路径读取失败: %q %v", got, err)
+	}
+	if _, err := store.Thinking(ctx, id, "nope", 0); err == nil {
+		t.Fatal("不存在的条目仍应报错")
 	}
 }

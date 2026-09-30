@@ -304,20 +304,27 @@ func Test搜索跳过超大文件也计入访问预算(t *testing.T) {
 func Test搜索在单文件内响应取消(t *testing.T) {
 	cwd := t.TempDir()
 	store, sessionDir := newStore(t, cwd)
-	line := `{"type":"message","id":"x","parentId":null,"timestamp":"2026-01-01T00:00:01.000Z","message":{"role":"user","content":"` + strings.Repeat("填充文本", 200) + `"}}`
+	// 前部不含搜索词：必须扫到文件末尾才有命中，
+	// 这样扫描时间远大于取消延迟，也不会因命中上限提前收尾。
+	plain := `{"type":"message","id":"x","parentId":null,"timestamp":"2026-01-01T00:00:01.000Z","message":{"role":"user","content":"` + strings.Repeat("无关文本", 200) + `"}}`
+	hit := `{"type":"message","id":"y","parentId":"x","timestamp":"2026-01-01T00:00:02.000Z","message":{"role":"user","content":"末尾命中填充"}}`
 	var body strings.Builder
-	for body.Len() < 12<<20 {
-		body.WriteString(line)
+	for body.Len() < 24<<20 {
+		body.WriteString(plain)
 		body.WriteString("\n")
 	}
+	body.WriteString(hit)
+	body.WriteString("\n")
 	writeSearchSession(t, sessionDir, cwd, "big", body.String())
 
+	limits := DefaultSearchLimits()
+	limits.MaxFileBytes = 32 << 20
 	ctx, cancel := context.WithCancel(context.Background())
 	go func() {
 		time.Sleep(5 * time.Millisecond)
 		cancel()
 	}()
-	_, err := store.Search(ctx, "填充", DefaultSearchLimits())
+	_, err := store.Search(ctx, "填充", limits)
 	if err == nil {
 		t.Fatal("取消后搜索应返回错误，而不是静默给出完整结果")
 	}

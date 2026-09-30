@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"os"
 	"strings"
 
 	"pi-bridge-go/internal/jsonl"
@@ -178,6 +179,11 @@ func (s *Store) entryImage(ctx context.Context, id, entryID string, blockIndex i
 
 // rawEntry 读一条原始记录并返回它的 message 与 role。
 //
+// 快路径复用 History 的扫描索引：里面已存好每条记录的 offset/size，
+// 直接 ReadAt 单条即可。老实现每次都从文件头逐行扫到目标条目，
+// 展开多个旧思考块会把长会话反复扫很多遍（B38/O03）。
+// 缓存未命中（冷路径）就先做一次完整扫描并写入缓存。
+//
 // 扫描方式与 History 完全一致：bufio + jsonl.Read，按行边界切分，
 // 只读到文件当前长度。这里曾手写过一套 chunk 扫描，结果 offset 在
 // 消耗会话头后被推进两次，跨缓冲区的行既被跳过又被截断——单元测试
@@ -199,10 +205,61 @@ func (s *Store) rawEntry(ctx context.Context, id, entryID string) (json.RawMessa
 	if !st.Mode().IsRegular() || st.Size() > s.limits.FileBytes {
 		return nil, "", protocol.E("limit_exceeded", "历史文件超过体积上限")
 	}
-	r := bufio.NewReader(io.LimitReader(f, st.Size()))
+	// 与 History 用同一个缓存键（绝对路径），两边才能互相命中。
+	nodes, _, err := s.scanNodes(ctx, h, f, st.Size(), st.ModTime().UnixNano())
+	if err != nil {
+		return nil, "", err
+	}
+	if target, ok := nodes[entryID]; ok && target.size > 0 {
+		buf := make([]byte, target.size)
+		if _, err := f.ReadAt(buf, target.offset); err == nil || errors.Is(err, io.EOF) {
+			// 偏移可能因并发改写而错位：读出来的记录必须与请求的 ID 一致，
+			// 否则回退到线性扫描，绝不给错内容。
+			if msg, role, ok := entryMessage(buf, entryID); ok {
+				return msg, role, nil
+			}
+		}
+	}
+	// 回退：线性扫描（保留原有更严格的错误报告）。
+	if _, err := f.Seek(0, io.SeekStart); err != nil {
+		return nil, "", protocol.E("pi_error", "无法读取会话文件")
+	}
+	return s.rawEntryScan(ctx, f, st.Size(), entryID)
+}
+
+// entryMessage 从一条完整记录里取 message 与角色；ID 不符或无法解析时返回 false。
+func entryMessage(line []byte, entryID string) (json.RawMessage, string, bool) {
+	var probe struct {
+		ID      string          `json:"id"`
+		Message json.RawMessage `json:"message"`
+	}
+	if json.Unmarshal(line, &probe) != nil || probe.ID != entryID || len(probe.Message) == 0 {
+		return nil, "", false
+	}
+	var msg struct {
+		Role string `json:"role"`
+	}
+	if json.Unmarshal(probe.Message, &msg) != nil {
+		return nil, "", false
+	}
+	role := msg.Role
+	if role == "" {
+		var cmd struct {
+			Command string `json:"command"`
+		}
+		if json.Unmarshal(probe.Message, &cmd) == nil && cmd.Command != "" {
+			role = "toolResult"
+		}
+	}
+	return probe.Message, role, true
+}
+
+// rawEntryScan 是兼容路径：从文件头逐行找到目标条目。
+func (s *Store) rawEntryScan(ctx context.Context, f *os.File, size int64, entryID string) (json.RawMessage, string, error) {
+	r := bufio.NewReader(io.LimitReader(f, size))
 	headerSeen := false
 	for {
-		if err = ctx.Err(); err != nil {
+		if err := ctx.Err(); err != nil {
 			return nil, "", err
 		}
 		b, _, e := jsonl.Read(r, s.limits.LineBytes)

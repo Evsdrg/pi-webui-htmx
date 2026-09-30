@@ -574,20 +574,29 @@ func (s *Server) serveUIFragments(w http.ResponseWriter, r *http.Request, encodi
 
 	case path == "/ui/branch":
 		return s.renderFragment(w, encoding, func() (string, error) {
-			// 分支树需要活动 worker：get_tree 是 Pi 进程内的命令，
-			// 没有纯磁盘等价物。未启动时给可读提示，不静默返回空树。
-			worker, err := s.manager.Get(r.URL.Query().Get("sessionId"))
-			if err != nil {
-				return "", err
+			sid := r.URL.Query().Get("sessionId")
+			if sid == "" {
+				return "", protocol.E("invalid_params", "缺少会话 ID")
 			}
-			tree, err := worker.Tree(r.Context())
-			if err != nil {
-				return "", err
-			}
-			// fork 信息取不到不算失败：分支树本身仍可导航。
-			forks, err := worker.ForkMessages(r.Context())
-			if err != nil {
-				forks = map[string]any{}
+			var tree, forks map[string]any
+			if worker, err := s.manager.Get(sid); err == nil {
+				// 有 worker：用 Pi 的实时树（含内存态与未落盘分支）。
+				tree, err = worker.Tree(r.Context())
+				if err != nil {
+					return "", err
+				}
+				// fork 信息取不到不算失败：分支树本身仍可导航。
+				if fm, err := worker.ForkMessages(r.Context()); err == nil {
+					forks = fm
+				}
+			} else {
+				// 无 worker：从磁盘投影。浏览历史分支不该拉起 Pi 进程（U04）。
+				// fork 仍是写操作，必须显式启动会话，所以这里没有 fork 列表。
+				disk, err := s.store.Tree(r.Context(), sid)
+				if err != nil {
+					return "", err
+				}
+				tree = disk
 			}
 			rows, forkRows := presentation.BranchRows(tree, forks, r.URL.Query().Get("leafId"))
 			return s.ui.RenderBranch(rows, forkRows)

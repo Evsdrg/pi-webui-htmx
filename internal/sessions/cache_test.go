@@ -430,3 +430,90 @@ func sessionFilePath(store *Store, id string) string {
 	}
 	return filepath.Join(store.Dir(), filepath.FromSlash(h.path))
 }
+
+// O04：扫描缓存保留多个会话。
+// 单槽实现里 A→B→A 的切换会让 A 每次都重扫（实测 62.8 MiB 会话约 112–131 ms）。
+func Test扫描缓存保留多个会话(t *testing.T) {
+	dir := t.TempDir()
+	var paths []string
+	for i := 0; i < 2; i++ {
+		p := filepath.Join(dir, "s"+strconv.Itoa(i)+".jsonl")
+		if err := os.WriteFile(p, []byte("x"), 0644); err != nil {
+			t.Fatal(err)
+		}
+		paths = append(paths, p)
+	}
+	stat := func(path string) (int64, int64) {
+		t.Helper()
+		fi, err := os.Stat(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return fi.Size(), fi.ModTime().UnixNano()
+	}
+	var c scanCache
+	size0, mtime0 := stat(paths[0])
+	c.put(paths[0], size0, mtime0, map[string]node{"a": {}}, "a")
+	size1, mtime1 := stat(paths[1])
+	c.put(paths[1], size1, mtime1, map[string]node{"b": {}}, "b")
+	// 切换回第一个会话必须仍然命中；单槽实现下它已被挤掉。
+	if _, _, ok := c.get(paths[0], size0, mtime0); !ok {
+		t.Fatal("会话之间切换后仍应命中先前缓存的扫描结果")
+	}
+	nodes, _ := c.stats()
+	if nodes != 2 {
+		t.Fatalf("两格都应在缓存里，实际节点数 %d", nodes)
+	}
+	// 同一文件写入新版本：只替换自己那一格，不新增。
+	c.put(paths[0], size0+1, mtime0, map[string]node{"a": {}, "a2": {}}, "a2")
+	nodes, _ = c.stats()
+	if nodes != 3 {
+		t.Fatalf("同文件更新应替换旧格，实际节点数 %d", nodes)
+	}
+}
+
+// O04：超过格数时淘汰最久未用的那一格。
+func Test扫描缓存淘汰最久未用(t *testing.T) {
+	dir := t.TempDir()
+	var paths []string
+	for i := 0; i < scanCacheSlots+1; i++ {
+		p := filepath.Join(dir, "s"+strconv.Itoa(i)+".jsonl")
+		if err := os.WriteFile(p, []byte("x"), 0644); err != nil {
+			t.Fatal(err)
+		}
+		paths = append(paths, p)
+	}
+	var c scanCache
+	stat := func(path string) (int64, int64) {
+		fi, err := os.Stat(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return fi.Size(), fi.ModTime().UnixNano()
+	}
+	var lastSize, lastMtime int64
+	for i, p := range paths {
+		size, mtime := stat(p)
+		c.put(p, size, mtime, map[string]node{strconv.Itoa(i): {}}, "")
+		lastSize, lastMtime = size, mtime
+	}
+	firstSize, firstMtime := mustStat(t, paths[0])
+	if _, _, ok := c.get(paths[0], firstSize, firstMtime); ok {
+		t.Fatal("超出格数后应淘汰最久未使用的一格")
+	}
+	if _, _, ok := c.get(paths[len(paths)-1], lastSize, lastMtime); !ok {
+		t.Fatal("最近写入的一格应命中")
+	}
+	if nodes, _ := c.stats(); nodes != scanCacheSlots {
+		t.Fatalf("缓存格数应受上限约束，实际节点数 %d", nodes)
+	}
+}
+
+func mustStat(t *testing.T, path string) (int64, int64) {
+	t.Helper()
+	fi, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return fi.Size(), fi.ModTime().UnixNano()
+}
