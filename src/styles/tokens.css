@@ -15,6 +15,12 @@
    主题换了 --accent，--accent-soft 自动跟着换，不必每个主题写一遍。 */
 :root {
   --accent-soft: color-mix(in srgb, var(--accent) 14%, transparent);
+
+  /* 等宽字体栈：工具块、思考块、配置编辑器与目录候选都用它。
+     它曾经只被引用、从未被定义——app.css 里 6 处 var(--font-mono)
+     全部静默失效，那些元素实际继承的是正文字体，与 Pi Web 的观感不同
+     而又看不出错。字体不随主题变化，所以定义在全局这一处。 */
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, monospace;
 }
 
 /* light */

@@ -6,7 +6,7 @@
 // 自定义字段（compat、thinkingLevelMap 的细节等）仍可手改。
 import type { BridgeClient } from './bridge';
 import { record, text } from './stream';
-import { el } from './dom';
+import { el, elOrNull } from './dom';
 
 // 文档形状。providers 是唯一顶层键，其余自定义键原样保留——
 // 保存时整份写回，所以这里只读不写的字段不会丢。
@@ -70,6 +70,8 @@ export class ModelsEditor {
   private panel = 'empty';
   private thinkingWired = false;
   private probeSequence = 0;
+  private catalogWired = false;
+  private catalogTimer?: number;
   private doc: ModelsDoc = {};
   private selection: Selection = { provider: null, model: null };
   private abort = new AbortController();
@@ -84,11 +86,37 @@ export class ModelsEditor {
     if (result) { result.dataset.requestScope = String(++this.probeSequence); window.htmx?.trigger(result, 'htmx:abort'); }
   }
 
-  dispose(): void { this.abort.abort(); this.invalidateProbe(); }
+  dispose(): void {
+    this.abort.abort();
+    window.clearTimeout(this.catalogTimer);
+    this.invalidateProbe();
+  }
 
   async open(): Promise<void> {
     el('models-status').textContent = '';
+    this.wireCatalog();
     if (!this.initialized) await this.reload();
+  }
+
+  // wireCatalog 绑定目录候选的点击与搜索防抖，只绑一次。
+  // 候选本身由桥渲染；这里做的是「点击 → 填表」这类只在浏览器里成立的交互。
+  private wireCatalog(): void {
+    if (this.catalogWired) return;
+    const result = elOrNull('catalog-result');
+    if (!result) return;
+    this.catalogWired = true;
+    result.addEventListener('click', (event) => {
+      const button = (event.target as HTMLElement | null)?.closest<HTMLElement>('[data-catalog-id]');
+      if (button) this.pickCatalog(button);
+    }, { signal: this.abort.signal });
+    const query = elOrNull<HTMLInputElement>('catalog-query');
+    query?.addEventListener('input', () => {
+      // 防抖：搜索会打一次公网目录（桥侧有缓存），逐字符请求没有意义。
+      window.clearTimeout(this.catalogTimer);
+      this.catalogTimer = window.setTimeout(() => {
+        void this.catalog().catch((error) => this.onError(error));
+      }, 250);
+    }, { signal: this.abort.signal });
   }
 
   async reload(): Promise<void> {
@@ -504,6 +532,67 @@ export class ModelsEditor {
 
   async discover(): Promise<void> { await this.probe('discover'); }
   async test(): Promise<void> { await this.probe('test'); }
+
+  // catalog 走桥的 /ui/models/catalog：候选由服务器渲染，
+  // 这里只把查询串送过去（B70）。目录是公网数据，桥侧有 10 分钟缓存。
+  async catalog(query?: string): Promise<void> {
+    const result = el('catalog-result');
+    const q = query ?? el<HTMLInputElement>('catalog-query').value.trim();
+    result.dataset.requestScope = String(++this.probeSequence);
+    await window.htmx.ajax('post', '/ui/models/catalog', {
+      source: result, target: result, swap: 'innerHTML', values: { q },
+    });
+  }
+
+  // pickCatalog 把候选的参数填进表单。
+  // 只填空字段：用户已经写过的值优先级更高，静默覆盖会让人以为是自己填错了。
+  private pickCatalog(button: HTMLElement): void {
+    const dataset = button.dataset;
+    const modelId = (dataset.catalogId ?? '').split('/').pop() ?? '';
+    if (!modelId) return;
+    const filled: string[] = [];
+    const skipped: string[] = [];
+    el<HTMLInputElement>('mm-id').value = modelId;
+    filled.push('ID');
+    const nameInput = el<HTMLInputElement>('mm-name');
+    if (!nameInput.value.trim() && dataset.catalogName) {
+      nameInput.value = dataset.catalogName;
+      filled.push('显示名称');
+    } else if (nameInput.value.trim()) {
+      skipped.push('显示名称');
+    }
+
+    for (const [field, id, label] of [
+      [dataset.catalogCtx, 'mm-ctx', '上下文窗口'],
+      [dataset.catalogMax, 'mm-max', '最大输出'],
+    ] as const) {
+      const input = el<HTMLInputElement>(id);
+      const value = Number(field ?? '');
+      if (!input.value.trim() && Number.isFinite(value) && value > 0) {
+        input.value = String(value);
+        filled.push(label);
+      } else if (input.value.trim()) {
+        skipped.push(label);
+      }
+    }
+    // 能力只补「勾上」，不会替用户取消已有勾选。
+    for (const [flag, id, label] of [
+      [dataset.catalogReasoning, 'mm-reasoning', '推理模型'],
+      [dataset.catalogImage, 'mm-image', '图片输入'],
+    ] as const) {
+      const input = el<HTMLInputElement>(id);
+      if (flag === '1' && !input.checked) { input.checked = true; filled.push(label); }
+    }
+    // 填完要让草稿与已保存快照知道用户改过表单。
+    const dialog = document.getElementById('models-dialog');
+    dialog?.dispatchEvent(new Event('input', { bubbles: true }));
+    const status = elOrNull('models-status');
+    if (status) {
+      status.textContent = skipped.length
+        ? `已从目录填入 ${filled.join('、')}；${skipped.join('、')} 保留你填写的值。`
+        : `已从目录填入 ${filled.join('、')}。`;
+    }
+  }
 
   private async probe(action: 'discover' | 'test'): Promise<void> {
     const result = el('discover-result');

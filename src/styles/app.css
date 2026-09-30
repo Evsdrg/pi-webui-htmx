@@ -135,7 +135,10 @@ kbd { font-size:10px; color:var(--text-dim); margin-left:auto; }
    避免 border/background/文字色各写一条覆盖规则。 */
 /* 工具块与思考块共用同一副外形：7px 圆角、细边框、等宽小字。 */
 .tool-call,.thinking-block { border-radius:7px; font-family:var(--font-mono); font-size:11px; line-height:1.5; }
-.tool-call { --tc-line:var(--success-border); --tc-fill:var(--success-bg); --tc-ink:var(--success); overflow:hidden; font-size:12px; border:1px solid var(--tc-line); background:var(--tc-fill); }
+/* 只设配色与边框：字号继承上一条的 11px。
+   这里曾重复声明 font-size:12px，同特异性下压过上一条，
+   工具块因此比 Pi Web 大一号（B 批对齐的是 11px）。 */
+.tool-call { --tc-line:var(--success-border); --tc-fill:var(--success-bg); --tc-ink:var(--success); overflow:hidden; border:1px solid var(--tc-line); background:var(--tc-fill); }
 .tool-call[data-ok=false] { --tc-line:var(--danger-border); --tc-fill:var(--danger-bg); --tc-ink:var(--danger); }
 .tool-call > summary { display:flex; align-items:center; gap:7px; min-width:0; padding:6px 10px; cursor:pointer; list-style:none; }
 .tool-call .tool-name { flex:0 0 auto; color:var(--tc-ink); font-family:var(--font-mono); font-size:11px; font-weight:600; }
@@ -315,6 +318,13 @@ input,select,textarea { background:var(--bg); border:1px solid var(--border); bo
 .discover-result { font-size:12px; color:var(--text-muted); max-height:220px; overflow:auto; border:1px solid var(--border); border-radius:8px; padding:8px 10px; }
 .discover-list { margin:6px 0 0; padding-left:18px; }
 .discover-list li { font-size:12px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+/* 模型目录候选（B70）：整行可点，点击后由前端把参数填进表单。 */
+.catalog-list { list-style:none; margin:6px 0 0; padding:0; display:grid; gap:2px; }
+.catalog-item { display:flex; gap:8px; align-items:baseline; width:100%; padding:3px 6px; border:1px solid transparent; border-radius:5px; background:transparent; color:inherit; font:inherit; text-align:left; cursor:pointer; }
+.catalog-item:hover { background:var(--bg-selected); }
+.catalog-id { font-family:var(--font-mono); font-size:11px; flex:0 0 auto; }
+.catalog-meta { font-size:11px; color:var(--text-muted); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.catalog-empty { font-size:12px; color:var(--text-muted); }
 
 /* 附件：缩略图 + 移除按钮，拖拽时整块 composer 高亮。 */
 /* ==== 附件 ===================================================================== */

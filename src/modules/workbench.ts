@@ -1045,6 +1045,7 @@ export class Workbench {
       case 'models-save': await this.models?.save(); break;
       case 'models-discover': await this.models?.discover(); break;
       case 'models-test': await this.models?.test(); break;
+      case 'models-catalog': await this.models?.catalog(); break;
       case 'session-menu': {
         el<HTMLInputElement>('session-name').value = this.sessionTitle;
         openDialog('session-dialog');

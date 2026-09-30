@@ -47,3 +47,39 @@ it('未修改能力和未来映射字段不被抹掉',async()=>{
  editor.selectModel('a',0);await editor.save();
  expect(writes[0].providers.a.models[0]).toMatchObject({input:['audio'],reasoning:false,thinkingLevelMap:{future:'custom',off:''}});
 });
+
+// B70：模型目录补全——候选由桥渲染，前端只做「点击 → 填表」。
+it('点击目录候选填入型号与参数且不覆盖已填字段', () => {
+  editor.selectModel('a', 0);
+  input('mm-name').value = '我自己起的名字';
+  const internal = editor as unknown as { wireCatalog(): void; pickCatalog(button: HTMLElement): void };
+  internal.wireCatalog();
+  const button = document.createElement('button');
+  button.dataset.catalogId = 'deepseek/deepseek-reasoner';
+  button.dataset.catalogName = 'DeepSeek Reasoner';
+  button.dataset.catalogCtx = '128000';
+  button.dataset.catalogMax = '65536';
+  button.dataset.catalogReasoning = '1';
+  button.dataset.catalogImage = '1';
+  document.getElementById('catalog-result')!.append(button);
+  button.click();
+  expect(input('mm-id').value).toBe('deepseek-reasoner');
+  // 用户写过的字段优先级更高。
+  expect(input('mm-name').value).toBe('我自己起的名字');
+  expect(input('mm-ctx').value).toBe('128000');
+  expect(input('mm-max').value).toBe('65536');
+  expect(input('mm-reasoning').checked).toBe(true);
+  expect(input('mm-image').checked).toBe(true);
+  expect(document.getElementById('models-status')!.textContent).toContain('保留你填写的值');
+  // 填完要能让草稿跟上：切到 JSON 应看到新值。
+  editor.select('json');
+  expect(input('models-editor').value).toContain('deepseek-reasoner');
+});
+
+it('目录查询把输入作为 q 交给桥', async () => {
+  const ajax = vi.fn().mockResolvedValue(undefined);
+  vi.stubGlobal('htmx', { ajax, trigger: vi.fn() });
+  input('catalog-query').value = 'deepseek';
+  await editor.catalog();
+  expect(ajax).toHaveBeenCalledWith('post', '/ui/models/catalog', expect.objectContaining({ values: { q: 'deepseek' } }));
+});

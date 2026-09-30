@@ -25,6 +25,35 @@ for(const [name,relative] of Object.entries(manifest.templates??{})){
  if(name==='extDialog'&&(!body.includes('data-dialog-id')||!body.includes('data-extension-form')))fail('扩展对话缺少回执表单标记');
  ok(`模板 ${name}`);
 }
+// 工具块/思考块的字号只能声明一次：这两条外形规则在 B 批对齐过 Pi Web
+// （11px）。多写一条同特异性的 font-size 会静默压过去，界面看起来「只是大一点」。
+{
+ const css=readFileSync(resolve(root,'src/styles/app.css'),'utf8').replace(/\/\*[\s\S]*?\*\//g,'');
+ const decls=css.split('}').flatMap(block=>{
+  const [selector,body]=block.split('{');
+  if(!selector||!body)return [];
+  return /(^|,)\s*\.tool-call\s*(,|$)/.test(selector)&&/font-size\s*:/.test(body)?[body.match(/font-size\s*:[^;]+/)[0]]:[];
+ });
+ if(decls.length!==1||!/11px/.test(decls[0]))fail(`.tool-call 的 font-size 应只声明一次且为 11px，实际 ${JSON.stringify(decls)}`);
+ ok('工具块字号只有一处声明');
+}
+
+// app.css 里引用的自定义属性必须在 tokens.css 或 app.css 里有定义。
+// 踩过的坑：--font-mono 被 6 处 var() 引用却从未定义，
+// 那些 font-family 全部静默失效、回落到继承字体——界面上看不出错。
+{
+ const files=[['tokens.css',readFileSync(resolve(root,'src/styles/tokens.css'),'utf8')],
+              ['app.css',readFileSync(resolve(root,'src/styles/app.css'),'utf8')],
+              ['code.css',readFileSync(resolve(root,'src/styles/code.css'),'utf8')]];
+ const defined=new Set();
+ for(const [,body] of files)for(const mm of body.replace(/\/\*[\s\S]*?\*\//g,'').matchAll(/(--[a-z0-9-]+)\s*:/g))defined.add(mm[1]);
+ const used=new Set();
+ for(const [name,body] of files)for(const mm of body.replace(/\/\*[\s\S]*?\*\//g,'').matchAll(/var\(\s*(--[a-z0-9-]+)/g))used.add(mm[1]);
+ const missing=[...used].filter(name=>!defined.has(name));
+ if(missing.length)fail(`以下自定义属性被引用但从未定义：${missing.join('、')}`);
+ ok('自定义属性引用都有定义');
+}
+
 // 顶栏的右对齐必须由容器承担。踩过的坑：`margin-left:auto` 挂在 #context-usage
 // 上，而它在没有上下文数据时是 `hidden`（`[hidden]{display:none}`）——
 // 那时 auto 外边距完全失效，「就绪」与右侧按钮就跟着工具栏跑到栏中间了。

@@ -262,8 +262,7 @@
               <div class="config-detail-header"><h3 class="config-detail-title">从上游发现模型</h3></div>
               <div class="config-actions"><button class="config-btn" type="button" data-action="models-discover">发现模型</button><button class="config-btn" type="button" data-action="models-test">测试连通</button></div>
               <div id="discover-result" hx-sync="this:replace" class="discover-result" aria-live="polite"></div>
-            </div>
-          </section>
+            </div>          </section>
           {{/* ── model 编辑 ── */}}
           <section class="config-detail-stack" data-models-panel="model" hidden>
             <div class="config-detail-header"><h3 class="config-detail-title">模型</h3>
@@ -287,6 +286,12 @@
               <span class="hint">把界面上的思考强度映射到上游实际收到的参数。<b>默认</b>用 Pi 自己的取值，<b>禁用</b>显式关掉该等级，<b>自定义</b>填上游认识的字符串。</span>
               <div id="mm-thinking"></div>
               <template id="thinking-row-template"><div class="tl-row"><span class="tl-id"><span class="tl-dot"></span><span class="tl-name"></span></span><div class="tl-seg"><button type="button" class="tl-btn" data-tl="omit">默认</button><button type="button" class="tl-btn" data-tl="null">禁用</button></div><div class="tl-custom"><button type="button" class="tl-btn" data-tl="string">自定义</button><input type="text" spellcheck="false"></div></div></template>
+            </div>
+            <div class="config-section-sep">
+              <div class="config-detail-header"><h3 class="config-detail-title">从模型目录补全</h3></div>
+              <div class="config-actions"><input id="catalog-query" type="search" class="mono" placeholder="搜索型号，例如 deepseek-chat" spellcheck="false" autocomplete="off"><button class="config-btn" type="button" data-action="models-catalog">查询目录</button></div>
+              <p class="hint">目录来自 models.dev。点候选会把型号、上下文窗口、最大输出与能力填进上面的字段；已填写的字段不会被覆盖。</p>
+              <div id="catalog-result" hx-sync="this:replace" class="discover-result" aria-live="polite"></div>
             </div>
           </section>
           {{/* ── JSON 源码 ── */}}
