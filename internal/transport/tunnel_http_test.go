@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"pi-bridge-go/internal/relay"
+	"pi-bridge-go/internal/workspace"
 )
 
 // B54：经隧道的 HTTP 帧在桥**自己的 handler** 上执行，
@@ -160,4 +161,36 @@ func sessionCookieForTest(t *testing.T, s *Server) string {
 	}
 	t.Fatalf("响应里没有会话 Cookie: %s", rec.Body.String())
 	return ""
+}
+
+// 转发预算必须**从桥实际的内容上限派生**，而不是写死。
+//
+// `/ui/file-image` 直接把文件字节回给浏览器，它在云端要经 HTTP 转发；
+// 预算比内容上限小就会 502——而且只在云端形态出现，本地直连一切正常。
+// 默认值（读取 4 MiB / 预算 8 MiB）碰巧满足不等式，所以必须用
+// 「上限被调大」的部署来测：写死常量的实现会在这里露出来。
+func Test转发预算跟随内容上限(t *testing.T) {
+	// 下限：没有工作区时也不能退化成很小。
+	if got := tunnelResponseBudget(nil); got < maxTunnelHTTPResponse {
+		t.Fatalf("没有工作区时预算应保留下限，实际 %d", got)
+	}
+
+	// 把内容上限调到一个预算常量装不下的值。
+	const bigRead = 32 << 20
+	policy, err := workspace.New([]string{t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	files, err := workspace.NewFiles(policy, workspace.Limits{MaxEntries: 10, MaxReadByte: bigRead, MaxDepth: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := tunnelResponseBudget(files)
+	if got < bigRead {
+		t.Fatalf("内容上限调到 %d 后预算仍是 %d：这类内容在云端会被拒", bigRead, got)
+	}
+	// 也不能无限放大：它只应跟随内容上限 + 余量。
+	if got > bigRead+responseHeadroom {
+		t.Fatalf("预算 %d 超出「内容上限 + 余量」%d", got, bigRead+responseHeadroom)
+	}
 }

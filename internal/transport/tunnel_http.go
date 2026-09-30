@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"pi-bridge-go/internal/relay"
+	"pi-bridge-go/internal/workspace"
 )
 
 // 经隧道的 HTTP 转发（B54）：云端 relay 把浏览器的请求封装成 HTTP 帧，
@@ -21,12 +22,33 @@ import (
 // 请求按「来自已认证浏览器」对待。因此这里显式给请求设上桥自己的 Host，
 // 并**不带** Origin——桥的 Host/Origin 严格校验原样保留，不因为云端而放宽。
 const (
-	// maxTunnelHTTPResponse 是单次转发允许回传的响应体上限。
-	// 超限时明确报错，而不是让隧道单帧顶到上限（分片是后续工作）。
+	// maxTunnelHTTPResponse 是单次转发响应体的**下限**预算。
+	// 超限时明确报错，而不是让隧道单帧顶到上限。
 	maxTunnelHTTPResponse = 8 << 20
+
+	// responseHeadroom 是响应预算相对内部内容上限留的余量：
+	// 外壳、片段这类渲染结果比原始文件大（HTML 转义、模板包装）。
+	responseHeadroom = 1 << 20
 
 	tunnelHTTPTimeout = 60 * time.Second
 )
+
+// tunnelResponseBudget 按桥**实际配置**的内容上限算响应预算。
+//
+// 写死一个常量会在调大工作区读取上限之后出错：图片预览是
+// `/ui/file-image` 直接回文件字节，它在云端要经 HTTP 转发，
+// 转发预算比它小就会 502——而且只在云端形态出现，本地直连一切正常。
+// 因此这里取「下限」与「内部最大内容 + 余量」的较大值。
+func tunnelResponseBudget(files *workspace.Files) int64 {
+	budget := int64(maxTunnelHTTPResponse)
+	if files == nil {
+		return budget
+	}
+	if want := files.MaxReadBytes() + responseHeadroom; want > budget {
+		budget = want
+	}
+	return budget
+}
 
 // handleTunnelHTTP 处理一条来自 relay 的 HTTP 帧，返回是否已消费。
 func (t *TunnelBridge) handleTunnelHTTP(ctx context.Context, envelope relay.HTTPEnvelope) bool {
@@ -62,7 +84,8 @@ func (t *TunnelBridge) roundTripHTTP(ctx context.Context, envelope relay.HTTPEnv
 		reply.Error = "云端转发的路径不合法"
 		return reply
 	}
-	req, err := http.NewRequestWithContext(timeoutCtx, method, "http://"+t.server.host+path, bytes.NewReader(envelope.Body))
+	reqCtx := context.WithValue(timeoutCtx, shellMountKey{}, envelope.Mount)
+	req, err := http.NewRequestWithContext(reqCtx, method, "http://"+t.server.host+path, bytes.NewReader(envelope.Body))
 	if err != nil {
 		reply.Error = "无法构造请求"
 		return reply
@@ -142,3 +165,21 @@ func (f *frameRecorder) Write(b []byte) (int, error) {
 }
 
 var _ io.Writer = (*frameRecorder)(nil)
+
+// shellMount 从隧道 HTTP 帧里取出外部挂载前缀。
+//
+// 它不走 HTTP 头：头可以由任意客户端伪造，而 `<base href>` 一旦被
+// 引到外部域，外壳就会去加载攻击者的脚本。前缀只从隧道帧里读
+// （relay 构造的帧），并且 DocBase 还会再校验一次形态。
+func shellMount(r *http.Request) string {
+	if r == nil {
+		return ""
+	}
+	// 桥直连时不带前缀；经隧道时由 relay 在帧里给出，桥把它放进请求上下文。
+	if v, ok := r.Context().Value(shellMountKey{}).(string); ok {
+		return v
+	}
+	return ""
+}
+
+type shellMountKey struct{}

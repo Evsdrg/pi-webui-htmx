@@ -361,7 +361,7 @@ func (s *Server) serveUIAssets(w http.ResponseWriter, r *http.Request, encoding 
 			writeError(w, encoding, 400, protocol.E("invalid_params", "会话 ID 不合法"))
 			return true
 		}
-		html, err := s.ui.RenderShell(id)
+		html, err := s.ui.RenderShell(id, shellMount(r))
 		if err != nil {
 			writeError(w, encoding, 500, err)
 			return true

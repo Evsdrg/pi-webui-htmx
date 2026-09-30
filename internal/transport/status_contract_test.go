@@ -138,11 +138,16 @@ func Test静态资源缓存头(t *testing.T) {
 	s, _, _ := newTestServer(t)
 	// 从外壳里取一个真实资源名，避免猜测命名规则。
 	shell := getUI(t, s, "/").Body.String()
-	idx := strings.Index(shell, "/assets/")
+	// 外壳里的资源路径是相对的（配合 <base>）：设备前缀部署下
+	// 绝对路径会绕过前缀（B54）。
+	idx := strings.Index(shell, "assets/")
 	if idx < 0 {
 		t.Fatal("外壳里没有静态资源引用")
 	}
-	rest := shell[idx+len("/assets/"):]
+	if strings.Contains(shell, `"/assets/`) {
+		t.Fatal("外壳不应再用根绝对路径引用静态资源")
+	}
+	rest := shell[idx+len("assets/"):]
 	name := rest[:strings.IndexAny(rest, `"'`)]
 	rec := getUI(t, s, "/assets/"+name)
 	if rec.Code != http.StatusOK {

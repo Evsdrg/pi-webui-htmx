@@ -70,8 +70,8 @@ func NewTunnelBridge(server *Server, sender func([]byte) error, max int, idle ti
 		sender: sender,
 		max:    max,
 		idle:   idle,
-		// 单次 HTTP 转发的响应上限；不同部署形态容忍度不同，所以是字段。
-		maxHTTPResponse: maxTunnelHTTPResponse,
+		// 单次 HTTP 转发的响应上限：按桥实际的内容上限派生，不是写死的常量。
+		maxHTTPResponse: tunnelResponseBudget(server.files),
 		virtual:         map[string]*virtualConn{},
 	}
 	go t.reap()

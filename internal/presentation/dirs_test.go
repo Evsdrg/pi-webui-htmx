@@ -17,8 +17,10 @@ func Test目录选择器只列子目录且带完整路径(t *testing.T) {
 		t.Fatalf("渲染失败：%v", err)
 	}
 	for _, want := range []string{
-		`hx-get="/ui/dirs?path=/srv/projects/pi"`,
-		`hx-get="/ui/dirs?path=/srv/projects/zcode"`,
+		// 相对路径：设备前缀部署（relay 的 /d/{id}/）下，绝对路径会打到
+		// 根而不是设备前缀，所以模板里一律写相对（B54）。
+		`hx-get="ui/dirs?path=/srv/projects/pi"`,
+		`hx-get="ui/dirs?path=/srv/projects/zcode"`,
 		`hx-target="#dir-list"`,
 		`>pi<`, `>zcode<`,
 		// 当前路径用带外交换写出，供「使用此目录」读取

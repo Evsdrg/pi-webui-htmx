@@ -31,6 +31,13 @@ type Limits struct {
 
 func DefaultLimits() Limits { return Limits{MaxEntries: 500, MaxReadByte: 4 << 20, MaxDepth: 8} }
 
+// MaxReadBytes 是单次文件读取的体积上限（只读访问器）。
+//
+// 它是「一次读取最多产生多大的响应」这个事实的唯一来源：任何要把
+// 文件内容整体搬运出去的中转（云端 HTTP 转发就是）都必须按它定预算，
+// 否则调大上限之后，内容在中转处被静默截断或拒绝。
+func (f *Files) MaxReadBytes() int64 { return f.limits.MaxReadByte }
+
 // Files 在授权根内提供只读文件访问。
 // 每个根各开一个 os.Root，路径解析与符号链接逃逸都由内核侧拦截，
 // 不像纯字符串前缀比较那样可被 ../ 或链接绕过。

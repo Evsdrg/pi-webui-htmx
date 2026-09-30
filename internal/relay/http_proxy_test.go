@@ -188,3 +188,45 @@ func Test设备前缀HTTP转发的拒绝面(t *testing.T) {
 		t.Fatalf("超大请求体应 413，实际 %d", got)
 	}
 }
+
+// B54：设备前缀下的 WS 升级接到与 /client 相同的连接管理，
+// 前端因此不必区分本地与云端形态。
+func Test设备前缀下的WS连接(t *testing.T) {
+	s, _, users := newRelayServer(t)
+	srv := httptest.NewServer(s)
+	defer srv.Close()
+	userToken, deviceToken := pairDevice(t, srv, users, "dev-1")
+	tunnel := dialTunnelOrFail(t, srv, "dev-1", deviceToken)
+	defer tunnel.CloseNow()
+
+	cookies := cookieJar(t, srv, userToken)
+	if len(cookies) == 0 {
+		t.Fatal("没有拿到 relay 会话 Cookie")
+	}
+	header := http.Header{}
+	header.Set("Cookie", cookies[0].Name+"="+cookies[0].Value)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http") + "/d/dev-1/api/v1/ws"
+	conn, _, err := websocket.Dial(ctx, wsURL, &websocket.DialOptions{HTTPHeader: header})
+	if err != nil {
+		t.Fatalf("设备前缀下的 WS 应能升级: %v", err)
+	}
+	defer conn.CloseNow()
+
+	if err := conn.Write(ctx, websocket.MessageText, []byte(`{"kind":"command","method":"worker.list"}`)); err != nil {
+		t.Fatal(err)
+	}
+	_, got, err := tunnel.Read(ctx)
+	if err != nil {
+		t.Fatalf("隧道未收到浏览器帧: %v", err)
+	}
+	rf, ok := Unwrap(got)
+	if !ok || rf.From == "" {
+		t.Fatalf("隧道应收到带来源标识的路由帧: %s", got)
+	}
+	if string(rf.Data) != `{"kind":"command","method":"worker.list"}` {
+		t.Fatalf("业务帧被改写: %s", rf.Data)
+	}
+}

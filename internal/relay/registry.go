@@ -333,6 +333,11 @@ func (r *Registry) Claim(owner, code string) (*Device, string, error) {
 	target.PairingCode = ""
 	target.ClaimedAt = time.Now().UTC()
 	target.LastSeen = time.Now().UTC()
+	// 令牌必须在这里就写进注册表：只返回给调用方、等它自己再调
+	// SetDeviceToken 的写法忘一次就是「领取成功但令牌永远无效」——
+	// 直连 Claim 的调用方（测试与内部装配）踩的就是这个。
+	// 这里已在锁内，所以直接写字段而不是再调 SetDeviceToken（它自己加锁）。
+	target.TokenHash = hashToken(token)
 	r.markDirty()
 	out := *target
 	return &out, token, nil

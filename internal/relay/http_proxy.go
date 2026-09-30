@@ -3,6 +3,7 @@ package relay
 import (
 	"io"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"sync"
@@ -38,7 +39,11 @@ const (
 // 导出是因为隧道两端（relay 与桥）都要构造它；
 // 桥只应通过 MarshalHTTPFrame 发送，避免自己拼 JSON 键名。
 type HTTPEnvelope struct {
-	ID      string      `json:"id"`
+	ID string `json:"id"`
+	// Mount 是外部挂载前缀（例如 `/d/dev-1`），设备渲染外壳时用它生成
+	// 文档基地址。它只经隧道传递，不放进 HTTP 头——头可以被伪造，
+	// 而基地址一旦指向外部域就等于让外壳加载攻击者的脚本。
+	Mount   string      `json:"mount,omitempty"`
 	Method  string      `json:"method,omitempty"`
 	Path    string      `json:"path,omitempty"`
 	Headers [][2]string `json:"headers,omitempty"`
@@ -90,6 +95,14 @@ func (s *Server) serveDeviceHTTP(w http.ResponseWriter, r *http.Request) {
 	} else {
 		path = "/" + path
 	}
+	// 设备前缀下的 WebSocket：浏览器连的是 `{前缀}/api/v1/ws`。
+	// 这里把它接到与 `/client` 完全相同的连接管理上——前端因此不必知道
+	// 自己在本地还是云端形态（B54）。clientId 由 relay 生成：
+	// 它只是 relay 与桥之间的路由标识，浏览器不需要看到。
+	if isWebSocketUpgrade(r) && strings.HasSuffix(r.URL.Path, "/api/v1/ws") {
+		s.serveDeviceWS(w, r, deviceID)
+		return
+	}
 	// 归属校验与 WS 入口一致：只有设备所属用户可以经隧道访问它。
 	deviceOwner, err := s.registry.Owner(deviceID)
 	if err != nil || deviceOwner != owner {
@@ -112,6 +125,7 @@ func (s *Server) serveDeviceHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	envelope := HTTPEnvelope{
 		ID:      newHTTPID(),
+		Mount:   devicePrefix + deviceID,
 		Method:  r.Method,
 		Path:    path,
 		Headers: collectHeaders(r),
@@ -241,4 +255,26 @@ func newHTTPID() string {
 func MarshalHTTPFrame(envelope HTTPEnvelope) ([]byte, error) {
 	env := envelope
 	return marshalRouteFrame(routeFrame{HTTP: &env})
+}
+
+// isWebSocketUpgrade 判断这是不是一次 WebSocket 升级请求。
+func isWebSocketUpgrade(r *http.Request) bool {
+	return strings.EqualFold(r.Header.Get("Upgrade"), "websocket")
+}
+
+// serveDeviceWS 把设备前缀下的 WS 升级接到既有的浏览器连接管理上。
+func (s *Server) serveDeviceWS(w http.ResponseWriter, r *http.Request, deviceID string) {
+	clientID := r.URL.Query().Get("clientId")
+	if clientID == "" {
+		clientID = "d-" + newHTTPID()
+	}
+	query := url.Values{}
+	query.Set("deviceId", deviceID)
+	query.Set("clientId", clientID)
+	forwarded := r.Clone(r.Context())
+	forwarded.URL.Path = "/client"
+	forwarded.URL.RawQuery = query.Encode()
+	// 复用 /client 的认证、归属、连接上限与读写循环：两处各写一遍
+	// 必然会漂移（B23 的连接上限就是在这种复制里漏掉过一次）。
+	s.handleClient(w, forwarded)
 }

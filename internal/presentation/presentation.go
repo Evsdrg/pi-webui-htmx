@@ -908,12 +908,48 @@ type ShellData struct {
 	CSS       []string
 	// Preload 是入口静态依赖的分块，用 modulepreload 与入口并行拉取。
 	Preload []string
+	// Base 是文档基地址（以斜杠结尾）。设备前缀部署时它是 `/d/{id}/`，
+	// 本地部署时是 `/`。外壳里的相对 URL 与前端脚本都相对它解析，
+	// 这样同一份产物在两种形态下都指向正确的前缀（B54）。
+	Base string
 }
 
 // RenderShell 渲染应用外壳，注入带内容哈希的资源路径。
-func (r *Renderer) RenderShell(sessionID string) (string, error) {
+//
+// mount 是外部挂载前缀（relay 经隧道转发时给出，例如 `/d/dev-1`）；
+// 空值表示桥直接对外服务，前缀就是根。
+func (r *Renderer) RenderShell(sessionID, mount string) (string, error) {
 	js, css, preload := r.EntryAssets()
-	return r.execute("shell.html", ShellData{SessionID: sessionID, JS: js, CSS: css, Preload: preload})
+	return r.execute("shell.html", ShellData{SessionID: sessionID, JS: js, CSS: css, Preload: preload, Base: DocBase(mount)})
+}
+
+// DocBase 把挂载前缀规范成文档基地址：以斜杠结尾，且只允许安全的路径形态。
+//
+// 前缀会成为 <base href>，也就是浏览器解析一切相对 URL 的基准。因此它
+// 必须是纯路径：不允许协议、主机、`//`（协议相对）或 `..`——任何一个
+// 都能把相对资源请求引到外部域，等于让外壳去加载攻击者的脚本。
+// 前缀来自隧道帧（relay 构造），这条校验是纵深防御。
+func DocBase(mount string) string {
+	trimmed := strings.TrimSpace(mount)
+	if trimmed == "" || !strings.HasPrefix(trimmed, "/") {
+		return "/"
+	}
+	if strings.Contains(trimmed, "//") || strings.Contains(trimmed, "..") || strings.Contains(trimmed, ":") {
+		return "/"
+	}
+	for _, seg := range strings.Split(strings.Trim(trimmed, "/"), "/") {
+		if seg == "" {
+			continue
+		}
+		for _, r := range seg {
+			ok := r == '.' || r == '-' || r == '_' || r == '~' ||
+				(r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9')
+			if !ok {
+				return "/"
+			}
+		}
+	}
+	return strings.TrimRight(trimmed, "/") + "/"
 }
 
 func stringField(m map[string]any, key string) string {
