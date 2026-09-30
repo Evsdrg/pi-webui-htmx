@@ -1,6 +1,6 @@
 # UI 包与交互契约
 
-更新：2026-09-27。本文约定 UI 包/模板/浏览器行为；应用协议归 [Bridge Protocol v1](../../pi-bridge-go/api/v1/protocol.md)。[桥架构 S01–S12](../../pi-bridge-go/docs/architecture.md) 是修复决策，[审查清单](../../pi-bridge-go/docs/code-audit.md) 是未解决问题台账。**本文明确标记的目标约定尚待实现；文档更新不代表当前源码已具备这些保证。**
+更新：2026-09-27。本文约定 UI 包/模板/浏览器行为；应用协议归 [Bridge Protocol v1](../../pi-bridge-go/api/v1/protocol.md)。[桥架构 S01–S12](../../pi-bridge-go/docs/architecture.md) 是设计说明（含逐节实施状态表），[审查台账](../../pi-bridge-go/docs/code-audit.md) 逐项记录问题与证据。**本文约定的行为已在批次 A–J 中落地并配有回归**；仍属目标态的部分在文中就地标注（例如跨浏览器/CLI 的 revision/CAS）。
 
 ## 1. 所有权与实际目录
 
