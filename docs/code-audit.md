@@ -1,6 +1,6 @@
 # 代码审查记录与修复方案索引
 
-更新：2026-09-30（含逐条复核，见下方「2026-09-30 逐条复核」）。**P0 已完成，P1 正在实施，协议仍为 v1。** 下表 ✅ 表示对应代码与回归已完成，未标记项仍待修复。技术方案见 [architecture.md](architecture.md)，批次与进度见 [repair-plan.md](repair-plan.md)。
+更新：2026-09-30（第二轮修复已落地，见下方两段复核记录）。**P0 已完成，P1 正在实施，协议仍为 v1。** 下表 ✅ 表示对应代码与回归已完成，未标记项仍待修复。技术方案见 [architecture.md](architecture.md)，批次与进度见 [repair-plan.md](repair-plan.md)。
 
 ## 范围与基线
 
@@ -20,6 +20,17 @@
 - **复核后仍确认未修**：U04、U15、U16、U18、B33、B36、B37、B38、B40、B43、B45、B50、B51、B53、B54、B55、B70、B75、B76、B77、B80、D01。
 
 这轮复核本身也说明一件事：**台账状态会漂移**，判断某个问题是否还存在时，先看代码，别只看这里的状态列。
+
+### 2026-09-30 第二轮修复
+
+在第一次复核之后又处理了一批：
+
+- **本轮修完**：B33、B50、B53、B77、B80、U16。
+- **复核后确认已修**：B34（README 已更新状态段）。
+- **部分完成**：D01——前端文档里的「Vite 7 / 无前端测试」已不成立，本轮只更新了前端 README 的数字与桥侧 protocol.md 的能力描述。
+- **B54 仍待立项**：relay 侧缺按设备前缀转发 HTTP 的入口，前端也没有 basePath，S09 的目标形态两端都未实现，属于 P7。
+
+两轮复核共改写 19 条状态。**这些状态仍然会漂移**：判断某个问题是否还存在时，先看代码。
 
 ## 代码审查发现
 
@@ -71,8 +82,8 @@
 | B30 | ✅ 已修 | Bridge | **修复：** 有副作用命令派发前可靠写 pending intent（带指纹），完成后落终态；重启见到 pending 只回答 `outcome_unknown`，不假装成功。时序测试用会阻塞的假 sink 捕获「派发中已在盘上」。 | `internal/transport/claims.go`；`methods_test.go` |
 | B31 | ✅ 已修 | Bridge | 复核（2026-09-30）：`requestFingerprint` 已包含 method、sessionId 与规范化 params，不同命令误用同一 requestId 会得到 `conflict`，不会拿到旧命令的 `duplicate` 回执。 | `internal/transport/server.go`；`internal/storage/receipts.go` |
 | B32 | ✅ 已修 | Bridge | 复核（2026-09-30）：`maxPackages=128`、`maxPackageQueries=4`、`maxPackageMetadata=1 MiB` 都已在 `packages.go` 生效，跨请求并发有上限。 | `internal/management/packages.go` |
-| B33 | 中 | Bridge | workspace 图片读取允许最多 4 MiB，`files.image` 却把图片 base64 放进 512 KiB WS 响应；大部分被桥识别为受支持的图片无法预览。 | `internal/workspace/files.go`；`internal/transport/server.go` |
-| B34 | 中 | Bridge | `README.md` 仍标 A 阶段，并称 replay、持久去重、终端、Git、配置管理等未实现；能力端点也固定返回 `phase: A`，与实际实现及协议文档矛盾。 | `pi-bridge-go/README.md`；`internal/transport/server.go`；`api/v1/protocol.md` |
+| B33 | ✅ 已修 | Bridge | 本轮修复：前端图片预览改走 `/ui/file-image`（HTTP 回原始字节，不再 base64 展开、不再占用 WS 帧预算）；桥侧 `files.image` 在 base64 超过 `wsTextBudget` 时明确回 `limit_exceeded` 并指出该端点，不再把超限帧交给连接层静默丢弃。反例：`transport/file_image_test.go` 两条 + 前端 `workspace_image.test.ts` 两条。 | `internal/workspace/files.go`；`internal/transport/server.go` |
+| B34 | ✅ 已修 | Bridge | 复核（2026-09-30）：README 已无「A 阶段」字样，本次把状态段更新为「P1–P6 已按批次落地、云端整链路未实现（P7）」并写明台账状态会漂移。 | `pi-bridge-go/README.md`；`internal/transport/server.go`；`api/v1/protocol.md` |
 | B35 | ✅ 已修 | Relay | **修复：** scheme 推断信任 `X-Forwarded-Proto`（仅接受明确 https，其余按 http），Cookie `Secure` 同步跟随；无代理头时仍按 r.TLS。 | `internal/relay/server.go`；`relay_transport_test.go` |
 | B35b | ✅ 已实现 | Transport | **修复：** 桥自身 HTTP/WS 路径原先只接受环回监听，且 Host/Origin 与监听地址逐字比较、`scheme` 只看 `r.TLS`——反代终止 TLS 时恒为 http，https 页面必被 403。现由 `--public-origin` 显式声明对外来源：非环回监听仅在该开关下放行且只接受私有/overlay 网段；Host/Origin 额外接受该来源；Cookie `Secure` 跟随其 scheme；WebSocket origin 白名单与同一规则对齐。不信任任何 `X-Forwarded-*`（S09）。 | `internal/transport/public_origin.go`、`cmd/pi-bridge/main.go`；`public_origin_test.go` |
 | B36 | 中 | Bridge | `setStatus` 快照只按 key 全局存储，不含 sessionId；不同 Pi worker 的同名状态互相覆盖，切换会话可能看到另一会话的扩展状态。Pi Web 将状态保存在 per-session state。 | `internal/transport/extension_state.go`；`internal/transport/server.go`；`pi-web/hooks/useAgentSession.ts` |
@@ -97,7 +108,7 @@
 | U13 | ✅ 已修 | UI | **修复：** `send`/`sendQueued` 的目标会话在发起时取定；切换后明确报错并保留输入与附件，不静默丢弃。 | `src/modules/workbench.ts`；`tests/unit/workbench.test.ts` |
 | U14 | ✅ 已修 | UI | **修复：** 自动重试改为按会话记忆的本地偏好（`autoRetryBySession`），切换会话时套用该会话上次选择、默认关闭；模板明确标注「不是 Pi 的实时状态」。 | `src/modules/workbench.ts`；`src/templates/shell.html` |
 | U15 | 中 | UI | `bridge.event_omitted` 控制事件被忽略；UI 不读取 `resyncRequired`，连接仍在线时不会立即重读历史，直到后续 settled/手动刷新。 | `pi-webui-htmx/src/modules/workbench.ts`；`pi-bridge-go/internal/runtime/manager.go` |
-| U16 | 中 | UI | `EventCursor.accept` 接受任意新 epoch 并把 seq 重置；旧 worker 延迟帧可把 cursor 从新 epoch 切回旧 epoch，随后旧帧被当成新事件处理。 | `pi-webui-htmx/src/modules/stream.ts`；`pi-bridge-go/internal/transport/server.go` |
+| U16 | ✅ 已修 | UI | 本轮修复：`EventCursor.accept` 不再接受事件流里冒出的其它 epoch（那正是上一个 worker 的延迟帧）；切换 epoch 只走订阅确认帧的 `epoch/seq`（`begin`）。`workbench.subscribe` 已改用确认值。反例：`state.test.ts` 与 `workbench.test.ts` 各一条，旧实现下都红。 | `pi-webui-htmx/src/modules/stream.ts`；`pi-bridge-go/internal/transport/server.go` |
 | U17 | ✅ 已修 | UI | xhr→epoch的本地映射在beforeOnLoad核对，先于HX响应头/OOB；不需要让服务器回显自定义头。A→B→A反例覆盖，动态思考按钮也归属会话。 | `src/modules/fragment-requests.ts` |
 | U18 | ⚠️ 部分 | UI | **精度校正后状态：** 对话目标已按 sessionId 校验，并补了代次。**仍缺：** 同一 session 的旧代次/ pending 集合乱序、响应处理前守卫，以及旧错误/`finally` 对新视图的影响。 | `src/modules/workbench.ts` |
 | U19 | ✅ 再修复 | UI | 模型表单重做后曾回归（F01）。现在维护单一草稿，保存独立快照、完成不重读，重复保存合并；选节点/JSON/末项删除也不丢字段。不承诺跨浏览器配置CAS。 | `src/modules/models.ts`、`tests/unit/models_draft.test.ts` |
@@ -111,10 +122,10 @@
 | B47 | ✅ 已修 | Storage | **修复：** 轮转文件按序号升序载入（当前 → .1 → .2 → .3），同一 requestId 只保留更晚结论。回归直接构造「新记录在 .1、旧记录在 .2」的布局。 | `internal/storage/receipts.go`；`receipts_test.go` |
 | B48 | ✅ 已修 | Runtime | **修复：** 记录每个对话的登记时间，回收协程里清理超过自身 `timeout` 的对话并通知前端；无 timeout 字段的对话不误清。回归验证清理后 `busyLocked()` 为假、空闲回收恢复。 | `internal/runtime/dialogs.go`；`manager.go`；`dialogs_test.go` |
 | B49 | ✅ 已修 | Management | 模型摘要按 Pi 数组计数并对总输出应用限额，稳定排序 provider，保留原始 modelCount 并标记截断；旧对象夹具已改为真实数组。 | `internal/management/config.go`；`config_safety_test.go` |
-| B50 | 中 | Runtime | 同一 worker 的第二次 `Stop` 在 `closing` 后无条件等待 `done`；第一次强停超时但进程仍未退出时，关闭调用者可永久阻塞。 | `internal/runtime/manager.go` |
+| B50 | ✅ 已修 | Runtime | 本轮修复：`stop` 分级停止改成步骤表，总预算 = 步骤数 × StopGrace 由结构保证；`closing` 之后再次 `Stop` 不再无条件等 `done`，改为等到该预算的终点（`awaitStopped`）。反例 `runtime/stop_test.go` 两条：旧实现下第二条 Stop 阻塞满 3 秒判定超时。 | `internal/runtime/manager.go` |
 | B51 | ⚠️ 部分修复 | Management/Workspace | 配置读取已限制实际 reader 并检查打开的文件类型；workspace 文件/图片路径仍待修复，不能因配置侧完成就关闭此项。 | `internal/management/config.go`；`internal/workspace/files.go` |
 | B52 | ✅ 已修 | Sessions | **修复：** `walkDir`/`computeFingerprint` 接收 context（入口与内层双检），深度上限 32；空目录不计入文件上限。 | `internal/sessions/index.go`；`index_test.go` |
-| B53 | 中 | Tunnel | 浏览器帧上限为 1 MiB，relay 再加 `to`/`from` JSON 路由封装后仍受 1 MiB 读限；接近上限的合法本地帧会断开整条隧道。 | `internal/relay/server.go`；`internal/transport/tunnel.go` |
+| B53 | ✅ 已修 | Tunnel | 本轮修复，**缺口比原文更大**：relay 与隧道客户端各自写死 1 MiB，而桥允许浏览器发 8×12 MiB 的图片附件——两处都会把合法帧当成超限帧，表现是「发图片就断隧道」。现在帧上限由 `protocol.BrowserFrameLimit` 统一给出（`transport.wsReadLimit`、`tunnel.maxFrame`、`relay.maxFrame`），relay 的路由封装改为不做 HTML 转义（否则载荷里的 `<` 会膨胀到 6 倍），队列放行线改为「预算与本帧大小的较大值」（否则最大帧被 4 MiB 队列预算自己挤掉）。 | `internal/relay/server.go`；`internal/transport/tunnel.go` |
 | B54 | 高 | Product | 复核（2026-09-30，缺口比原文更大）：relay 侧只有 WS 中继 `/client?deviceId=&clientId=`（`relay.RouteTo`/`Unwrap`）与设备侧 `/tunnel`，**没有**按设备前缀转发 HTTP 的入口，而 UI 外壳、`/ui/*` 片段、`/assets/*` 都是 HTTP；前端 `BridgeClient` 也固定连当前站点且无 basePath 概念。所以「同源 HTTP + WS 透明适配」（architecture.md S09）在服务端与前端都还没实现，不是只差前端登录/设备选择。属于 P7，依赖 P2–P6。 | `pi-webui-htmx/src/modules/workbench.ts`；`pi-bridge-go/internal/relay/server.go` |
 | B55 | 中 | Relay | relay 默认状态目录为系统临时目录 `/tmp/pi-relay`；设备注册表在重启/清理临时目录后丢失，长期部署必须显式指定持久 `--state-dir`。 | `cmd/pi-relay/main.go` |
 | B56 | ✅ 已修 | Workspace | **修复：** stderr 限 32 KiB、不回显；取消进程组的真实后代测试通过。桥 SIGKILL 的整树保证仍属 B40/P7。原问题：`gitOutputLimited` 仅限制 stdout，stderr 使用无界 `bytes.Buffer`；同时 `CommandContext` 只回收 Git 直接子进程，仓库配置触发的外部命令后代可能存活。 | `internal/workspace/git.go` |
@@ -138,12 +149,12 @@
 | B74 | ✅ 已修 | Tunnel | 复核（2026-09-30）：`handle` 已按连接持有 `release` 信号量并在满时回 `busy`，且非 urgent 命令同样占用 `Server.operations`。 | `internal/transport/tunnel.go` |
 | B75 | 中 | Terminal | `resolveShell` 只校验 basename，任意命名为 bash 的可执行文件可通过；与声明的 shell 白名单不符。显式 PTY 本来具有执行能力，这不是额外的任意执行提权结论；目标是使用本机固定真实路径表。 | `internal/transport/server.go`；`internal/terminal/terminal.go`；`shell-path-probe.log` |
 | B76 | 中 | Export | 前端导出走 `command()`，会先 `ensureWorker()`；桥的 `session.export_html` 又要求 `manager.Get`。仅导出磁盘历史会启动 Pi 并加载整个长会话；Pi Web 的 `exportFromFile` 直接读 JSONL，不启动 AgentSession。 | `pi-webui-htmx/src/modules/workbench.ts`；`pi-bridge-go/internal/transport/server.go`；`pi-web/app/api/sessions/[id]/export/route.ts` |
-| B77 | 中 | Export/Storage | HTML 导出持久写入 `stateDir/exports`，没有总字节/文件数上限、过期清理或下载后删除；不同合法文件名可不断占用磁盘。Pi Web 使用随机临时文件并在响应后删除。 | `cmd/pi-bridge/main.go`；`internal/transport/server.go`；Pi Web export route |
+| B77 | ✅ 已修 | Export/Storage | 本轮修复：导出前按数量与字节裁剪最旧的产物（`pruneExports`，32 个 / 256 MiB，给即将写入的文件留一个空位）。顺带修掉夹具缺陷：`fake-pi` 读的是 `message` 而桥发的是 `outputPath`，所以导出成功路径此前从未被端到端覆盖。 | `cmd/pi-bridge/main.go`；`internal/transport/server.go`；Pi Web export route |
 | B78 | ✅ 已修 | Relay | 本轮修复：`persist` 改为落盘成功之后才清 `dirty`，并用 `version` 自增判断「写盘期间是否又有新改动」，有新改动就留给下一次。反例 `-run Test注册表写盘失败后不清脏`：故障解除后不再产生新改动，只重跑写盘，旧实现直接返回 nil 导致设备不落盘。 | `internal/relay/registry.go`；`registry-persist-probe.log` |
 | B79 | ✅ 已修 | Terminal | 本轮修复：`Terminal` 记下 `maxCols/maxRows`，`Resize` 超限夹到上限（而不是像 `Open` 那样回落默认值——窗口尺寸是真实值，静默改成 80×24 会让终端突然缩小）。反例 `-run Test终端尺寸上限对resize同样生效` 在旧实现下读到 65535。 | `internal/terminal/terminal.go`；`internal/transport/server.go` |
-| B80 | 低 | Protocol | capabilities 将 `phase` 固定报 `A`，且 `terminals=4`/`terminalIdleSeconds=600` 固定写默认值；CLI 可通过 `--max-terminals`/`--terminal-idle` 覆盖，发现端点会向客户端报错限额。 | `internal/transport/server.go`；`cmd/pi-bridge/main.go` |
+| B80 | ✅ 已修 | Protocol | 本轮修复：发现端点移除写死的 `phase`（阶段早已完成），终端数量与空闲秒数改报 `terminal.Manager.Limits()` 的真实配置。反例 `transport/capabilities_test.go` 用非默认终端配置断言报的是真实值。 | `internal/transport/server.go`；`cmd/pi-bridge/main.go` |
 | B81 | ✅ 已修 | Management | 网页新增/修改 apiKey/header 命令表达式被拒绝，只允许按原身份保留本机已有值；Pi 的 `$!` 字面量转义不误判。Go 回归验证拒绝和保留，没有实际执行凭据命令。 | `internal/management/config_values.go`；`config_safety_test.go`；Pi `resolve-config-value.js` |
-| D01 | 中 | Docs | 架构/阶段文档已标 A–E 完成，但 `README.md`、`docs/pi-compatibility.md`、`api/v1/protocol.md` 仍写 A 阶段或云隧道后续；前端 `docs/contract.md`、`docs/components.md` 仍记 Vite 7/旧 vendor 与“无前端测试”，和当前实现不一致。 | 两个项目的 README/docs、protocol 文档 |
+| D01 | ⚠️ 部分 | Docs | 复核（2026-09-30）：前端 `contract.md`/`components.md` 记的已是 Vite 8 / TypeScript 7 且有测试，原文的「Vite 7 / 旧 vendor / 无前端测试」已不成立；本轮更新了前端 README 的预算数字（50/30 KiB）、实测构成（45.77 KiB）与测试数（22 文件 165 项），以及桥 README 状态段与 protocol.md 的 capabilities 描述。 | 两个项目的 README/docs、protocol 文档 |
 | D02 | ✅ 已配置 | Tests | 两仓独立 GitHub Actions 工作流已配置并固定 action SHA；本地等价命令及 YAML 结构检查通过。`scripts/verify-pair.sh` 强制真实 UI checkout 做跨仓联测；当前没有 Git remote，托管运行待首次接入，不声称已经跑绿。其他审查反例随修复逐项转为正式测试。 | 两仓 `.github/workflows/check.yml`；`scripts/verify-pair.sh`；P0 |
 ## 限额与部署链核对
 

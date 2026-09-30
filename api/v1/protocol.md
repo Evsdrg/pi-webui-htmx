@@ -10,7 +10,7 @@
 |---|---|
 | `GET /healthz` | 健康检查，不返回模型、路径或进程信息 |
 | `POST /api/v1/auth` | Bearer 换 Cookie |
-| `GET /api/v1/capabilities` | 版本、方法、能力、限额；当前 phase/部分限额仍有 B80 硬编码 |
+| `GET /api/v1/capabilities` | 版本、方法、能力、限额；限额来自运行时配置（终端数量/空闲秒数跟随 `--max-terminals`/`--terminal-idle`），不再有写死的阶段字段 |
 | `GET /api/v1/sessions?limit=50&offset=0` | 磁盘会话目录，不启动 worker |
 | `GET /api/v1/sessions/{id}/history?limit=50&before=ENTRY&leafId=LEAF` | 所选持久分支历史，不启动 worker |
 | `GET /api/v1/ws` | 文本 JSON 命令/响应/事件 |
