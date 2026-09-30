@@ -1292,6 +1292,13 @@ type connSink interface {
 //
 // 顺序有意如此：worker.list 与 session.start 必须在取工作进程之前处理，
 // 因为 start 的任务正是创建那个进程。
+// noWorkerSessionMethods 是 session.* 里**不需要**活动工作进程的命令。
+// 导出曾是例外：它拿 worker 只为让 Pi 写文件；现在由桥从 JSONL 投影生成，
+// 于是浏览历史与导出都不再拉起进程（B76/B45）。
+var noWorkerSessionMethods = map[string]bool{
+	"session.export_html": true,
+}
+
 func (s *Server) dispatchCommon(ctx context.Context, r protocol.Request, sink connSink) (any, error) {
 	switch r.Method {
 	case "worker.list":
@@ -1319,9 +1326,9 @@ func (s *Server) dispatchCommon(ctx context.Context, r protocol.Request, sink co
 		return w.Info(), nil
 	}
 	// 文件、配置、终端和磁盘会话操作独立于 Pi 生命周期。
-	// 只有 session.* 命令要求显式启动过的工作进程。
+	// 只有 session.* 命令要求显式启动过的工作进程——例外见 noWorkerSessionMethods。
 	var w *run.Worker
-	if strings.HasPrefix(r.Method, "session.") {
+	if strings.HasPrefix(r.Method, "session.") && !noWorkerSessionMethods[r.Method] {
 		var err error
 		w, err = s.manager.Get(r.SessionID)
 		if err != nil {

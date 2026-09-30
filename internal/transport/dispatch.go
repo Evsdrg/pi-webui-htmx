@@ -392,27 +392,32 @@ func (s *Server) dispatchSessionOps(ctx context.Context, r protocol.Request) (an
 		if err != nil {
 			return nil, err
 		}
+		if s.ui == nil {
+			return nil, protocol.E("unsupported", "未配置 UI 包，导出不可用")
+		}
 		target := filepath.Join(s.exportDir, name)
-		// 先按配额腾出空间再导出：导出产物是持久写入的，
-		// 不设上限就能被反复导出一直占住磁盘（B77）。
+		// 整个「裁剪 → 投影 → 渲染 → 写入」持锁：并发导出不再各自
+		// 看到一个空位而一起写进去（B77）。导出本身不碰 Pi。
 		s.exportMu.Lock()
-		pruneErr := pruneExports(s.exportDir, maxExportFiles-1, maxExportBytes)
-		s.exportMu.Unlock()
-		if pruneErr != nil {
+		defer s.exportMu.Unlock()
+		if err := pruneExports(s.exportDir, maxExportFiles-1, maxExportBytes); err != nil {
 			return nil, protocol.E("pi_error", "清理导出目录失败")
 		}
-		worker, err := s.manager.Get(r.SessionID)
+		doc, err := s.store.ExportDocument(ctx, r.SessionID, sessions.DefaultExportLimits())
 		if err != nil {
 			return nil, err
 		}
-		path, err := worker.ExportHTML(ctx, target)
+		html, err := s.ui.RenderExport(doc)
 		if err != nil {
 			return nil, err
 		}
-		if filepath.Clean(path) != filepath.Clean(target) {
-			return nil, protocol.E("conflict", "导出路径与请求不一致")
+		if int64(len(html)) > maxExportFileBytes {
+			return nil, protocol.E("limit_exceeded", "导出内容超过单文件上限")
 		}
-		return exportReply{Path: path}, nil
+		if err := writeFileAtomic(target, html); err != nil {
+			return nil, protocol.E("pi_error", "写入导出文件失败")
+		}
+		return exportReply{Path: target}, nil
 	}
 	return nil, errUnhandled(r.Method)
 }

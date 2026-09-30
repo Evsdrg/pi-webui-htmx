@@ -95,6 +95,8 @@ WebSocket 的 origin 白名单与同一规则对齐，否则库层（`Origin.Hos
 | 终端 | `terminal.open`、`terminal.input`、`terminal.resize`、`terminal.close`、`terminal.list` |
 | 文件与 Git | `files.list`、`files.index`、`files.stat`、`files.read`、`files.image`、`files.roots`、`git.status`、`git.diff` |
 | 其他 | `session.stats`、`session.set_name`、`session.last_assistant`、`session.commands`、`session.export_html`、`sessions.search`、`sessions.delete` |
+
+`session.export_html` 是**磁盘投影**：不要求活动 worker，也不调用 Pi 的 `export_html`——桥直接从 JSONL 生成自包含 HTML（无脚本、单文件 ≤ 64 MiB、写入用临时文件加改名，目录 32 个 / 256 MiB 上限）。Pi 自己的 `export_html` 仍被 `/ui/system` 与 `/ui/tools` 用来取 `systemPrompt`/`tools`。
 | 模型配置 | `config.models`、`config.models.raw`、`config.models.write`、`config.models.discover`、`config.models.test`、`config.catalog` |
 | 资源清单 | `config.packages`、`config.settings`、`config.trust` |
 

@@ -1087,3 +1087,16 @@ func cloneUsage(u *sessions.Usage) *sessions.Usage {
 	copy := *u
 	return &copy
 }
+
+// RenderExport 渲染只读导出文档（完整 HTML，可离线打开）。B76/B45：
+// 它由桥自己从 JSONL 投影生成——不启动 Pi，也不内嵌 Pi 的递归树脚本。
+func (r *Renderer) RenderExport(doc sessions.ExportDocument) (string, error) {
+	title := doc.Name
+	if title == "" {
+		title = doc.ID
+	}
+	return r.execute("export.html", struct {
+		sessions.ExportDocument
+		Title string
+	}{doc, title})
+}

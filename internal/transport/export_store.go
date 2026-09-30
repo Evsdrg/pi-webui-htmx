@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"time"
 )
 
@@ -19,7 +20,40 @@ import (
 const (
 	maxExportFiles = 32
 	maxExportBytes = 256 << 20
+	// maxExportFileBytes 限制**单个**导出产物。写入前就按它拒绝，
+	// 否则一次导出就能占满整个目录预算（B77）。
+	maxExportFileBytes = 64 << 20
 )
+
+// writeFileAtomic 先写临时文件再改名：下载端点永远只会看到完整文件，
+// 中途失败也不会在目录里留下半份产物（B77）。
+func writeFileAtomic(target string, content string) error {
+	lastDot := strings.LastIndexByte(target, '.')
+	pattern := target[:lastDot] + "-*.tmp"
+	dir := filepath.Dir(target)
+	tmp, err := os.CreateTemp(dir, filepath.Base(pattern))
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	defer func() { _ = os.Remove(tmpName) }()
+	if _, err := tmp.WriteString(content); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	// 导出产物可能包含会话内容，权限收紧到 0600。
+	if err := os.Chmod(tmpName, 0600); err != nil {
+		return err
+	}
+	return os.Rename(tmpName, target)
+}
 
 // pruneExports 按修改时间从旧到新删除，直到目录同时满足数量与体积上限。
 //

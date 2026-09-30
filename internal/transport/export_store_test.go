@@ -106,8 +106,12 @@ func Test导出目录按字节裁掉最旧的(t *testing.T) {
 // 先放一批历史产物，再真的走一次 session.export_html，
 // 目录必须被收在上限内，且刚导出的那个文件不能被自己删掉。
 func Test反复导出不会撑爆导出目录(t *testing.T) {
-	t.Setenv("FAKE_PI_EXPORT_BYTES", "2048")
 	s, _, cwd := newTestServer(t)
+	if s.ui == nil {
+		t.Skip("未配置 UI 包，跳过导出断言")
+	}
+	// 导出是磁盘投影：有会话文件即可，不需要先启动工作进程（B76）。
+	writeSessionFile(t, s.store.Dir(), "sess-1", cwd)
 	for i := 0; i < maxExportFiles+5; i++ {
 		path := filepath.Join(s.exportDir, fmt.Sprintf("old-%03d.html", i))
 		if err := os.WriteFile(path, []byte("x"), 0600); err != nil {
@@ -122,25 +126,12 @@ func Test反复导出不会撑爆导出目录(t *testing.T) {
 	var mu sync.Mutex
 	var sent [][]byte
 	bridge := newTestTunnel(t, s, &mu, &sent)
-	boot := mustFrame(t, map[string]any{
-		"version": 1, "kind": "command", "requestId": "boot",
-		"method": "session.start", "params": map[string]any{"cwd": cwd},
-	})
-	bridge.HandleFrame(context.Background(), wrapFrom(t, "tab-1", boot))
-	waitFrames(t, &mu, &sent, 1)
-	started := decodeFrame(t, lastFrame(t, &mu, &sent))
-	startedData, _ := started["data"].(map[string]any)
-	sessionID, _ := startedData["sessionId"].(string)
-	if sessionID == "" {
-		t.Fatalf("会话未启动: %v", started)
-	}
-
 	export := mustFrame(t, map[string]any{
-		"version": 1, "kind": "command", "requestId": "exp1", "sessionId": sessionID,
+		"version": 1, "kind": "command", "requestId": "exp1", "sessionId": "sess-1",
 		"method": "session.export_html", "params": map[string]any{"fileName": "session-check.html"},
 	})
 	bridge.HandleFrame(context.Background(), wrapFrom(t, "tab-1", export))
-	waitFrames(t, &mu, &sent, 2)
+	waitFrames(t, &mu, &sent, 1)
 	if reply := decodeFrame(t, lastFrame(t, &mu, &sent)); reply["ok"] != true {
 		t.Fatalf("导出失败: %v", reply)
 	}

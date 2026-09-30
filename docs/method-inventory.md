@@ -21,7 +21,7 @@ P0 清单，基于当前 62 个方法及 HTTP 路由。以下分类是 P2 共用
 | `terminal.input`、`terminal.resize` | 临时输入/最新状态 | 固定 terminal 实例 | 有界输入；不逐批 Sync，不重发输入 |
 | `session.abort`、`session.stop`、`session.abort_retry`、`session.abort_bash`、`terminal.close` | 控制 | 已捕获 worker/terminal 实例 | 有界保留容量；不等待普通写队列 |
 | `session.ui_response` | 一次性对话回复 | worker + epoch/transition + dialogId | dialog claim、控制队列与 stdin 写入结果 |
-| `session.export_html` | 有界产物生成 | 当前 worker；目标迁到只读文件投影 | 总磁盘、并发、期限、TTL；不将产物视为会话正文 |
+| `session.export_html` | 有界产物生成 | 磁盘投影（**不需要 worker**，见 noWorkerSessionMethods） | 单文件 ≤ 64 MiB、目录 32 个 / 256 MiB、原子写入、全程持锁；不将产物视为会话正文 |
 
 只读仍会消耗资源或向外发请求，不能跳过鉴权与预算。新建与恢复的 start 不能用一个幂等标签概括。具体策略落地时以共用 MethodSpec 为唯一执行事实来源；此表保留说明，静态集合检查防止漏列。
 
