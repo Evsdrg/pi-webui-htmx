@@ -1,7 +1,9 @@
 // Package protocol 定义桥与前端之间的线上协议。
 // 本文件是命令执行策略的唯一事实来源：执行类别、是否需要在派发前
-// 可靠写 intent、是否属于必须插队的控制命令。
+// 可靠写 intent、是否属于必须插队的控制命令、以及等待上限。
 package protocol
+
+import "time"
 
 // Class 是命令的执行类别，决定它走哪套预算与持久化策略。
 // 新增方法必须在这里声明类别，静态测试会检查没有遗漏。
@@ -52,6 +54,10 @@ type Spec struct {
 	NeedsIntent bool
 	// Urgent 表示控制命令：不能排在普通写队列后面等待。
 	Urgent bool
+	// Timeout 覆盖默认的命令等待上限；0 表示沿用 OperationTimeout。
+	// 长任务（模型压缩、用户 bash、大会话导出）不能按默认 30 秒放弃：
+	// 桥一旦超时就回 outcome_unknown，而 Pi 那边可能还在跑（B66）。
+	Timeout time.Duration
 }
 
 // specs 是全部命令的执行策略。与 SupportedMethods 一一对应，
@@ -79,7 +85,8 @@ var specs = map[string]Spec{
 	"session.pending_dialogs": {Method: "session.pending_dialogs", Class: ClassWorkerRead},
 
 	// 文件与目录只读。
-	"sessions.search": {Method: "sessions.search", Class: ClassDiskRead},
+	// 搜索最多扫 200 个文件 × 16 MiB，默认 30 秒偏紧。
+	"sessions.search": {Method: "sessions.search", Class: ClassDiskRead, Timeout: time.Minute},
 	"files.list":      {Method: "files.list", Class: ClassDiskRead},
 	"files.index":     {Method: "files.index", Class: ClassDiskRead},
 	"files.stat":      {Method: "files.stat", Class: ClassDiskRead},
@@ -90,10 +97,12 @@ var specs = map[string]Spec{
 	"git.diff":        {Method: "git.diff", Class: ClassDiskRead},
 
 	// 联网只读。
-	"config.models.discover": {Method: "config.models.discover", Class: ClassNetwork},
-	"config.models.test":     {Method: "config.models.test", Class: ClassNetwork},
-	"config.catalog":         {Method: "config.catalog", Class: ClassNetwork},
-	"config.packages":        {Method: "config.packages", Class: ClassNetwork},
+	// 联网只读。上游慢时 30 秒不够；packages 还要为每个包查一次 registry
+	// （4 个 worker 并发）。
+	"config.models.discover": {Method: "config.models.discover", Class: ClassNetwork, Timeout: 45 * time.Second},
+	"config.models.test":     {Method: "config.models.test", Class: ClassNetwork, Timeout: 45 * time.Second},
+	"config.catalog":         {Method: "config.catalog", Class: ClassNetwork, Timeout: 45 * time.Second},
+	"config.packages":        {Method: "config.packages", Class: ClassNetwork, Timeout: 90 * time.Second},
 
 	// 连接资源。
 	"session.subscribe":   {Method: "session.subscribe", Class: ClassConnection},
@@ -107,15 +116,16 @@ var specs = map[string]Spec{
 	"session.prompt":    {Method: "session.prompt", Class: ClassExec, NeedsIntent: true},
 	"session.steer":     {Method: "session.steer", Class: ClassExec, NeedsIntent: true},
 	"session.follow_up": {Method: "session.follow_up", Class: ClassExec, NeedsIntent: true},
-	"session.bash":      {Method: "session.bash", Class: ClassExec, NeedsIntent: true},
+	"session.bash":      {Method: "session.bash", Class: ClassExec, NeedsIntent: true, Timeout: 5 * time.Minute},
 
 	// 状态变更。
-	"session.set_model":           {Method: "session.set_model", Class: ClassState, NeedsIntent: true},
-	"session.cycle_model":         {Method: "session.cycle_model", Class: ClassState, NeedsIntent: true},
-	"session.set_thinking":        {Method: "session.set_thinking", Class: ClassState, NeedsIntent: true},
-	"session.cycle_thinking":      {Method: "session.cycle_thinking", Class: ClassState, NeedsIntent: true},
-	"session.set_queue_mode":      {Method: "session.set_queue_mode", Class: ClassState, NeedsIntent: true},
-	"session.compact":             {Method: "session.compact", Class: ClassState, NeedsIntent: true},
+	"session.set_model":      {Method: "session.set_model", Class: ClassState, NeedsIntent: true},
+	"session.cycle_model":    {Method: "session.cycle_model", Class: ClassState, NeedsIntent: true},
+	"session.set_thinking":   {Method: "session.set_thinking", Class: ClassState, NeedsIntent: true},
+	"session.cycle_thinking": {Method: "session.cycle_thinking", Class: ClassState, NeedsIntent: true},
+	"session.set_queue_mode": {Method: "session.set_queue_mode", Class: ClassState, NeedsIntent: true},
+	// 长任务：按默认 30 秒放弃会留下「Pi 还在跑、桥已回 outcome_unknown」的状态。
+	"session.compact":             {Method: "session.compact", Class: ClassState, NeedsIntent: true, Timeout: 5 * time.Minute},
 	"session.set_auto_compaction": {Method: "session.set_auto_compaction", Class: ClassState, NeedsIntent: true},
 	"session.set_auto_retry":      {Method: "session.set_auto_retry", Class: ClassState, NeedsIntent: true},
 	"session.set_name":            {Method: "session.set_name", Class: ClassState, NeedsIntent: true},
@@ -143,13 +153,21 @@ var specs = map[string]Spec{
 	"session.ui_response": {Method: "session.ui_response", Class: ClassDialog, NeedsIntent: true, Urgent: true},
 
 	// 有界产物。
-	"session.export_html": {Method: "session.export_html", Class: ClassExport, NeedsIntent: true},
+	"session.export_html": {Method: "session.export_html", Class: ClassExport, NeedsIntent: true, Timeout: 2 * time.Minute},
 }
 
 // SpecFor 返回命令的执行策略；未知方法第二个返回值为 false。
 func SpecFor(method string) (Spec, bool) {
 	spec, ok := specs[method]
 	return spec, ok
+}
+
+// TimeoutFor 返回某条命令的等待上限；没有单独标注时用 fallback。
+func TimeoutFor(method string, fallback time.Duration) time.Duration {
+	if spec, ok := specs[method]; ok && spec.Timeout > 0 {
+		return spec.Timeout
+	}
+	return fallback
 }
 
 // NeedsIntent 表示派发前必须可靠写 intent。

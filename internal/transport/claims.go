@@ -243,7 +243,9 @@ func (s *Server) runCommand(c connSink, req protocol.Request) {
 			Fingerprint: requestFingerprint(req),
 		})
 	}
-	ctx, stop := context.WithTimeout(s.manager.Context(), s.manager.Timeout())
+	// 等待上限按方法取：长任务（压缩、用户 bash、大会话导出）不能按默认
+	// 30 秒放弃，否则桥回 outcome_unknown 而 Pi 还在跑（B66）。
+	ctx, stop := context.WithTimeout(s.manager.Context(), protocol.TimeoutFor(req.Method, s.manager.Timeout()))
 	defer stop()
 	s.metrics.CommandStarted(req.Method)
 	// 必须走连接自己的 dispatch：订阅类命令由各连接自行实现，

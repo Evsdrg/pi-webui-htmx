@@ -36,6 +36,13 @@ const testToken = "0123456789abcdef0123456789abcdef"
 
 func newTestServer(t *testing.T) (*Server, *run.Manager, string) {
 	t.Helper()
+	return newTestServerTuned(t, 2*time.Second)
+}
+
+// newTestServerTuned 与 newTestServer 相同，只是把命令超时压到指定值。
+// B66 的用例需要默认超时在几百毫秒内到期，才能区分长任务命令用的不是它。
+func newTestServerTuned(t *testing.T, commandTimeout time.Duration) (*Server, *run.Manager, string) {
+	t.Helper()
 	cwd := t.TempDir()
 	state := t.TempDir()
 	sessionDir := filepath.Join(state, "sessions")
@@ -75,7 +82,7 @@ func newTestServer(t *testing.T) (*Server, *run.Manager, string) {
 	cfg.Policy = policy
 	cfg.MaxWorkers = 1
 	cfg.IdleTimeout = 5 * time.Minute
-	cfg.OperationTimeout = 2 * time.Second
+	cfg.OperationTimeout = commandTimeout
 	cfg.Metrics = metrics
 	m := run.New(cfg)
 	t.Cleanup(m.Close)

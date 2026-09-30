@@ -59,6 +59,14 @@ func main() {
 		_ = os.WriteFile(path, []byte(strings.Join(os.Args, "\n")+"\n"), 0600)
 	}
 	delay, _ := strconv.Atoi(envOr("FAKE_PI_DELAY_MS", "0"))
+	// 按方法拖延：逗号分隔的 Pi 方法名。夹具原本只能拖慢 prompt，
+	// 而验证「桥没有用统一的短超时砍断长命令」需要拖慢 compact/bash 之类。
+	delayMethods := map[string]bool{}
+	for _, name := range strings.Split(envOr("FAKE_PI_DELAY_METHOD", ""), ",") {
+		if name = strings.TrimSpace(name); name != "" {
+			delayMethods[name] = true
+		}
+	}
 	reader := bufio.NewReader(os.Stdin)
 	for {
 		line, err := reader.ReadString('\n')
@@ -77,6 +85,9 @@ func main() {
 		if json.Unmarshal([]byte(line), &cmd) != nil {
 			emit(frame{Type: "response", ID: "", Success: false, Error: "无法解析命令"})
 			continue
+		}
+		if delay > 0 && delayMethods[cmd.Type] {
+			time.Sleep(time.Duration(delay) * time.Millisecond)
 		}
 		switch cmd.Type {
 		case "get_state":
