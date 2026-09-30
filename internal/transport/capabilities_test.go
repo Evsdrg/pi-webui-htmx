@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	run "pi-bridge-go/internal/runtime"
 	"pi-bridge-go/internal/terminal"
 )
 
@@ -43,5 +44,70 @@ func Test能力发现只报实际生效的值(t *testing.T) {
 	}
 	if got := limits["terminalIdleSeconds"]; got != float64(90) {
 		t.Fatalf("terminalIdleSeconds 应报实际值 90，实际 %v", got)
+	}
+}
+
+// capabilities 报的限额必须是**真实容量**，不能是手抄的副本。
+//
+// 这条测试的价值在于抓「只改一侧」：把 channel 容量调大、或把响应预算
+// 调小，而声明没跟着改。历史上一份手抄副本报出过
+// wsRequestBytes = 1 MiB（实际 97 MiB）与 wsResponseBytes = 512 KiB
+// （实际 448 KiB）——前端按声明做预检时会把合法请求拦下来。
+func Test能力声明与真实容量一致(t *testing.T) {
+	s, _, _ := newTestServer(t)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/capabilities", nil)
+	req.Host = s.host
+	req.Header.Set("Authorization", "Bearer "+testToken)
+	s.ServeHTTP(rec, req)
+
+	var caps struct {
+		Limits map[string]int `json:"limits"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &caps); err != nil {
+		t.Fatalf("解析 capabilities 失败: %v", err)
+	}
+
+	// 每一项都与「运行时真正在用的那个数」比，而不是与另一个字面量比。
+	cases := []struct {
+		key  string
+		want int
+		why  string
+	}{
+		{"connections", cap(s.connections), "连接槽容量"},
+		{"inFlightOperations", cap(s.operations), "在途命令预算"},
+	}
+	for _, c := range cases {
+		if got := caps.Limits[c.key]; got != c.want {
+			t.Errorf("%s 报 %d，实际容量 %d（%s）", c.key, got, c.want, c.why)
+		}
+	}
+	// 帧预算：这两项就是 B80 里报错的那两个。
+	if got := caps.Limits["wsRequestBytes"]; got != wsReadLimit {
+		t.Errorf("wsRequestBytes 报 %d，实际读上限 %d", got, wsReadLimit)
+	}
+	if got := caps.Limits["wsResponseBytes"]; got != wsTextBudget {
+		t.Errorf("wsResponseBytes 报 %d，实际响应预算 %d", got, wsTextBudget)
+	}
+	if got := caps.Limits["connectionQueueBytes"]; got != outboundQueueLimit {
+		t.Errorf("connectionQueueBytes 报 %d，实际出站队列预算 %d", got, outboundQueueLimit)
+	}
+	if got := caps.Limits["requestIdsPerConnection"]; got != s.claims.maxHold {
+		t.Errorf("requestIdsPerConnection 报 %d，实际去重窗口 %d", got, s.claims.maxHold)
+	}
+	g := run.Defaults()
+	if got := caps.Limits["replayItems"]; got != g.ReplayItems {
+		t.Errorf("replayItems 报 %d，实际 %d", got, g.ReplayItems)
+	}
+	if got := caps.Limits["replayBytes"]; got != g.ReplayBytes {
+		t.Errorf("replayBytes 报 %d，实际 %d", got, g.ReplayBytes)
+	}
+	wantTerminals, wantIdle := s.terminals.Limits()
+	if got := caps.Limits["terminals"]; got != wantTerminals {
+		t.Errorf("terminals 报 %d，实际 %d", got, wantTerminals)
+	}
+	if got := caps.Limits["terminalIdleSeconds"]; got != wantIdle {
+		t.Errorf("terminalIdleSeconds 报 %d，实际 %d", got, wantIdle)
 	}
 }

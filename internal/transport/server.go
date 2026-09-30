@@ -76,6 +76,15 @@ var SupportedMethods = []string{
 // 必须用同一个值（B53）。
 const wsReadLimit = protocol.BrowserFrameLimit
 
+// 连接与在途预算。提成具名常量是因为它们要**同时**用于两处：
+// 实际的 channel 容量，以及 capabilities 里的能力声明。
+// 以前声明是手抄的字面量副本，改动任一侧都会让两者不一致——
+// 客户端按声明判断能不能发，而桥按容量执行。
+const (
+	maxConnections        = 8
+	maxInFlightOperations = 16
+)
+
 // wsTextBudget 是**桥发出去**的单条响应载荷预算（文本与图片共用）。
 //
 // 这是产品预算，不是连接层限制：读方向的上限是 protocol.BrowserFrameLimit
@@ -188,9 +197,9 @@ func New(opts Options) (*Server, error) {
 		token:           opts.Token,
 		host:            opts.Host,
 		publicOrigin:    opts.PublicOrigin,
-		connections:     make(chan struct{}, 8),
-		operations:      make(chan struct{}, 16),
-		claims:          newClaims(1024),
+		connections:     make(chan struct{}, maxConnections),
+		operations:      make(chan struct{}, maxInFlightOperations),
+		claims:          newClaims(claimsMaxHold),
 	}
 	// magic-context 的只读视图挂在渲染器上：面板是服务端片段，
 	// 由 presentation 负责取数，传输层只管路由与鉴权。
@@ -853,11 +862,14 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			"relay":            s.tunnelBridge != nil,
 			"history":          "v3-disk-branch",
 			"exportDir":        s.exportDir,
+			// 限额一律引用**真实来源**，不写副本。写副本时曾经报出
+			// wsRequestBytes = 1 MiB（实际 97 MiB）与 wsResponseBytes = 512 KiB
+			// （实际 448 KiB）——前端若按声明做预检就会误拦合法请求。
 			"limits": map[string]int{
-				"connections": 8, "inFlightOperations": 16,
-				"wsRequestBytes": 1 << 20, "wsResponseBytes": 512 << 10,
-				"connectionQueueBytes": 1 << 20, "requestIdsPerConnection": 1024,
-				"replayItems": 256, "replayBytes": 1 << 20,
+				"connections": maxConnections, "inFlightOperations": maxInFlightOperations,
+				"wsRequestBytes": wsReadLimit, "wsResponseBytes": wsTextBudget,
+				"connectionQueueBytes": outboundQueueLimit, "requestIdsPerConnection": claimsMaxHold,
+				"replayItems": run.Defaults().ReplayItems, "replayBytes": run.Defaults().ReplayBytes,
 				"terminals": terminals, "terminalIdleSeconds": terminalIdle,
 			},
 		})

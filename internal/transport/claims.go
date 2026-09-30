@@ -44,9 +44,14 @@ type claims struct {
 	maxHold int
 }
 
+// claimsMaxHold 是 requestId 登记表的容量上限（同时用于构造与能力声明）。
+// 语义是**桥内全局**去重窗口，不是「每条连接各一份」——键名沿用了早期
+// 协议里的说法，改名会动到线上契约，故保留。
+const claimsMaxHold = 1024
+
 func newClaims(maxHold int) *claims {
 	if maxHold <= 0 {
-		maxHold = 1024
+		maxHold = claimsMaxHold
 	}
 	return &claims{byID: map[string]claim{}, maxHold: maxHold}
 }

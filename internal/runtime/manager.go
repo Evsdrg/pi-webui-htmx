@@ -40,7 +40,7 @@ type Config struct {
 	MaxDialogs                                             int
 }
 
-// Defaults 给出 A 阶段默认限额与超时。
+// Defaults 给出默认限额与超时（capabilities 的 replay 声明也引用它，见 transport）。
 func Defaults() Config {
 	return Config{Binary: "pi", MaxWorkers: 4, StartTimeout: 20 * time.Second, OperationTimeout: 30 * time.Second, IdleTimeout: 2 * time.Minute, StopGrace: time.Second, MaxFrame: 8 << 20, SubscriberMessages: 32, SubscriberBytes: 1 << 20, EventBytes: 256 << 10,
 		ReplayItems: 256, ReplayBytes: 1 << 20, MaxDialogs: 16}

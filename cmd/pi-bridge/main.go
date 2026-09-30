@@ -19,6 +19,7 @@ import (
 	"pi-bridge-go/internal/management"
 	"pi-bridge-go/internal/observe"
 	"pi-bridge-go/internal/presentation"
+	"pi-bridge-go/internal/protocol"
 	run "pi-bridge-go/internal/runtime"
 	"pi-bridge-go/internal/sessions"
 	"pi-bridge-go/internal/storage"
@@ -212,7 +213,7 @@ func serve() error {
 	defer cancel()
 	done := make(chan error, 1)
 	go func() { done <- server.Serve(ln) }()
-	slog.Info("桥已监听", "地址", "http://"+ln.Addr().String(), "阶段", "A", "pi", *binary)
+	slog.Info("桥已监听", "地址", "http://"+ln.Addr().String(), "协议", protocol.Version, "pi", *binary)
 
 	select {
 	case <-sigctx.Done():
