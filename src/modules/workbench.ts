@@ -811,8 +811,10 @@ export class Workbench {
     // 会话的目录。这里补一次，只在文件区还没目录时才推，不覆盖用户手动浏览的位置。
     const filesPath = document.getElementById('files-path') as HTMLInputElement | null;
     if (filesPath && !filesPath.value && this.cwd) {
-      filesPath.value = this.cwd;
-      window.htmx.trigger(document.body, 'files-refresh');
+      // 有 Workspace 就走它的 setCwd：它同时更新自己的「当前目录」，
+      // 否则它的迟到响应守卫会把这次响应当成旧目录的（见 workspace.ts）。
+      if (this.workspace) this.workspace.setCwd(this.cwd);
+      else { filesPath.value = this.cwd; window.htmx.trigger(document.body, 'files-refresh'); }
     }
   }
   private async search(query: string): Promise<void> {

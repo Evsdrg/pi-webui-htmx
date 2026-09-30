@@ -61,7 +61,11 @@ export class Workspace {
       if (detail?.xhr && (target === 'file-list' || target === 'git-diff' || target === 'git-status')) {
         const requested = new URL(detail.xhr.responseURL, location.href).searchParams.get('path') ?? '';
         const current = target === 'file-list' ? this.path : this.cwd;
-        if (requested !== current) detail.shouldSwap = false;
+        // 还没有「当前目录」时不判定：这种请求是外部发起的（workbench 的启动
+        // 恢复、HTML 里的 hx-trigger），path 为空只说明 workspace 还没同步过。
+        // 拦掉它会让文件树在刷新页面后永远停在空提示上——只有当 workspace
+        // 确有当前目录、而这个响应不属于它时，才是真正迟到的旧响应（U06）。
+        if (current && requested !== current) detail.shouldSwap = false;
       }
     }, { signal: this.abort.signal });
     // 目录标签跟着实际落地的内容走：被守卫拒绝的响应不会触发 afterSwap。

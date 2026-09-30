@@ -72,3 +72,18 @@ test('迟到的文件列表响应被拒绝交换（按当前目录判定）', as
   expect(swap('/repo/a')).toBe(false);
   expect(swap('/repo/b')).toBe(true);
 });
+
+// D 批次把文件树移进侧栏后，workspace 在 start() 里就被装载，但刷新页面
+// 时没人调 setCwd——它的「当前目录」是空的，而守卫用这个空值判定，
+// 于是外部发起（workbench 启动恢复、HTML 的 hx-trigger）的响应全被丢掉，
+// 文件树停在空提示上。没有当前目录时不该做「迟到」判定。
+test('还没有当前目录时不拦外部发起的文件树响应', () => {
+  mountWorkspace();
+  const detail = {
+    target: document.getElementById('file-list'),
+    shouldSwap: true,
+    xhr: { responseURL: 'http://localhost/ui/files?path=%2Frepo' },
+  };
+  document.dispatchEvent(new CustomEvent('htmx:beforeSwap', { detail, cancelable: true }));
+  expect(detail.shouldSwap).toBe(true);
+});
