@@ -6,10 +6,19 @@ import (
 	"strings"
 )
 
-// ConfigModels 兼容 Pi 的模型数组与旧桥的对象配置，只投影展示字段。
-func ConfigModels(doc map[string]any) []map[string]any {
+// ConfigModels 把 models.json 的 providers 子树投影成可展示的模型清单，
+// 只保留展示字段。模型列表的两种形状（数组、以 id 为键的对象）都接受，
+// 但注意上层的 management.Config.Models 只放行数组——对象分支是给
+// 直接调用者的容错，不是线上会出现的情形。
+//
+// 参数就是 providers 本身（`{"provider": {...}, ...}`），不是整份文档。
+// 曾经它的参数是整份文档（内部取 doc["providers"]），K2 批次把回执
+// 改成具名类型时调用点改传了 `reply.Providers`，函数内部却还在找
+// `doc["providers"]`——于是永远取到 nil，模型选择器一直是空的，
+// 而空列表看上去就像“用户没配模型”，不报错、不显眼。
+// 改成直接收 providers 子树，让调用点与参数含义一致。
+func ConfigModels(providers map[string]any) []map[string]any {
 	out := []map[string]any{}
-	providers, _ := doc["providers"].(map[string]any)
 	names := make([]string, 0, len(providers))
 	for name := range providers {
 		names = append(names, name)
