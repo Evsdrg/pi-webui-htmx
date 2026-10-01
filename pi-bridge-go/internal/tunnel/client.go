@@ -39,13 +39,14 @@ type Client struct {
 	cfg     Config
 	handler Handler
 
-	mu      sync.Mutex
-	conn    *websocket.Conn
-	cancel  context.CancelFunc
-	out     chan []byte
-	queued  atomic.Int64
-	ready   chan struct{}
-	readyAt time.Time
+	mu       sync.Mutex
+	conn     *websocket.Conn
+	cancel   context.CancelFunc
+	out      chan []byte
+	queued   atomic.Int64
+	connects atomic.Int64
+	ready    chan struct{}
+	readyAt  time.Time
 }
 
 // Handler 处理从 relay 收到的浏览器帧。
@@ -130,8 +131,9 @@ func (c *Client) dialAndServe(ctx context.Context) error {
 	// 清空上一轮的残留帧，避免把旧连接的数据发给新连接。
 	drain(c.out)
 	c.readyAt = time.Now()
+	c.connects.Add(1)
 	c.mu.Unlock()
-	c.signalReady()
+	c.signalUp()
 	defer func() {
 		connCancel()
 		c.mu.Lock()
@@ -140,6 +142,7 @@ func (c *Client) dialAndServe(ctx context.Context) error {
 			c.cancel = nil
 		}
 		c.mu.Unlock()
+		c.signalDown()
 	}()
 
 	writeDone := make(chan struct{})
@@ -203,24 +206,43 @@ func (c *Client) Send(frame []byte) error {
 	}
 }
 
-// Ready 返回当前连通等待通道；每次（重）连成功时关闭并替换。
-// 必须在锁内读取，否则与 signalReady 的替换构成数据竞争。
+// Ready 返回表示「当前连通状态」的通道：已连接时立即就绪，未连接时会在
+// 下一次连上时关闭。
+//
+// 它必须是状态，而不是一次「连上了」的事件。早先的实现是每次连上就关闭
+// 旧通道、立刻换一个新通道，于是订阅晚一步的调用方要等到**下一次**重连
+// 才会就绪——CI 上 Test隧道双向收发 因此间歇以 5 秒超时失败，而本地几乎
+// 总是先订阅、看不出问题。
+//
+// 必须在锁内读取，否则与 signalUp/signalDown 的替换构成数据竞争。
 func (c *Client) Ready() <-chan struct{} {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.ready
 }
 
-func (c *Client) signalReady() {
+// signalUp 标记「当前已连接」：关闭等待通道，正在等 Ready() 的调用方立即返回。
+func (c *Client) signalUp() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	select {
 	case <-c.ready:
-		// 已被关闭过，直接换新的等待通道。
+		// 已处于连通状态（旧连接的断开通知还没到），保持关闭。
 	default:
 		close(c.ready)
 	}
-	c.ready = make(chan struct{})
+}
+
+// signalDown 标记「当前已断开」：换上一个新的未关闭通道。
+func (c *Client) signalDown() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	select {
+	case <-c.ready:
+		c.ready = make(chan struct{})
+	default:
+		// 本来就是断开状态，不必替换。
+	}
 }
 
 // Stats 返回隧道状态。
@@ -231,6 +253,7 @@ func (c *Client) Stats() map[string]any {
 		"connected": c.conn != nil,
 		"queued":    c.queued.Load(),
 		"maxQueue":  c.cfg.QueueBytes,
+		"connects":  c.connects.Load(),
 		"lastDial":  c.readyAt.UTC().Format(time.RFC3339Nano),
 	}
 }

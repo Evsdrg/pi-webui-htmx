@@ -125,9 +125,11 @@ func Test隧道双向收发(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go c.Run(ctx)
+	// 预算 15 秒而不是 5 秒：CI 上 -race 加持、十几个包并行时，握手会被
+	// 调度拖慢。断言不变，只放宽预算——短预算会把「机器慢」报成「隧道没建立」。
 	select {
 	case <-c.Ready():
-	case <-time.After(5 * time.Second):
+	case <-time.After(15 * time.Second):
 		t.Fatal("隧道未建立")
 	}
 
@@ -189,24 +191,20 @@ func Test断线后自动重连(t *testing.T) {
 	go c.Run(ctx)
 	select {
 	case <-c.Ready():
-	case <-time.After(5 * time.Second):
+	case <-time.After(15 * time.Second):
 		t.Fatal("首次连接失败")
 	}
-	// 必须在踢之前把重连信号抓下来。
-	//
-	// Ready() 返回的是「当前」等待通道，每次重连成功时会关闭旧的、
-	// 换一个新的。若 kick() 之后新调用 Ready()，而彼时重连已经完成，
-	// 拿到的就是那个新的（未关闭的）通道——于是要等第三次连接，
-	// 永远等不到。这条测试曾经以 15s 超时间歇失败，根因就在这里，
-	// 不是产品不重连。
-	reconnected := c.Ready()
+	// 用「连接代次」判定重连，而不是再取一次 Ready()：踢掉之后 Ready()
+	// 会短暂变为未就绪、连上后又就绪，两次就绪之间隔多久取决于调度，
+	// 按通道比较会因为看得早晚而漏判（这条测试曾以 15 秒超时间歇失败）。
+	// 代次是单调递增的，不存在这个窗口。
+	if _, ok := c.Stats()["connects"]; !ok {
+		t.Fatalf("Stats 缺少 connects: %v", c.Stats())
+	}
+	before := statInt(c, "connects")
 	// 主动踢掉隧道连接，客户端应自行重连。
 	kick()
-	select {
-	case <-reconnected:
-	case <-time.After(15 * time.Second):
-		t.Fatal("断线后未重连")
-	}
+	testutil.WaitFor(t, "断线后重连", func() bool { return statInt(c, "connects") > before })
 	if stats := c.Stats(); stats["connected"] != true {
 		t.Fatalf("重连后状态异常: %v", stats)
 	}
@@ -219,7 +217,7 @@ func TestStats字段(t *testing.T) {
 	cfg.DeviceID = "dev-1"
 	c := NewClient(cfg, &recordingHandler{})
 	stats := c.Stats()
-	for _, key := range []string{"connected", "queued", "maxQueue", "lastDial"} {
+	for _, key := range []string{"connected", "queued", "maxQueue", "connects", "lastDial"} {
 		if _, ok := stats[key]; !ok {
 			t.Fatalf("统计缺少 %s: %v", key, stats)
 		}
@@ -247,4 +245,39 @@ func dialOrFail(t *testing.T, srv *httptest.Server, path string) *websocket.Conn
 		t.Fatalf("连接失败: %v", err)
 	}
 	return conn
+}
+
+func statInt(c *Client, key string) int64 {
+	n, _ := c.Stats()[key].(int64)
+	return n
+}
+
+// 回归：Ready() 表达的是「当前是否连通」，而不是一次「连上了」的事件。
+//
+// 旧实现里，连接已经建立之后再取 Ready()，拿到的是「下一次重连」的通道，
+// 会一直等下去。CI 上 Test隧道双向收发 因此以 5 秒超时间歇失败，而本地
+// 几乎总是先订阅、看不出问题。
+func Test已连接后取Ready仍就绪(t *testing.T) {
+	srv, _ := fakeRelay(t)
+	cfg := Defaults()
+	cfg.RelayURL = "ws" + strings.TrimPrefix(srv.URL, "http")
+	cfg.DeviceID = "dev-1"
+	c := NewClient(cfg, &recordingHandler{})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go c.Run(ctx)
+
+	select {
+	case <-c.Ready():
+	case <-time.After(15 * time.Second):
+		t.Fatal("首次连接失败")
+	}
+	// 等「连接建立」这个时刻彻底过去。这里不是规避时序：连接已建立且
+	// 无人断开，状态是稳定的，sleep 只是确保订阅发生在事件之后。
+	time.Sleep(200 * time.Millisecond)
+	select {
+	case <-c.Ready():
+	case <-time.After(2 * time.Second):
+		t.Fatal("已连接，但订阅晚一步的 Ready() 未就绪")
+	}
 }
