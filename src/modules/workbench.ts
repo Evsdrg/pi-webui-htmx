@@ -667,14 +667,23 @@ export class Workbench {
   }
   private async send(): Promise<void> {
     const input = el<HTMLTextAreaElement>('prompt'); const message = input.value.trim();
-    if (!message || this.sending) return;
-    this.sending = true; this.updateControls(); const scope = this.scope.current$(); const draftKey = this.draftKey();
+    if (!message) return;
+    if (this.sending) {
+      // 发送进行中再次点击：不能静默吞掉——用户无法区分「上一跳仍在发」与
+      // 「点击没反应」，从外部也无从诊断。提示一下，输入内容保持原样。
+      this.notify('上一条消息仍在发送中，请稍候。', 'warning');
+      return;
+    }
+    // sending 置真之后到 finally 之间不得有未受保护的取值：一旦抛错，
+    // sending 会永久为真，按钮永久置灰，之后每次点击都被静默吞掉。
+    this.sending = true; this.updateControls();
     // 排队意图必须在 ensureWorker 之前取：它会刷新会话状态，
     // 而刷新会把单选按钮重置成 Pi 的当前值，晚一步读就丢了用户的选择。
     const busy = this.run !== 'idle';
     const queuedKind = busy ? this.queueKind() : undefined;
     const selectedModel = this.selectedModel();
     try {
+      const scope = this.scope.current$(); const draftKey = this.draftKey();
       const activeScope = await this.ensureWorker(scope);
       if (!activeScope.alive()) {
         // 会话已切换：不能把消息投到新会话（U13），也不静默丢弃。

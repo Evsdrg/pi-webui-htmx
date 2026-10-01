@@ -1450,3 +1450,39 @@ describe('启动恢复会话时同步文件树', () => {
     expect(filesPath.value).toBe('/repo/elsewhere');
   });
 });
+
+// 发送路径的两处防回归：都被真实观察触发过。
+// 1) 重复提交：此前是静默 return，用户无法区分「还在发」与「点击没反应」，
+//    从外部也无从诊断（实测中一次偶发点击无效果，事后查不出原因）。
+// 2) sending 残留：置真后到 finally 之间的取值若抛错，按钮会永久置灰。
+describe('发送中的重复提交与失败恢复', () => {
+  it('发送未完成时再次提交只提示，不重复投递', async () => {
+    const form = document.querySelector<HTMLFormElement>('#composer')!;
+    (document.getElementById('prompt') as HTMLTextAreaElement).value = '只此一条';
+    let release: (value: unknown) => void = () => {};
+    fake.request.mockImplementationOnce(() => new Promise((resolve) => { release = resolve; }));
+    form.requestSubmit();
+    await vi.waitFor(() => expect((document.getElementById('send-button') as HTMLButtonElement).disabled).toBe(true));
+    form.requestSubmit();
+    await vi.waitFor(() => {
+      expect(document.querySelector('#toast-root .toast-warning')?.textContent ?? '').toContain('仍在发送中');
+    });
+    // 第一次仍卡在启动阶段：没有第二条 prompt 被投递。
+    expect(fake.request.mock.calls.filter((call) => call[0] === 'session.prompt')).toHaveLength(0);
+    release({ sessionId: 's1', cwd: '/fixture', epoch: 'e1', pid: 1, status: 'idle', busy: false, seq: 0 });
+    await vi.waitFor(() => expect(fake.request).toHaveBeenCalledWith('session.prompt', 's1', { text: '只此一条' }, 30_000));
+  });
+
+  it('一次发送失败后 sending 不残留，可以立即重发', async () => {
+    const form = document.querySelector<HTMLFormElement>('#composer')!;
+    (document.getElementById('prompt') as HTMLTextAreaElement).value = '第一条';
+    fake.request.mockRejectedValueOnce(new Error('模拟的启动失败'));
+    form.requestSubmit();
+    await vi.waitFor(() => expect(document.getElementById('connection-notice')!.textContent).toContain('模拟的启动失败'));
+    expect((document.getElementById('send-button') as HTMLButtonElement).disabled).toBe(false);
+    (document.getElementById('prompt') as HTMLTextAreaElement).value = '第二条';
+    document.getElementById('prompt')!.dispatchEvent(new Event('input', { bubbles: true }));
+    form.requestSubmit();
+    await vi.waitFor(() => expect(fake.request).toHaveBeenCalledWith('session.prompt', 's1', { text: '第二条' }, 30_000));
+  });
+});
