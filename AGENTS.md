@@ -17,9 +17,8 @@
 
 - Go 1.27.1（`go.mod`）；Node ≥ 20.19，pnpm 11.22（`packageManager` 锁定）
 - Pi：`pi --mode rpc`，开发基准 0.85.1（协议 v1）
-- 本机生产：`pi-bridge.service` 绑 EasyTier 地址 `10.0.0.1:39082`，
-  `--public-origin https://203.0.113.10:39080`，服务器侧由独立 caddy 网关反代；
-  产物在 `pi-work/deploy/`（工作区外，非本仓）
+- 本机生产：以 systemd 服务运行，绑在私有组网地址上，由独立 caddy 网关反代终止 TLS
+  （具体地址属部署细节，不写进仓库）；产物放在仓库外，不以任何形式提交
 - 改前端产物后**必须重启桥**（桥在启动时快照 manifest 与入口资源名，刷新页面无效）
 
 ## 硬约束

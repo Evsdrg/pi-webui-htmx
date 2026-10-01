@@ -29,7 +29,7 @@ CREATE TABLE dream_runs (id INTEGER PRIMARY KEY, project_path TEXT, started_at I
 CREATE TABLE session_meta (session_id TEXT PRIMARY KEY, harness TEXT);
 INSERT INTO memories (project_path,category,content,importance,scope,source_type,seen_count,retrieval_count,updated_at,status) VALUES
  ('dir:0123abcd4567','CONSTRAINTS','桥的注释必须用中文',50,'project','user',3,1,1790682817870,'active'),
- ('dir:0123abcd4567','ARCHITECTURE','桥在 /srv/projects/pi/pi-bridge-go',40,'project','dream',1,0,1790655271881,'active'),
+ ('dir:0123abcd4567','ARCHITECTURE','桥在 /srv/projects/pi-bridge',40,'project','dream',1,0,1790655271881,'active'),
  ('dir:0123abcd4567','CONFIG_VALUES','这是一条很长的记忆，用来验证列表视图只渲染截断后的开头用来验证列表视图只渲染截断后的开头用来验证列表视图只渲染截断后的开头用来验证列表视图只渲染截断后的开头用来验证列表视图只渲染截断后的开头用来验证列表视图只渲染截断后的开头用来验证列表视图只渲染截断后的开头用来验证列表视图只渲染截断后的开头用来验证列表视图只渲染截断后的开头用来验证列表视图只渲染截断后的开头用来验证列表视图只渲染截断后的开头用来验证列表视图只渲染截断后的开头用来验证列表视图只渲染截断后的开头用来验证列表视图只渲染截断后的开头用来验证列表视图只渲染截断后的开头用来验证列表视图只渲染截断后的开头。桥侧用 substr 截断，界面再补省略号，全文要显式展开。末尾标记 MUST_NOT_APPEAR 不应出现在列表里。',30,'project','dream',1,0,1790600000000,'active');
 INSERT INTO compartments (session_id,sequence,title,content,episode_type,start_message,end_message,created_at,harness) VALUES ('sess-abcdef123456',1,'搭建桥','内容','feature',0,10,1790682817870,'pi');
 INSERT INTO user_memories (content,status,created_at,updated_at) VALUES ('用中文写注释','active',1790682817870,1790682817870);

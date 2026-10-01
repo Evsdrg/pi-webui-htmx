@@ -9,7 +9,7 @@ import (
 // 导航，只给名字的话点击后无法知道去了哪里。
 func Test目录选择器只列子目录且带完整路径(t *testing.T) {
 	renderer := testRenderer(t)
-	html, err := renderer.RenderDirs("/srv/projects", "/opt", []DirRow{
+	html, err := renderer.RenderDirs("/srv/projects", "/srv", []DirRow{
 		{Name: "pi", Path: "/srv/projects/pi"},
 		{Name: "zcode", Path: "/srv/projects/zcode"},
 	}, false)

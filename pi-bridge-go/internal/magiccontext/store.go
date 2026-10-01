@@ -226,7 +226,7 @@ func validateProjectKey(v string) bool {
 	}
 	switch prefix {
 	case "dir":
-		// 目录哈希是 12 位十六进制（库里的实例：dir:0123abcd4567）。
+		// 目录哈希是 12 位十六进制（如 dir:0123abcd4567）。
 		if len(hash) != 12 {
 			return false
 		}

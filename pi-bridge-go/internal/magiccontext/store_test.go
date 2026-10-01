@@ -26,7 +26,7 @@ CREATE TABLE dream_runs (id INTEGER PRIMARY KEY, project_path TEXT, started_at I
 CREATE TABLE session_meta (session_id TEXT PRIMARY KEY, harness TEXT);
 INSERT INTO memories (project_path,category,content,importance,scope,source_type,seen_count,retrieval_count,updated_at,status) VALUES
  ('dir:aaaaaaaaaaaa','CONSTRAINTS','第一条：不能用文本框表达 null',50,'project','dream',3,1,1790682817870,'active'),
- ('dir:aaaaaaaaaaaa','ARCHITECTURE','第二条：桥在 /srv/projects/pi/pi-bridge-go',40,'project','user',1,0,1790655271881,'active'),
+ ('dir:aaaaaaaaaaaa','ARCHITECTURE','第二条：桥在 /srv/projects/pi-bridge',40,'project','user',1,0,1790655271881,'active'),
  ('dir:bbbbbbbbbbbb','NAMING','别的项目的记忆',10,'project','dream',1,0,1790600000000,'active'),
  ('dir:aaaaaaaaaaaa','CONSTRAINTS','已归档的那条',50,'project','dream',1,0,1790500000000,'archived');
 INSERT INTO compartments (session_id,sequence,title,content,episode_type,start_message,end_message,created_at,harness) VALUES

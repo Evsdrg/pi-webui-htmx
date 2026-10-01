@@ -14,3 +14,11 @@ dist/
 .idea/
 .vscode/
 *.swp
+# 凭据与密钥：防止将来误提交（历史上从未出现过，此处是防御）
+.env
+.env.*
+*.pem
+*.key
+*.crt
+*.p12
+credentials*.json

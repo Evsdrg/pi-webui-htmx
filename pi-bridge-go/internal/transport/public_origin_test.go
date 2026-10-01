@@ -108,12 +108,12 @@ func Test会话Cookie的Secure跟随声明的来源(t *testing.T) {
 
 func Test解析对外来源(t *testing.T) {
 	ok := map[string]PublicOrigin{
-		"https://example.com:39080":  {Scheme: "https", Host: "example.com:39080"},
-		"http://10.0.0.1:30142": {Scheme: "http", Host: "10.0.0.1:30142"},
-		"https://example.com":        {Scheme: "https", Host: "example.com"},
-		"https://example.com/":       {Scheme: "https", Host: "example.com"},
-		"  https://example.com  ":    {Scheme: "https", Host: "example.com"},
-		"":                           {},
+		"https://example.com:39080": {Scheme: "https", Host: "example.com:39080"},
+		"http://10.0.0.1:30142":     {Scheme: "http", Host: "10.0.0.1:30142"},
+		"https://example.com":       {Scheme: "https", Host: "example.com"},
+		"https://example.com/":      {Scheme: "https", Host: "example.com"},
+		"  https://example.com  ":   {Scheme: "https", Host: "example.com"},
+		"":                          {},
 	}
 	for raw, want := range ok {
 		got, err := ParsePublicOrigin(raw)
