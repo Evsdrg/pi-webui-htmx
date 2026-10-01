@@ -26,7 +26,7 @@ func Test单用户连接数有上限(t *testing.T) {
 	code, _ := out["pairingCode"].(string)
 	_, out2 := postJSON(t, srv, "/api/relay/claim", `{"pairingCode":"`+code+`"}`, ut)
 	dt, _ := out2["deviceToken"].(string)
-	dialTunnelOrFail(t, srv, "dev-1", dt)
+	dialTunnelOrFail(t, s, srv, "dev-1", dt)
 
 	conns := []*websocket.Conn{}
 	defer func() {
@@ -75,7 +75,7 @@ func Test单用户连接数有上限(t *testing.T) {
 	code2, _ := out3["pairingCode"].(string)
 	_, out4 := postJSON(t, srv, "/api/relay/claim", `{"pairingCode":"`+code2+`"}`, ut)
 	dt2, _ := out4["deviceToken"].(string)
-	dialTunnelOrFail(t, srv, "dev-2", dt2)
+	dialTunnelOrFail(t, s, srv, "dev-2", dt2)
 	other := dialClientOrFail(t, srv, "dev-2", "tab-other", ut)
 	if other == nil {
 		t.Fatal("另一台设备的连接被误判为超限")
@@ -95,7 +95,7 @@ func Test关闭relay会中断浏览器连接(t *testing.T) {
 	code, _ := out["pairingCode"].(string)
 	_, out2 := postJSON(t, srv, "/api/relay/claim", `{"pairingCode":"`+code+`"}`, ut)
 	dt, _ := out2["deviceToken"].(string)
-	dialTunnelOrFail(t, srv, "dev-1", dt)
+	dialTunnelOrFail(t, s, srv, "dev-1", dt)
 
 	client := dialClientOrFail(t, srv, "dev-1", "tab-1", ut)
 	if client == nil {

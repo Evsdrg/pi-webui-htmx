@@ -49,7 +49,7 @@ func Test隧道令牌可走Authorization头(t *testing.T) {
 		t.Fatal("Authorization 头形式的隧道连接失败")
 	}
 	// 查询串形式仍被接受（兼容已有部署）。
-	if c := dialTunnelOrFail(t, srv, "dev-1", dt); c != nil {
+	if c := dialTunnelOrFail(t, s, srv, "dev-1", dt); c != nil {
 		c.CloseNow()
 	} else {
 		t.Fatal("查询串形式的隧道连接失败")

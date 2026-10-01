@@ -1,4 +1,4 @@
-import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest';
+import { beforeAll, beforeEach, afterEach, describe, expect, it, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { Workbench } from '@/modules/workbench';
 import { readDraft, saveDraft } from '@/modules/layout';
@@ -67,10 +67,19 @@ function mount() {
  })} as unknown as typeof window.htmx;
 }
 
+// 顶栏面板是动态 import 的独立分块；先预热模块缓存，
+// 否则假定时器下测试要等一个真实模块加载才能看到 DOM 变化。
+//
+// 放在 beforeAll 而不是 beforeEach：模块缓存跨用例共享，每个用例都 import
+// 一次等于把同一份解析工作重复 82 遍（实测这一项占了本文件 6.6 秒中的绝大部分）。
+beforeAll(async () => { await import('../../src/modules/topbar'); });
+
+// 本文件的等待几乎都是「同步 DOM/调用状态很快就会出现」，而 vi.waitFor 默认
+// 50ms 轮询一次——80 多处累积起来是本文件的主要耗时（实测占 6.9 秒的八成）。
+// 用 1ms 间隔：语义不变（仍然是重试到不抛错为止），只是不再白等。
+const waitFor = (cond: () => unknown) => vi.waitFor(cond, { interval: 1 });
+
 beforeEach(async () => {
- // 顶栏面板是动态 import 的独立分块；先预热模块缓存，
- // 否则假定时器下测试要等一个真实模块加载才能看到 DOM 变化。
- await import('../../src/modules/topbar');
  vi.useFakeTimers(); pending=[];busy=false;sequence=0;mount();
  vi.stubGlobal('fetch',vi.fn(async () => new Response(JSON.stringify({version:1,methods}),{status:200})));
  fake.request.mockImplementation(async (method:string) => {
@@ -87,14 +96,14 @@ beforeEach(async () => {
   return{};
  });
  workbench=new Workbench(vi.fn());workbench.start();
- await vi.waitFor(()=>expect(fake.request).toHaveBeenCalledWith('session.state','s1',undefined,30_000));
+ await waitFor(()=>expect(fake.request).toHaveBeenCalledWith('session.state','s1',undefined,30_000));
 });
 afterEach(()=>{workbench?.dispose();vi.useRealTimers();vi.unstubAllGlobals();document.body.replaceChildren();});
 
 describe('扩展对话交互回归',()=>{
  it('状态轮询不替换仍在编辑的同一对话',async()=>{
   pending=['dialog-1'];busy=true;emit('extension_ui_request',{id:'dialog-1',method:'input',title:'请输入'});
-  await vi.waitFor(()=>expect(document.querySelector('#ext-dialog-slot input')).not.toBeNull());
+  await waitFor(()=>expect(document.querySelector('#ext-dialog-slot input')).not.toBeNull());
   const input=document.querySelector<HTMLInputElement>('#ext-dialog-slot input')!;input.value='尚未提交的内容';
   await vi.advanceTimersByTimeAsync(15_000);
   expect(document.querySelector('#ext-dialog-slot input')).toBe(input);
@@ -104,9 +113,9 @@ describe('扩展对话交互回归',()=>{
  });
  it('回执期间已结束的任务不会被重新标记为运行中',async()=>{
   pending=['dialog-1'];busy=true;emit('extension_ui_request',{id:'dialog-1',method:'confirm'});
-  await vi.waitFor(()=>expect(document.querySelector('#ext-dialog-slot button')).not.toBeNull());
+  await waitFor(()=>expect(document.querySelector('#ext-dialog-slot button')).not.toBeNull());
   document.querySelector<HTMLButtonElement>('#ext-dialog-slot button')!.click();
-  await vi.waitFor(()=>expect(fake.request).toHaveBeenCalledWith('session.ui_response','s1',{id:'dialog-1',confirmed:true},30_000));
+  await waitFor(()=>expect(fake.request).toHaveBeenCalledWith('session.ui_response','s1',{id:'dialog-1',confirmed:true},30_000));
   await vi.advanceTimersByTimeAsync(100);
   expect(document.getElementById('session-state')?.textContent).toBe('就绪');
   expect(document.querySelector('#ext-dialog-slot dialog')).toBeNull();
@@ -149,7 +158,7 @@ describe('排队与压缩设置', () => {
     document.querySelector<HTMLInputElement>('input[name="queue-kind"][value="followUp"]')!.click();
     (document.getElementById('prompt') as HTMLTextAreaElement).value = '排队消息';
     document.querySelector<HTMLFormElement>('#composer')!.requestSubmit();
-    await vi.waitFor(() => expect(vi.mocked(fake.request).mock.calls.some((c) => c[0] === 'session.prompt')).toBe(true));
+    await waitFor(() => expect(vi.mocked(fake.request).mock.calls.some((c) => c[0] === 'session.prompt')).toBe(true));
     expect(fake.request).toHaveBeenCalledWith('session.prompt', 's1', { text: '排队消息', streamingBehavior: 'followUp' }, 30_000);
     expect(fake.request).toHaveBeenCalledWith('session.set_queue_mode', 's1', { kind: 'followUp', mode: 'one-at-a-time' }, 30_000);
     const order = vi.mocked(fake.request).mock.calls.map((c) => c[0]);
@@ -160,26 +169,26 @@ describe('排队与压缩设置', () => {
     const box = document.getElementById('auto-compaction') as HTMLInputElement;
     expect(box.checked).toBe(true);
     box.checked = false; box.dispatchEvent(new Event('change'));
-    await vi.waitFor(() => expect(fake.request).toHaveBeenCalledWith('session.set_auto_compaction', 's1', { enabled: false }, 30_000));
+    await waitFor(() => expect(fake.request).toHaveBeenCalledWith('session.set_auto_compaction', 's1', { enabled: false }, 30_000));
     // 成功后必须回读：ensureWorker 的预取状态刷新发生在 set 之前，
     // 不重读就会把勾选重置成旧值。
     box.checked = false; box.dispatchEvent(new Event('change'));
-    await vi.waitFor(() => expect(fake.request).toHaveBeenCalledWith('session.set_auto_compaction', 's1', { enabled: false }, 30_000));
+    await waitFor(() => expect(fake.request).toHaveBeenCalledWith('session.set_auto_compaction', 's1', { enabled: false }, 30_000));
     const states = vi.mocked(fake.request).mock.calls.filter((c) => c[0] === 'session.state');
     expect(states.length).toBeGreaterThan(1);
     // 失败路径：有读回字段，必须恢复成 Pi 的真实状态，不停在假状态。
     fake.request.mockRejectedValueOnce(new Error('Pi 拒绝'));
     box.checked = false; box.dispatchEvent(new Event('change'));
-    await vi.waitFor(() => expect(box.checked).toBe(true));
+    await waitFor(() => expect(box.checked).toBe(true));
   });
 
   it('自动重试没有读回字段，失败时同样还原勾选', async () => {
     const box = document.getElementById('auto-retry') as HTMLInputElement;
     box.checked = true; box.dispatchEvent(new Event('change'));
-    await vi.waitFor(() => expect(fake.request).toHaveBeenCalledWith('session.set_auto_retry', 's1', { enabled: true }, 30_000));
+    await waitFor(() => expect(fake.request).toHaveBeenCalledWith('session.set_auto_retry', 's1', { enabled: true }, 30_000));
     fake.request.mockRejectedValueOnce(new Error('Pi 拒绝'));
     box.checked = false; box.dispatchEvent(new Event('change'));
-    await vi.waitFor(() => expect(box.checked).toBe(true));
+    await waitFor(() => expect(box.checked).toBe(true));
   });
 
   it('排队提示只在运行中出现，并随模式变化', async () => {
@@ -207,14 +216,14 @@ describe('模型配置编辑器', () => {
 
   it('打开时读取原始配置并格式化进编辑器', async () => {
     await (workbench as unknown as { action(a: string, b: HTMLElement): Promise<void> }).action('models-edit', document.createElement('button'));
-    await vi.waitFor(() => expect(document.getElementById('models-editor').value).toContain('example.com'));
+    await waitFor(() => expect(document.getElementById('models-editor').value).toContain('example.com'));
     // 密钥必须已经是打码值，页面拿不到真值。
     expect(document.getElementById('models-editor').value).toContain('"***"');
   });
 
   it('保存非法 JSON 时拒绝并不发请求', async () => {
     await (workbench as unknown as { action(a: string, b: HTMLElement): Promise<void> }).action('models-edit', document.createElement('button'));
-    await vi.waitFor(() => expect(document.getElementById('models-editor').value).toContain('example.com'));
+    await waitFor(() => expect(document.getElementById('models-editor').value).toContain('example.com'));
     openJsonPanel();
     const before = vi.mocked(fake.request).mock.calls.length;
     (document.getElementById('models-editor') as HTMLTextAreaElement).value = '{ 这不是 JSON';
@@ -225,7 +234,7 @@ describe('模型配置编辑器', () => {
 
   it('保存成功不以磁盘重读覆盖正在编辑的草稿', async () => {
     await (workbench as unknown as { action(a: string, b: HTMLElement): Promise<void> }).action('models-edit', document.createElement('button'));
-    await vi.waitFor(() => expect(document.getElementById('models-editor').value).toContain('example.com'));
+    await waitFor(() => expect(document.getElementById('models-editor').value).toContain('example.com'));
     openJsonPanel();
     const readsBefore = vi.mocked(fake.request).mock.calls.filter((c) => c[0] === 'config.models.raw').length;
     (document.getElementById('models-editor') as HTMLTextAreaElement).value = '{"providers":{}}';
@@ -239,7 +248,7 @@ describe('模型配置编辑器', () => {
     (document.getElementById('mp-base') as HTMLInputElement).value = 'https://api.example.com/v1';
     (document.getElementById('mp-headers') as HTMLTextAreaElement).value = 'X-A: 1\n坏行\nX-B: 2';
     await (workbench as unknown as { action(a: string, b: HTMLElement): Promise<void> }).action('models-discover', document.createElement('button'));
-    await vi.waitFor(() => expect(document.getElementById('discover-result').textContent).toContain('名称: 值'));
+    await waitFor(() => expect(document.getElementById('discover-result').textContent).toContain('名称: 值'));
     expect(vi.mocked(fake.request).mock.calls.some((c) => c[0] === 'config.models.discover')).toBe(false);
   });
 
@@ -308,7 +317,7 @@ describe('订阅关闭提示只保留到状态核对结束', () => {
     busy = true; emit('agent_start');
     // 状态在桥侧已结束，但前端尚未收到 agent_settled。
     busy = false; closeSubscription();
-    await vi.waitFor(() => expect(document.getElementById('session-state')?.textContent).toBe('就绪'));
+    await waitFor(() => expect(document.getElementById('session-state')?.textContent).toBe('就绪'));
     expect(document.getElementById('connection-notice')?.textContent).toBe('');
   });
 
@@ -335,7 +344,7 @@ describe('附件事件中的 FileList 必须同步快照', () => {
     Object.defineProperty(input, 'value', { configurable: true, get: () => '', set: (value: string) => { if (!value) alive = false; } });
     input.dispatchEvent(new Event('change'));
     await vi.advanceTimersByTimeAsync(50);
-    await vi.waitFor(() => expect(document.querySelectorAll('#attachments .attachment')).toHaveLength(1));
+    await waitFor(() => expect(document.querySelectorAll('#attachments .attachment')).toHaveLength(1));
     expect(alive).toBe(false);
   });
 
@@ -346,7 +355,7 @@ describe('附件事件中的 FileList 必须同步快照', () => {
     document.getElementById('composer')!.dispatchEvent(event);
     alive = false;
     await vi.advanceTimersByTimeAsync(50);
-    await vi.waitFor(() => expect(document.querySelectorAll('#attachments .attachment')).toHaveLength(1));
+    await waitFor(() => expect(document.querySelectorAll('#attachments .attachment')).toHaveLength(1));
   });
 });
 
@@ -354,7 +363,7 @@ describe('附件随消息发送', () => {
   it('有附件时 prompt 带 images，发送成功后清空', async () => {
     (document.getElementById('prompt') as HTMLTextAreaElement).value = '看这张图';
     document.querySelector<HTMLFormElement>('#composer')!.requestSubmit();
-    await vi.waitFor(() => expect(fake.request).toHaveBeenCalledWith('session.prompt', 's1', { text: '看这张图' }, 30_000));
+    await waitFor(() => expect(fake.request).toHaveBeenCalledWith('session.prompt', 's1', { text: '看这张图' }, 30_000));
     // 无附件时不得带 images 键。
     const call = vi.mocked(fake.request).mock.calls.find((c) => c[0] === 'session.prompt');
     expect(Object.keys((call?.[2] ?? {}) as object)).not.toContain('images');
@@ -397,7 +406,7 @@ describe('@ 菜单与 Enter 的按键归属', () => {
     };
     prompt.value = '普通消息';
     prompt.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }));
-    await vi.waitFor(() => expect(fake.request).toHaveBeenCalledWith('session.prompt', 's1', { text: '普通消息' }, 30_000));
+    await waitFor(() => expect(fake.request).toHaveBeenCalledWith('session.prompt', 's1', { text: '普通消息' }, 30_000));
   });
 });
 
@@ -408,7 +417,7 @@ it('默认排队模式用协议一致的 steering，不是 steer', async () => {
   expect(document.querySelector<HTMLInputElement>('input[name="queue-kind"]:checked')!.value).toBe('steering');
   (document.getElementById('prompt') as HTMLTextAreaElement).value = '插入一条';
   document.querySelector<HTMLFormElement>('#composer')!.requestSubmit();
-  await vi.waitFor(() => expect(fake.request).toHaveBeenCalledWith('session.set_queue_mode', 's1', { kind: 'steering', mode: 'all' }, 30_000));
+  await waitFor(() => expect(fake.request).toHaveBeenCalledWith('session.set_queue_mode', 's1', { kind: 'steering', mode: 'all' }, 30_000));
   expect(fake.request).toHaveBeenCalledWith('session.prompt', 's1', { text: '插入一条', streamingBehavior: 'steer' }, 30_000);
   // 旧值必须不再出现。
   for (const call of vi.mocked(fake.request).mock.calls) {
@@ -419,7 +428,7 @@ it('默认排队模式用协议一致的 steering，不是 steer', async () => {
   // 打开会话对话框会触发 refreshState，从而走到 refreshQueueState。
   fake.request.mockResolvedValueOnce({ sessionId: 's1', isStreaming: true, steeringMode: 'all', followUpMode: 'one-at-a-time' });
   document.querySelector<HTMLElement>('[data-action="session-menu"]')!.click();
-  await vi.waitFor(() => {
+  await waitFor(() => {
     const steering = document.querySelector<HTMLInputElement>('input[name="queue-kind"][value="steering"]');
     expect(steering).not.toBeNull();
     expect(steering!.checked).toBe(true);
@@ -427,7 +436,7 @@ it('默认排队模式用协议一致的 steering，不是 steer', async () => {
   // 反向：Pi 报 one-at-a-time 时必须选中 followUp。
   fake.request.mockResolvedValueOnce({ sessionId: 's1', isStreaming: true, steeringMode: 'one-at-a-time', followUpMode: 'one-at-a-time' });
   document.querySelector<HTMLElement>('[data-action="session-menu"]')!.click();
-  await vi.waitFor(() => {
+  await waitFor(() => {
     expect(document.querySelector<HTMLInputElement>('input[name="queue-kind"][value="followUp"]')!.checked).toBe(true);
   });
 });
@@ -453,7 +462,7 @@ describe('搜索结果归属与定位', () => {
     expect(link.dataset.title).toBe('Sample workspace review');
     expect(link.dataset.cwd).toBe('/fixture');
     link.click();
-    await vi.waitFor(() => expect(document.body.dataset.sessionId).toBe('s2'));
+    await waitFor(() => expect(document.body.dataset.sessionId).toBe('s2'));
     // 会话名不再有独立的显示节点：侧栏列表负责显示，Workbench 只保存内部状态
     // （重命名流程与搜索结果标题都用它）。
     expect(workbench.title()).toBe('Sample workspace review');
@@ -467,7 +476,7 @@ describe('搜索结果归属与定位', () => {
     expect(turns.querySelector('[data-turn-id="u1"]')?.classList.contains('search-target')).toBe(true);
     expect(document.getElementById('history-scope')?.hidden).toBe(false);
     document.querySelector<HTMLButtonElement>('#history-scope button')!.click();
-    await vi.waitFor(() => expect(vi.mocked(window.htmx.ajax).mock.calls.some((call) => call[1] === '/ui/sessions/s2/history')).toBe(true));
+    await waitFor(() => expect(vi.mocked(window.htmx.ajax).mock.calls.some((call) => call[1] === '/ui/sessions/s2/history')).toBe(true));
     document.dispatchEvent(new CustomEvent('htmx:afterSwap', { detail: {
       target: turns, xhr: { responseURL: `${location.origin}/ui/sessions/s2/history` },
     } }));
@@ -513,8 +522,8 @@ describe('新会话首次发送', () => {
     select.dispatchEvent(new Event('change', { bubbles: true }));
     (document.getElementById('prompt') as HTMLTextAreaElement).value = '首条消息';
     document.querySelector<HTMLFormElement>('#composer')!.requestSubmit();
-    await vi.waitFor(() => expect(fake.request.mock.calls.some((c) => c[0] === 'session.start')).toBe(true));
-    await vi.waitFor(() => expect(fake.request.mock.calls.some((c) => c[0] === 'session.prompt')).toBe(true));
+    await waitFor(() => expect(fake.request.mock.calls.some((c) => c[0] === 'session.start')).toBe(true));
+    await waitFor(() => expect(fake.request.mock.calls.some((c) => c[0] === 'session.prompt')).toBe(true));
     expect(fake.request).toHaveBeenCalledWith('session.set_model', 's-new', { provider: 'CPA-Responses', modelId: 'deepseek-flash' }, 30_000);
     expect(fake.request).toHaveBeenCalledWith('session.prompt', 's-new', { text: '首条消息' }, 30_000);
     expect(document.body.dataset.sessionId).toBe('s-new');
@@ -625,7 +634,7 @@ describe('历史模型与当前可用模型', () => {
     const input = document.getElementById('prompt') as HTMLTextAreaElement;
     input.value = '未发出的草稿';
     document.querySelector<HTMLFormElement>('#composer')!.requestSubmit();
-    await vi.waitFor(() => expect(document.getElementById('connection-notice')?.textContent).toContain('没有可用模型'));
+    await waitFor(() => expect(document.getElementById('connection-notice')?.textContent).toContain('没有可用模型'));
     expect(fake.request.mock.calls.some((c) => c[0] === 'session.prompt')).toBe(false);
     expect(input.value).toBe('未发出的草稿');
   });
@@ -645,7 +654,7 @@ describe('历史模型与当前可用模型', () => {
     select.value = option.value;
     (document.getElementById('prompt') as HTMLTextAreaElement).value = '用我选的模型';
     document.querySelector<HTMLFormElement>('#composer')!.requestSubmit();
-    await vi.waitFor(() => expect(fake.request.mock.calls.some((c) => c[0] === 'session.prompt')).toBe(true));
+    await waitFor(() => expect(fake.request.mock.calls.some((c) => c[0] === 'session.prompt')).toBe(true));
     expect(fake.request).toHaveBeenCalledWith('session.set_model', 's1', { provider: 'CPA-Responses', modelId: 'deepseek-flash' }, 30_000);
     expect(select.selectedOptions[0].textContent).not.toContain('unknown');
     const order = fake.request.mock.calls.map((c) => c[0]);
@@ -665,12 +674,12 @@ describe('等待期间切换会话的归属', () => {
     });
     (document.getElementById('prompt') as HTMLTextAreaElement).value = 'hello';
     document.querySelector<HTMLFormElement>('#composer')!.requestSubmit();
-    await vi.waitFor(() => expect(fake.request.mock.calls.some((c) => c[0] === 'session.start')).toBe(true));
+    await waitFor(() => expect(fake.request.mock.calls.some((c) => c[0] === 'session.start')).toBe(true));
 
     // 在 worker 启动等待途中切到另一个会话。
     workbench.selectSession('s2', '/tmp/other', '另一个会话');
     release();
-    await vi.waitFor(() => expect(document.getElementById('connection-notice')!.textContent).toContain('未发送'));
+    await waitFor(() => expect(document.getElementById('connection-notice')!.textContent).toContain('未发送'));
     // 关键安全属性：绝不能投到切换后的会话。
     expect(fake.request.mock.calls.some((c) => c[0] === 'session.prompt' && c[1] === 's2')).toBe(false);
     // 输入内容必须保留，用户才能重发。
@@ -693,11 +702,11 @@ describe('等待期间切换会话的归属', () => {
     box.checked = false;
     box.dispatchEvent(new Event('change', { bubbles: true }));
     // 等它进入 ensureWorker 内部的状态刷新。
-    await vi.waitFor(() => expect(fake.request.mock.calls.some((c) => c[0] === 'session.state')).toBe(true));
+    await waitFor(() => expect(fake.request.mock.calls.some((c) => c[0] === 'session.state')).toBe(true));
     workbench.selectSession('s2', '/tmp/other', '另一个会话');
     release();
     await vi.advanceTimersByTimeAsync(10);
-    await vi.waitFor(() => expect(fake.request.mock.calls.some((c) => c[0] === 'session.set_auto_compaction')).toBe(true));
+    await waitFor(() => expect(fake.request.mock.calls.some((c) => c[0] === 'session.set_auto_compaction')).toBe(true));
     const call = fake.request.mock.calls.find((c) => c[0] === 'session.set_auto_compaction');
     // 必须是发起时归属的 s1，不能被改成 s2。
     expect(call?.[1]).toBe('s1');
@@ -746,7 +755,7 @@ describe('排队模式回读', () => {
       return {};
     });
     await workbench.reconcile();
-    await vi.waitFor(() => {
+    await waitFor(() => {
       const followUp = document.querySelector<HTMLInputElement>('input[name="queue-kind"][value="followUp"]');
       expect(followUp?.checked).toBe(true);
     });
@@ -764,7 +773,7 @@ describe('排队模式回读', () => {
       return {};
     });
     await workbench.reconcile();
-    await vi.waitFor(() => {
+    await waitFor(() => {
       const steering = document.querySelector<HTMLInputElement>('input[name="queue-kind"][value="steering"]');
       expect(steering?.checked).toBe(true);
     });
@@ -778,7 +787,7 @@ describe('历史响应的代次守卫', () => {
     const turns = document.getElementById('turns')!;
     // 先在 s1 真正发起一次历史请求，让 pendingHistory 记下 {s1, epochN}。
     workbench.selectSession('s1', '/tmp/a', 'A');
-    await vi.waitFor(() => expect(document.body.dataset.sessionId).toBe('s1'));
+    await waitFor(() => expect(document.body.dataset.sessionId).toBe('s1'));
     await (workbench as unknown as { refreshHistory(): Promise<void> }).refreshHistory();
     const registered = (workbench as unknown as { pendingHistory: { sessionId: string; epoch: number } }).pendingHistory;
     expect(registered.sessionId).toBe('s1');
@@ -800,7 +809,7 @@ describe('历史响应的代次守卫', () => {
   it('当前会话的历史响应被放行', async () => {
     const turns = document.getElementById('turns')!;
     workbench.selectSession('s1', '/tmp/a', 'A');
-    await vi.waitFor(() => expect(document.body.dataset.sessionId).toBe('s1'));
+    await waitFor(() => expect(document.body.dataset.sessionId).toBe('s1'));
     await workbench.reconcile();
 
     const fresh = new Event('htmx:beforeSwap') as CustomEvent;
@@ -821,19 +830,19 @@ describe('自动重试偏好按会话隔离', () => {
     const box = document.getElementById('auto-retry') as HTMLInputElement;
     // 在 s1 打开自动重试。
     workbench.selectSession('s1', '/tmp/a', 'A');
-    await vi.waitFor(() => expect(document.body.dataset.sessionId).toBe('s1'));
+    await waitFor(() => expect(document.body.dataset.sessionId).toBe('s1'));
     box.checked = true;
     box.dispatchEvent(new Event('change', { bubbles: true }));
-    await vi.waitFor(() => expect(box.checked).toBe(true));
+    await waitFor(() => expect(box.checked).toBe(true));
 
     // 切到 s2：没有记录过，必须是默认关闭。
     workbench.selectSession('s2', '/tmp/b', 'B');
-    await vi.waitFor(() => expect(document.body.dataset.sessionId).toBe('s2'));
+    await waitFor(() => expect(document.body.dataset.sessionId).toBe('s2'));
     expect(box.checked).toBe(false);
 
     // 切回 s1：应恢复上一次的选择。
     workbench.selectSession('s1', '/tmp/a', 'A');
-    await vi.waitFor(() => expect(document.body.dataset.sessionId).toBe('s1'));
+    await waitFor(() => expect(document.body.dataset.sessionId).toBe('s1'));
     expect(box.checked).toBe(true);
   });
 });
@@ -843,12 +852,12 @@ describe('思考强度：自动 + 会话记忆', () => {
   it('选择自动时只记住偏好，不发送 set_thinking', async () => {
     const select = document.getElementById('thinking-select') as HTMLSelectElement;
     workbench.selectSession('s1', '/tmp/a', 'A');
-    await vi.waitFor(() => expect(document.body.dataset.sessionId).toBe('s1'));
-    await vi.waitFor(() => expect(select.options.length).toBeGreaterThan(1));
+    await waitFor(() => expect(document.body.dataset.sessionId).toBe('s1'));
+    await waitFor(() => expect(select.options.length).toBeGreaterThan(1));
     expect(select.value).toBe('');
     select.value = '';
     select.dispatchEvent(new Event('change', { bubbles: true }));
-    await vi.waitFor(() => expect(fake.request).toHaveBeenCalledWith('session.thinking_levels', 's1', undefined, 30_000));
+    await waitFor(() => expect(fake.request).toHaveBeenCalledWith('session.thinking_levels', 's1', undefined, 30_000));
     const calls = fake.request.mock.calls.filter(([method]) => method === 'session.set_thinking');
     expect(calls).toHaveLength(0);
   });
@@ -856,22 +865,22 @@ describe('思考强度：自动 + 会话记忆', () => {
   it('选择具体等级时会发送 set_thinking 并按会话记住', async () => {
     const select = document.getElementById('thinking-select') as HTMLSelectElement;
     workbench.selectSession('s1', '/tmp/a', 'A');
-    await vi.waitFor(() => expect(select.options.length).toBeGreaterThan(1));
+    await waitFor(() => expect(select.options.length).toBeGreaterThan(1));
     select.value = 'high';
     select.dispatchEvent(new Event('change', { bubbles: true }));
-    await vi.waitFor(() => expect(fake.request).toHaveBeenCalledWith('session.set_thinking', 's1', { level: 'high' }, 30_000));
+    await waitFor(() => expect(fake.request).toHaveBeenCalledWith('session.set_thinking', 's1', { level: 'high' }, 30_000));
     // 切到别的会话再切回：选择必须保留，不能悄悄回到“自动”。
     workbench.selectSession('s2', '/tmp/b', 'B');
-    await vi.waitFor(() => expect(document.body.dataset.sessionId).toBe('s2'));
+    await waitFor(() => expect(document.body.dataset.sessionId).toBe('s2'));
     workbench.selectSession('s1', '/tmp/a', 'A');
-    await vi.waitFor(() => expect(document.body.dataset.sessionId).toBe('s1'));
+    await waitFor(() => expect(document.body.dataset.sessionId).toBe('s1'));
     expect(select.value).toBe('high');
   });
 
   it('新会话默认显示自动', async () => {
     const select = document.getElementById('thinking-select') as HTMLSelectElement;
     workbench.selectSession('s9', '/tmp/c', 'C');
-    await vi.waitFor(() => expect(document.body.dataset.sessionId).toBe('s9'));
+    await waitFor(() => expect(document.body.dataset.sessionId).toBe('s9'));
     expect(select.value).toBe('');
     expect(select.selectedOptions[0]?.textContent).toBe('自动');
   });
@@ -881,7 +890,7 @@ describe('上下文用量来自 Pi 统计', () => {
   it('有 contextWindow 时显示占比与 token 数', async () => {
     const node = document.getElementById('context-usage')!;
     workbench.selectSession('s1', '/tmp/a', 'A');
-    await vi.waitFor(() => expect(document.body.dataset.sessionId).toBe('s1'));
+    await waitFor(() => expect(document.body.dataset.sessionId).toBe('s1'));
     fake.request.mockImplementation(async (method: string) => {
       if (method === 'worker.list') return [{ sessionId: 's1', cwd: '/fixture' }];
       if (method === 'session.state') return { sessionId: 's1', isStreaming: false };
@@ -890,7 +899,7 @@ describe('上下文用量来自 Pi 统计', () => {
       return undefined;
     });
     emit('agent_settled');
-    await vi.waitFor(() => expect(node.hidden).toBe(false));
+    await waitFor(() => expect(node.hidden).toBe(false));
     expect(node.textContent).toBe('49% · 32k / 66k');
     expect(node.title).toContain('48.8%');
   });
@@ -898,7 +907,7 @@ describe('上下文用量来自 Pi 统计', () => {
   it('压缩后 percent 为 null 时显示未知而不是 0', async () => {
     const node = document.getElementById('context-usage')!;
     workbench.selectSession('s1', '/tmp/a', 'A');
-    await vi.waitFor(() => expect(document.body.dataset.sessionId).toBe('s1'));
+    await waitFor(() => expect(document.body.dataset.sessionId).toBe('s1'));
     fake.request.mockImplementation(async (method: string) => {
       if (method === 'worker.list') return [{ sessionId: 's1', cwd: '/fixture' }];
       if (method === 'session.state') return { sessionId: 's1', isStreaming: false };
@@ -907,7 +916,7 @@ describe('上下文用量来自 Pi 统计', () => {
       return undefined;
     });
     emit('agent_settled');
-    await vi.waitFor(() => expect(node.hidden).toBe(false));
+    await waitFor(() => expect(node.hidden).toBe(false));
     expect(node.textContent).toBe('? / 66k');
     expect(node.title).toContain('压缩后');
   });
@@ -915,7 +924,7 @@ describe('上下文用量来自 Pi 统计', () => {
   it('Pi 统计失败时仍显示已知的上下文窗口并标注未知', async () => {
     const node = document.getElementById('context-usage')!;
     workbench.selectSession('s1', '/tmp/a', 'A');
-    await vi.waitFor(() => expect(document.body.dataset.sessionId).toBe('s1'));
+    await waitFor(() => expect(document.body.dataset.sessionId).toBe('s1'));
     fake.request.mockImplementation(async (method: string) => {
       if (method === 'worker.list') return [{ sessionId: 's1', cwd: '/fixture' }];
       if (method === 'session.state') return { sessionId: 's1', isStreaming: false, model: { provider: 'CPA-Responses', id: 'deepseek-flash', name: 'DeepSeek Flash', contextWindow: 65536 } };
@@ -924,7 +933,7 @@ describe('上下文用量来自 Pi 统计', () => {
       return {};
     });
     emit('agent_settled');
-    await vi.waitFor(() => expect(node.hidden).toBe(false));
+    await waitFor(() => expect(node.hidden).toBe(false));
     expect(node.textContent).toBe('? / 66k');
     expect(node.title).toContain('统计不可用');
   });
@@ -932,7 +941,7 @@ describe('上下文用量来自 Pi 统计', () => {
   it('没有 contextUsage 时保持隐藏', async () => {
     const node = document.getElementById('context-usage')!;
     workbench.selectSession('s1', '/tmp/a', 'A');
-    await vi.waitFor(() => expect(document.body.dataset.sessionId).toBe('s1'));
+    await waitFor(() => expect(document.body.dataset.sessionId).toBe('s1'));
     fake.request.mockImplementation(async (method: string) => {
       if (method === 'worker.list') return [{ sessionId: 's1', cwd: '/fixture' }];
       if (method === 'session.state') return { sessionId: 's1', isStreaming: false };
@@ -941,7 +950,7 @@ describe('上下文用量来自 Pi 统计', () => {
       return undefined;
     });
     emit('agent_settled');
-    await vi.waitFor(() => expect(node.hidden).toBe(true));
+    await waitFor(() => expect(node.hidden).toBe(true));
   });
 });
 
@@ -986,11 +995,11 @@ function startCalls(): Record<string, unknown>[] {
 describe('工具预设切换需要重启 worker', () => {
   it('空闲时直接停止并按新预设重启', async () => {
     workbench.selectSession('s1', '/tmp/a', 'A');
-    await vi.waitFor(() => expect(document.body.dataset.sessionId).toBe('s1'));
+    await waitFor(() => expect(document.body.dataset.sessionId).toBe('s1'));
     const select = document.getElementById('tool-preset-quick') as HTMLSelectElement;
     select.value = 'read-only';
     select.dispatchEvent(new Event('change', { bubbles: true }));
-    await vi.waitFor(() => expect(startCalls().some((params) => params.toolPreset === 'read-only')).toBe(true));
+    await waitFor(() => expect(startCalls().some((params) => params.toolPreset === 'read-only')).toBe(true));
     expect((document.getElementById('tool-preset-quick') as HTMLSelectElement).value).toBe('read-only');
   });
 
@@ -1023,16 +1032,16 @@ describe('工具预设切换需要重启 worker', () => {
 
   it('预设按会话隔离', async () => {
     workbench.selectSession('s1', '/tmp/a', 'A');
-    await vi.waitFor(() => expect(document.body.dataset.sessionId).toBe('s1'));
+    await waitFor(() => expect(document.body.dataset.sessionId).toBe('s1'));
     const select = document.getElementById('tool-preset-quick') as HTMLSelectElement;
     select.value = 'full';
     select.dispatchEvent(new Event('change', { bubbles: true }));
-    await vi.waitFor(() => expect(startCalls().some((params) => params.toolPreset === 'full')).toBe(true));
+    await waitFor(() => expect(startCalls().some((params) => params.toolPreset === 'full')).toBe(true));
     workbench.selectSession('s2', '/tmp/b', 'B');
-    await vi.waitFor(() => expect(document.body.dataset.sessionId).toBe('s2'));
+    await waitFor(() => expect(document.body.dataset.sessionId).toBe('s2'));
     expect(select.value).toBe('default');
     workbench.selectSession('s1', '/tmp/a', 'A');
-    await vi.waitFor(() => expect(document.body.dataset.sessionId).toBe('s1'));
+    await waitFor(() => expect(document.body.dataset.sessionId).toBe('s1'));
     expect(select.value).toBe('full');
   });
 });
@@ -1043,23 +1052,23 @@ describe('顶栏功能面板', () => {
     const system = document.getElementById('panel-system')!;
     const tools = document.getElementById('panel-tools')!;
     document.querySelector('[data-action="panel-title"]')!.dispatchEvent(new Event('click', { bubbles: true }));
-    await vi.waitFor(() => expect(title.hidden).toBe(false));
+    await waitFor(() => expect(title.hidden).toBe(false));
     document.querySelector('[data-action="panel-tools"]')!.dispatchEvent(new Event('click', { bubbles: true }));
-    await vi.waitFor(() => expect(tools.hidden).toBe(false));
+    await waitFor(() => expect(tools.hidden).toBe(false));
     expect(title.hidden).toBe(true);
     expect(system.hidden).toBe(true);
     // 关闭按钮只关自己那一个。
     document.querySelector('[data-action="panel-tools-close"]')!.dispatchEvent(new Event('click', { bubbles: true }));
-    await vi.waitFor(() => expect(tools.hidden).toBe(true));
+    await waitFor(() => expect(tools.hidden).toBe(true));
   });
 
   // 工具面板本体由桥渲染（/ui/tools）：这里只锁前端职责——把会话 ID 交给请求、
   // 触发一次刷新。列表内容（实际暴露给模型的工具、受预设控制）由桥的片段测试覆盖。
   it('工具面板把会话 ID 交给片段请求', async () => {
     workbench.selectSession('s1', '/tmp/a', 'A');
-    await vi.waitFor(() => expect(document.body.dataset.sessionId).toBe('s1'));
+    await waitFor(() => expect(document.body.dataset.sessionId).toBe('s1'));
     document.querySelector('[data-action="panel-tools"]')!.dispatchEvent(new Event('click', { bubbles: true }));
-    await vi.waitFor(() => expect(document.getElementById('panel-tools')!.hidden).toBe(false));
+    await waitFor(() => expect(document.getElementById('panel-tools')!.hidden).toBe(false));
     expect((document.getElementById('tools-session') as HTMLInputElement).value).toBe('s1');
     expect(vi.mocked(window.htmx.trigger).mock.calls.some((call) => call[1] === 'tools-refresh')).toBe(true);
     expect(document.getElementById('tools-body')).not.toBeNull();
@@ -1073,9 +1082,9 @@ describe('顶栏功能面板', () => {
       return {};
     });
     workbench.selectSession('s1', '/tmp/a', 'A');
-    await vi.waitFor(() => expect(document.body.dataset.sessionId).toBe('s1'));
+    await waitFor(() => expect(document.body.dataset.sessionId).toBe('s1'));
     document.querySelector('[data-action="panel-info"]')!.dispatchEvent(new Event('click', { bubbles: true }));
-    await vi.waitFor(() => expect(document.getElementById('panel-info')!.hidden).toBe(false));
+    await waitFor(() => expect(document.getElementById('panel-info')!.hidden).toBe(false));
     // 详情整体由桥渲染（/ui/stats）：前端只带上会话 ID 触发刷新。
     expect((document.getElementById('stats-session') as HTMLInputElement).value).toBe('s1');
     expect(vi.mocked(window.htmx.trigger).mock.calls.some((call) => call[1] === 'stats-refresh')).toBe(true);
@@ -1094,16 +1103,16 @@ describe('顶栏功能面板', () => {
       return {};
     });
     workbench.selectSession('s1', '/tmp/a', 'A');
-    await vi.waitFor(() => expect(document.body.dataset.sessionId).toBe('s1'));
+    await waitFor(() => expect(document.body.dataset.sessionId).toBe('s1'));
     document.querySelector('[data-action="full-history"]')!.dispatchEvent(new Event('click', { bubbles: true }));
-    await vi.waitFor(() => expect(open).toHaveBeenCalled());
+    await waitFor(() => expect(open).toHaveBeenCalled());
     expect(open.mock.calls[0]?.[0]).toBe('/ui/exports/session-abc.html?inline=1');
     open.mockRestore();
   });
 
   it('系统面板把会话 ID 交给片段请求', async () => {
     workbench.selectSession('s1', '/tmp/a', 'A');
-    await vi.waitFor(() => expect(document.body.dataset.sessionId).toBe('s1'));
+    await waitFor(() => expect(document.body.dataset.sessionId).toBe('s1'));
     fake.request.mockImplementation(async (method: string) => {
       if (method === 'worker.list') return [{ sessionId: 's1', cwd: '/fixture' }];
       if (method === 'session.state') return { sessionId: 's1', isStreaming: false };
@@ -1112,9 +1121,9 @@ describe('顶栏功能面板', () => {
       return undefined;
     });
     emit('agent_settled');
-    await vi.waitFor(() => expect(document.getElementById('context-usage')!.hidden).toBe(false));
+    await waitFor(() => expect(document.getElementById('context-usage')!.hidden).toBe(false));
     document.querySelector('[data-action="panel-system"]')!.dispatchEvent(new Event('click', { bubbles: true }));
-    await vi.waitFor(() => expect(document.getElementById('panel-system')!.hidden).toBe(false));
+    await waitFor(() => expect(document.getElementById('panel-system')!.hidden).toBe(false));
     // 提示词内容由桥渲染；前端只负责带上会话 ID 与触发刷新。
     expect((document.getElementById('system-session') as HTMLInputElement).value).toBe('s1');
     expect(vi.mocked(window.htmx.trigger).mock.calls.some((call) => call[1] === 'system-refresh')).toBe(true);
@@ -1124,7 +1133,7 @@ describe('顶栏功能面板', () => {
 describe('模型配置的两级树与字段表单', () => {
   const open = async () => {
     await (workbench as unknown as { action(a: string, b: HTMLElement): Promise<void> }).action('models-edit', document.createElement('button'));
-    await vi.waitFor(() => expect(document.querySelectorAll('#models-tree-body [data-models-provider]').length).toBeGreaterThan(0));
+    await waitFor(() => expect(document.querySelectorAll('#models-tree-body [data-models-provider]').length).toBeGreaterThan(0));
   };
   const clickTree = (selector: string) => {
     document.querySelector<HTMLElement>(selector)!.click();
@@ -1194,7 +1203,7 @@ describe('模型配置的两级树与字段表单', () => {
       return {};
     });
     await (workbench as unknown as { action(a: string, b: HTMLElement): Promise<void> }).action('models-save', document.createElement('button'));
-    await vi.waitFor(() => expect(writes.length).toBe(1));
+    await waitFor(() => expect(writes.length).toBe(1));
     const map = (writes[0] as { config: { providers: { cpa: { models: Array<{ thinkingLevelMap?: Record<string, string | null> }> } } } }).config.providers.cpa.models[0].thinkingLevelMap!;
     // null 必须写出去，不能被转成空串或删掉。
     expect(map.off).toBeNull();
@@ -1235,7 +1244,7 @@ describe('模型配置的两级树与字段表单', () => {
       return {};
     });
     await (workbench as unknown as { action(a: string, b: HTMLElement): Promise<void> }).action('models-save', document.createElement('button'));
-    await vi.waitFor(() => expect(writes.length).toBe(1));
+    await waitFor(() => expect(writes.length).toBe(1));
     const config = (writes[0] as { config: { providers: { cpa: { models: Array<{ id: string; name: string }> } } } }).config;
     expect(config.providers.cpa.models[0].name).toBe('新名字');
     // 没动过的第二个模型必须原样保留：只提交改过的字段会把其余模型删掉。
@@ -1309,7 +1318,7 @@ describe('实时流重同步与迟到回执的会话归属', () => {
     const ajax = window.htmx.ajax as unknown as ReturnType<typeof vi.fn>;
     ajax.mockClear();
     fake.instance!.dispatchEvent(new CustomEvent('message', { detail: { version: 1, kind: 'control', event: 'bridge.subscription_closed', sessionId: 's1', data: { resyncRequired: true } } }));
-    await vi.waitFor(() => expect(ajax).toHaveBeenCalledWith('get', expect.stringContaining('/ui/sessions/s1/history'), expect.anything()));
+    await waitFor(() => expect(ajax).toHaveBeenCalledWith('get', expect.stringContaining('/ui/sessions/s1/history'), expect.anything()));
   });
 
   // U15：事件因体积被省略时流已断开，等下一次 settled 会一直缺内容。
@@ -1319,14 +1328,14 @@ describe('实时流重同步与迟到回执的会话归属', () => {
     const ajax = window.htmx.ajax as unknown as ReturnType<typeof vi.fn>;
     ajax.mockClear();
     emitNamed('bridge.event_omitted', { type: 'pi.event', reason: '事件体积超过上限', resyncRequired: true });
-    await vi.waitFor(() => expect(ajax).toHaveBeenCalledWith('get', expect.stringContaining('/ui/sessions/s1/history'), expect.anything()));
+    await waitFor(() => expect(ajax).toHaveBeenCalledWith('get', expect.stringContaining('/ui/sessions/s1/history'), expect.anything()));
     expect(document.getElementById('connection-notice')!.textContent).toContain('体积');
   });
 
   // U18：回执等待期间切会话，迟到的错误不得写进新会话。
   it('切会话后迟到的回执错误不写进新会话', async () => {
     pending = ['dialog-1']; busy = true; emit('extension_ui_request', { id: 'dialog-1', method: 'input', title: '请输入' });
-    await vi.waitFor(() => expect(document.querySelector('#ext-dialog-slot input')).not.toBeNull());
+    await waitFor(() => expect(document.querySelector('#ext-dialog-slot input')).not.toBeNull());
     const impl = fake.request.getMockImplementation()!;
     let rejectResponse: ((error: Error) => void) | undefined;
     fake.request.mockImplementation(async (method: string, sessionId: string, params?: unknown, timeout?: number) => {
@@ -1381,7 +1390,7 @@ describe('扩展状态行快照', () => {
     const internal = workbench as unknown as { subscribed: string; statuses: Map<string, string>; subscribe(): Promise<void> };
     internal.subscribed = '';
     await internal.subscribe();
-    await vi.waitFor(() => expect(internal.statuses.get('mc')).toBe('mc: 3 (1%) · idle'));
+    await waitFor(() => expect(internal.statuses.get('mc')).toBe('mc: 3 (1%) · idle'));
     expect(document.getElementById('ext-status-slot')!.textContent).toContain('mc: 3');
   });
 
@@ -1396,10 +1405,10 @@ describe('扩展状态行快照', () => {
       return impl(method, sessionId, params, timeout);
     });
     await internal.subscribe();
-    await vi.waitFor(() => expect(fake.request).toHaveBeenCalledWith('session.ext_status', 's1', undefined, 30_000));
+    await waitFor(() => expect(fake.request).toHaveBeenCalledWith('session.ext_status', 's1', undefined, 30_000));
     // 较旧的快照只能补缺，不能把已更新的值拉回去；缺的 key 仍然补上。
     expect(internal.statuses.get('mc')).toBe('mc: 20 (9%) · running');
-    await vi.waitFor(() => expect(internal.statuses.get('extra')).toBe('额外行'));
+    await waitFor(() => expect(internal.statuses.get('extra')).toBe('额外行'));
   });
 });
 
@@ -1462,15 +1471,15 @@ describe('发送中的重复提交与失败恢复', () => {
     let release: (value: unknown) => void = () => {};
     fake.request.mockImplementationOnce(() => new Promise((resolve) => { release = resolve; }));
     form.requestSubmit();
-    await vi.waitFor(() => expect((document.getElementById('send-button') as HTMLButtonElement).disabled).toBe(true));
+    await waitFor(() => expect((document.getElementById('send-button') as HTMLButtonElement).disabled).toBe(true));
     form.requestSubmit();
-    await vi.waitFor(() => {
+    await waitFor(() => {
       expect(document.querySelector('#toast-root .toast-warning')?.textContent ?? '').toContain('仍在发送中');
     });
     // 第一次仍卡在启动阶段：没有第二条 prompt 被投递。
     expect(fake.request.mock.calls.filter((call) => call[0] === 'session.prompt')).toHaveLength(0);
     release({ sessionId: 's1', cwd: '/fixture', epoch: 'e1', pid: 1, status: 'idle', busy: false, seq: 0 });
-    await vi.waitFor(() => expect(fake.request).toHaveBeenCalledWith('session.prompt', 's1', { text: '只此一条' }, 30_000));
+    await waitFor(() => expect(fake.request).toHaveBeenCalledWith('session.prompt', 's1', { text: '只此一条' }, 30_000));
   });
 
   it('一次发送失败后 sending 不残留，可以立即重发', async () => {
@@ -1478,11 +1487,11 @@ describe('发送中的重复提交与失败恢复', () => {
     (document.getElementById('prompt') as HTMLTextAreaElement).value = '第一条';
     fake.request.mockRejectedValueOnce(new Error('模拟的启动失败'));
     form.requestSubmit();
-    await vi.waitFor(() => expect(document.getElementById('connection-notice')!.textContent).toContain('模拟的启动失败'));
+    await waitFor(() => expect(document.getElementById('connection-notice')!.textContent).toContain('模拟的启动失败'));
     expect((document.getElementById('send-button') as HTMLButtonElement).disabled).toBe(false);
     (document.getElementById('prompt') as HTMLTextAreaElement).value = '第二条';
     document.getElementById('prompt')!.dispatchEvent(new Event('input', { bubbles: true }));
     form.requestSubmit();
-    await vi.waitFor(() => expect(fake.request).toHaveBeenCalledWith('session.prompt', 's1', { text: '第二条' }, 30_000));
+    await waitFor(() => expect(fake.request).toHaveBeenCalledWith('session.prompt', 's1', { text: '第二条' }, 30_000));
   });
 });

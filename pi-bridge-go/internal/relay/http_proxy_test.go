@@ -43,7 +43,7 @@ func Test设备前缀HTTP转发(t *testing.T) {
 	defer srv.Close()
 	userToken, deviceToken := pairDevice(t, srv, users, "dev-1")
 
-	tunnel := dialTunnelOrFail(t, srv, "dev-1", deviceToken)
+	tunnel := dialTunnelOrFail(t, s, srv, "dev-1", deviceToken)
 	defer tunnel.CloseNow()
 
 	// 设备侧（测试里手工扮演）：读一条 HTTP 帧，回一个响应。
@@ -116,7 +116,7 @@ func Test设备根规范化重定向(t *testing.T) {
 	srv := httptest.NewServer(s)
 	defer srv.Close()
 	userToken, deviceToken := pairDevice(t, srv, users, "dev-1")
-	tunnel := dialTunnelOrFail(t, srv, "dev-1", deviceToken)
+	tunnel := dialTunnelOrFail(t, s, srv, "dev-1", deviceToken)
 	defer tunnel.CloseNow()
 
 	client := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
@@ -181,7 +181,7 @@ func Test设备前缀HTTP转发的拒绝面(t *testing.T) {
 	}
 
 	// 设备在线时：超过转发上限的请求体明确回 413，而不是把隧道顶断。
-	tunnel := dialTunnelOrFail(t, srv, "dev-1", deviceToken)
+	tunnel := dialTunnelOrFail(t, s, srv, "dev-1", deviceToken)
 	defer tunnel.CloseNow()
 	big := strings.NewReader(strings.Repeat("x", (4<<20)+16))
 	if got := do(userToken, "/d/dev-1/ui/models/save", big); got != http.StatusRequestEntityTooLarge {
@@ -196,7 +196,7 @@ func Test设备前缀下的WS连接(t *testing.T) {
 	srv := httptest.NewServer(s)
 	defer srv.Close()
 	userToken, deviceToken := pairDevice(t, srv, users, "dev-1")
-	tunnel := dialTunnelOrFail(t, srv, "dev-1", deviceToken)
+	tunnel := dialTunnelOrFail(t, s, srv, "dev-1", deviceToken)
 	defer tunnel.CloseNow()
 
 	cookies := cookieJar(t, srv, userToken)

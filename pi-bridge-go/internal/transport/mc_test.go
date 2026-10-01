@@ -3,7 +3,6 @@ package transport
 import (
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -13,7 +12,7 @@ import (
 )
 
 // withMagicContextDB 建一个带假数据的 magic-context 库，并让桥指向它。
-// 缺 sqlite3 时跳过——这条测试验证的是「桥把库内容渲染成 HTML」，
+// 缺 sqlite3 时跳过——这组测试验证的是「桥把库内容渲染成 HTML」，
 // 不是 sqlite 本身。
 func withMagicContextDB(t *testing.T) {
 	t.Helper()
@@ -57,77 +56,142 @@ func getFragment(t *testing.T, s *Server, path string) string {
 	return rec.Body.String()
 }
 
-func TestMagicContextPanelRendersMemories(t *testing.T) {
+// TestMagicContextPanelWithData 是记忆面板的主测试。
+//
+// 九条断言共用一个 server 与一份库：库是 sqlite3 子进程建出来的，
+// 拆成九个测试就是九次建库 + 九次加载 UI 包。子测试名保留原测试的语义，
+// 失败时仍然能一眼看出是哪一条。
+func TestMagicContextPanelWithData(t *testing.T) {
 	s := newTestServerWithUI(t)
 	withMagicContextDB(t)
-	body := getFragment(t, s, "/ui/mc?kind=memories")
-	for _, want := range []string{"CONSTRAINTS", "ARCHITECTURE", "桥的注释必须用中文", "条记忆"} {
-		if !strings.Contains(body, want) {
-			t.Errorf("面板应包含 %q", want)
+
+	t.Run("渲染记忆条目与数据来源", func(t *testing.T) {
+		body := getFragment(t, s, "/ui/mc?kind=memories")
+		for _, want := range []string{"CONSTRAINTS", "ARCHITECTURE", "桥的注释必须用中文", "条记忆"} {
+			if !strings.Contains(body, want) {
+				t.Errorf("面板应包含 %q", want)
+			}
 		}
-	}
-	// 必须显示数据来源，否则用户不知道这数据从哪来。
-	if !strings.Contains(body, "本机存储") {
-		t.Error("面板应标明数据来源")
-	}
-}
-
-func TestMagicContextPanelTruncatesContentInList(t *testing.T) {
-	s := newTestServerWithUI(t)
-	withMagicContextDB(t)
-	body := getFragment(t, s, "/ui/mc?kind=memories")
-	// 长记忆的末尾绝不能出现在列表 HTML 里：列表只给截断后的开头。
-	if strings.Contains(body, "MUST_NOT_APPEAR") {
-		t.Error("列表不应包含完整正文的末尾")
-	}
-	// 截断处要显示省略号，否则用户会以为那就是全文。
-	if !strings.Contains(body, "…") {
-		t.Error("截断处应显示省略号")
-	}
-	// 但开头必须在。
-	if !strings.Contains(body, "这是一条很长的记忆") {
-		t.Error("列表应包含截断后的开头")
-	}
-}
-
-func TestMagicContextPanelCoversEveryKind(t *testing.T) {
-	s := newTestServerWithUI(t)
-	withMagicContextDB(t)
-	for _, kind := range []string{"memories", "compartments", "directives", "notes", "dreams"} {
-		body := getFragment(t, s, "/ui/mc?kind="+kind)
-		if !strings.Contains(body, "mc-panel") {
-			t.Errorf("%s 分区应渲染出面板", kind)
+		// 必须显示数据来源，否则用户不知道这数据从哪来。
+		if !strings.Contains(body, "本机存储") {
+			t.Error("面板应标明数据来源")
 		}
-		if strings.Contains(body, "这个分区暂时没有内容") {
-			t.Errorf("%s 分区有数据却显示空态", kind)
+	})
+
+	t.Run("列表只渲染截断后的开头", func(t *testing.T) {
+		body := getFragment(t, s, "/ui/mc?kind=memories")
+		// 长记忆的末尾绝不能出现在列表 HTML 里。
+		if strings.Contains(body, "MUST_NOT_APPEAR") {
+			t.Error("列表不应包含完整正文的末尾")
 		}
-	}
+		// 截断处要显示省略号，否则用户会以为那就是全文。
+		if !strings.Contains(body, "…") {
+			t.Error("截断处应显示省略号")
+		}
+		// 但开头必须在。
+		if !strings.Contains(body, "这是一条很长的记忆") {
+			t.Error("列表应包含截断后的开头")
+		}
+	})
+
+	t.Run("每个分区都能渲染", func(t *testing.T) {
+		for _, kind := range []string{"memories", "compartments", "directives", "notes", "dreams"} {
+			body := getFragment(t, s, "/ui/mc?kind="+kind)
+			if !strings.Contains(body, "mc-panel") {
+				t.Errorf("%s 分区应渲染出面板", kind)
+			}
+			if strings.Contains(body, "这个分区暂时没有内容") {
+				t.Errorf("%s 分区有数据却显示空态", kind)
+			}
+		}
+	})
+
+	t.Run("未知分区回落默认值", func(t *testing.T) {
+		// 未知分区回落默认分区，而不是报错——htmx 不交换 4xx/5xx。
+		body := getFragment(t, s, "/ui/mc?kind=sqlite_master")
+		if !strings.Contains(body, "CONSTRAINTS") {
+			t.Error("未知分区应回落默认分区")
+		}
+	})
+
+	t.Run("会话 ID 只显示缩写", func(t *testing.T) {
+		body := getFragment(t, s, "/ui/mc?kind=compartments")
+		// 完整 UUID 没有信息量还占宽度。
+		if strings.Contains(body, "sess-abcdef123456") {
+			t.Error("会话 ID 不应完整显示")
+		}
+		if !strings.Contains(body, "sess-abc") {
+			t.Errorf("应显示缩写的会话 ID，得到 %s", body)
+		}
+	})
+
+	t.Run("提供分类与项目筛选", func(t *testing.T) {
+		body := getFragment(t, s, "/ui/mc?kind=memories")
+		// 筛选控件必须出现，否则几百条记忆没法看。
+		if !strings.Contains(body, "name=\"category\"") {
+			t.Error("应提供分类筛选")
+		}
+		if !strings.Contains(body, "name=\"project\"") {
+			t.Error("应提供项目筛选")
+		}
+		if !strings.Contains(body, "dir:0123abcd4567") {
+			t.Error("应列出项目键")
+		}
+	})
+
+	t.Run("分页报告本页行数", func(t *testing.T) {
+		body := getFragment(t, s, "/ui/mc?kind=memories&offset=1&limit=1")
+		if !strings.Contains(body, "本页 1 条") {
+			t.Errorf("应报告本页行数，得到 %s", body)
+		}
+	})
+
+	t.Run("分类筛选生效且总数跟随", func(t *testing.T) {
+		// 不带筛选：三条 active 记忆。
+		all := getFragment(t, s, "/ui/mc?kind=memories")
+		if strings.Count(all, "mc-row-title") != 3 {
+			t.Errorf("应列出 3 条记忆，得到 %d", strings.Count(all, "mc-row-title"))
+		}
+		// 带分类筛选：只剩 CONSTRAINTS。
+		// 断言走行内容而不是分类名——分类名同时出现在筛选下拉的选项里，
+		// 用它判断会把「选项还在」误判成「筛选没生效」。
+		filtered := getFragment(t, s, "/ui/mc?kind=memories&category=CONSTRAINTS")
+		if !strings.Contains(filtered, "桥的注释必须用中文") {
+			t.Error("筛选结果应只剩 CONSTRAINTS 那条")
+		}
+		if strings.Contains(filtered, "桥在 /srv/projects") {
+			t.Error("筛选结果不应包含 ARCHITECTURE 那条")
+		}
+		if !strings.Contains(filtered, "分区共 1 条") {
+			t.Errorf("总数应跟着筛选变成 1，得到 %s", filtered)
+		}
+	})
+
+	t.Run("非法筛选值被忽略", func(t *testing.T) {
+		// 非法值忽略而不是让整页失败：htmx 不交换错误状态码，
+		// 报错会让面板永远停在占位符。
+		body := getFragment(t, s, "/ui/mc?kind=memories&category=x%27--")
+		if !strings.Contains(body, "ARCHITECTURE") {
+			t.Error("非法筛选值应被忽略，仍返回全部记忆")
+		}
+	})
 }
 
-func TestMagicContextPanelFallsBackOnUnknownKind(t *testing.T) {
-	s := newTestServerWithUI(t)
-	withMagicContextDB(t)
-	// 未知分区回落默认分区，而不是报错——htmx 不交换 4xx/5xx。
-	body := getFragment(t, s, "/ui/mc?kind=sqlite_master")
-	if !strings.Contains(body, "CONSTRAINTS") {
-		t.Error("未知分区应回落默认分区")
-	}
-}
-
+// TestMagicContextPanelWithoutDatabase：没装扩展时给一句可读说明，仍然 200
+// ——否则界面永远停在占位符。这条要不同的环境（空目录），所以单独一个测试。
 func TestMagicContextPanelWithoutDatabase(t *testing.T) {
 	s := newTestServerWithUI(t)
-	// 不设 MAGIC_CONTEXT_STORAGE_DIR：指向一个空目录，模拟没装扩展。
 	empty := t.TempDir()
 	t.Setenv("MAGIC_CONTEXT_STORAGE_DIR", empty)
 	body := getFragment(t, s, "/ui/mc")
-	// 库不存在时给一句可读说明，仍然 200——否则界面永远停在占位符。
 	if !strings.Contains(body, "未检测到") {
 		t.Errorf("应说明未检测到，得到 %s", body)
 	}
 }
 
+// TestMagicContextPanelIsReadableWithoutSQLiteBinary：本机没有 sqlite3 时
+// 必须给出可读原因而不是崩掉。清空 PATH 会影响同一测试内的其它请求，故独立。
 func TestMagicContextPanelIsReadableWithoutSQLiteBinary(t *testing.T) {
-	// 把 PATH 清空，模拟本机没有 sqlite3：必须给出可读原因而不是崩掉。
 	s := newTestServerWithUI(t)
 	withMagicContextDB(t)
 	t.Setenv("PATH", t.TempDir())
@@ -135,45 +199,6 @@ func TestMagicContextPanelIsReadableWithoutSQLiteBinary(t *testing.T) {
 	if !strings.Contains(body, "sqlite3") {
 		t.Errorf("应说明缺少 sqlite3，得到 %s", body)
 	}
-}
-
-func TestMagicContextPanelDoesNotLeakSessionIdFully(t *testing.T) {
-	s := newTestServerWithUI(t)
-	withMagicContextDB(t)
-	body := getFragment(t, s, "/ui/mc?kind=compartments")
-	// 会话 ID 只显示前 8 位：完整 UUID 没有信息量还占宽度。
-	if strings.Contains(body, "sess-abcdef123456") {
-		t.Error("会话 ID 不应完整显示")
-	}
-	if !strings.Contains(body, "sess-abc") {
-		t.Errorf("应显示缩写的会话 ID，得到 %s", body)
-	}
-}
-
-func TestMagicContextPanelListsFilters(t *testing.T) {
-	s := newTestServerWithUI(t)
-	withMagicContextDB(t)
-	body := getFragment(t, s, "/ui/mc?kind=memories")
-	// 分类与项目筛选必须出现在界面上，否则几百条记忆没法看。
-	if !strings.Contains(body, "name=\"category\"") {
-		t.Error("应提供分类筛选")
-	}
-	if !strings.Contains(body, "name=\"project\"") {
-		t.Error("应提供项目筛选")
-	}
-	if !strings.Contains(body, "dir:0123abcd4567") {
-		t.Error("应列出项目键")
-	}
-}
-
-func TestMagicContextPanelPagination(t *testing.T) {
-	s := newTestServerWithUI(t)
-	withMagicContextDB(t)
-	body := getFragment(t, s, "/ui/mc?kind=memories&offset=1&limit=1")
-	if !strings.Contains(body, "本页 1 条") {
-		t.Errorf("应报告本页行数，得到 %s", body)
-	}
-	_ = os.Getenv("PATH")
 }
 
 // newTestServerWithUI 与 newTestServer 相同，但强制加载 UI 包。
@@ -186,38 +211,4 @@ func newTestServerWithUI(t *testing.T) *Server {
 	server.ui = rendered
 	server.ui.SetMagicContext(magiccontext.NewStore())
 	return server
-}
-
-func TestMagicContextPanelAppliesCategoryFilter(t *testing.T) {
-	s := newTestServerWithUI(t)
-	withMagicContextDB(t)
-	// 不带筛选：三条 active 记忆。
-	all := getFragment(t, s, "/ui/mc?kind=memories")
-	if strings.Count(all, "mc-row-title") != 3 {
-		t.Errorf("应列出 3 条记忆，得到 %d", strings.Count(all, "mc-row-title"))
-	}
-	// 带分类筛选：只剩 CONSTRAINTS。
-	// 断言走行内容而不是分类名——分类名同时出现在筛选下拉的选项里，
-	// 用它判断会把「选项还在」误判成「筛选没生效」。
-	filtered := getFragment(t, s, "/ui/mc?kind=memories&category=CONSTRAINTS")
-	if !strings.Contains(filtered, "桥的注释必须用中文") {
-		t.Error("筛选结果应只剩 CONSTRAINTS 那条")
-	}
-	if strings.Contains(filtered, "桥在 /srv/projects") {
-		t.Error("筛选结果不应包含 ARCHITECTURE 那条")
-	}
-	if !strings.Contains(filtered, "分区共 1 条") {
-		t.Errorf("总数应跟着筛选变成 1，得到 %s", filtered)
-	}
-}
-
-func TestMagicContextPanelIgnoresInvalidFilter(t *testing.T) {
-	s := newTestServerWithUI(t)
-	withMagicContextDB(t)
-	// 非法分类值被忽略而不是让整页失败：htmx 不交换错误状态码，
-	// 报错会让面板永远停在占位符。
-	body := getFragment(t, s, "/ui/mc?kind=memories&category=x%27--")
-	if !strings.Contains(body, "ARCHITECTURE") {
-		t.Error("非法筛选值应被忽略，仍返回全部记忆")
-	}
 }

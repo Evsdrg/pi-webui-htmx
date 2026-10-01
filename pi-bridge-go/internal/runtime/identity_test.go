@@ -382,7 +382,11 @@ func Test会话文件名解析标准命名(t *testing.T) {
 // 退出清理以前按启动时的 sessionId 判断，fork/clone 改键之后
 // 那个键已不在表里，删除永不发生，注册表留下已停止的 worker。
 func Test重绑定后退出仍会清理注册表(t *testing.T) {
-	m, cwd := newTestManager(t, func(c *Config) { c.IdleTimeout = 20 * time.Millisecond })
+	// 回收上限取 500ms 而不是更激进的值：fork 之后本测试还要按新 ID
+	// 把 worker 取回来，20ms 的窗口在并行负载下会被回收器抢在前面
+	// （实测 10 轮里偶发一次 worker_not_running）。
+	// 末尾的等回收窗口有 5 秒，放宽后仍然覆盖原意。
+	m, cwd := newTestManager(t, func(c *Config) { c.IdleTimeout = 500 * time.Millisecond })
 	ctx := context.Background()
 	w, err := m.Start(ctx, "", cwd)
 	if err != nil {
@@ -421,6 +425,8 @@ func Test重绑定后退出仍会清理注册表(t *testing.T) {
 // 白占 8 MiB。这里用 Allocation 观测实际分配量——不断言具体数字，
 // 只断言它远小于请求上限，否则「分配随文件走」这条约束随时会被改回去。
 func Test读取Bash输出按实际大小分配(t *testing.T) {
+	// 不并行：断言用的是 TotalAlloc 的差值，而 ReadMemStats 是进程级的
+	// ——别的测试同时分配会把差值抬起来，判定随机翻转。
 	m, cwd := newTestManager(t)
 	w, err := m.Start(context.Background(), "", cwd)
 	if err != nil {

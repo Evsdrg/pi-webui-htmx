@@ -105,7 +105,7 @@ func Test配对与建隧道全流程(t *testing.T) {
 	}
 
 	// 本地桥建立主动隧道。
-	tunnel := dialTunnelOrFail(t, srv, "dev-1", deviceToken)
+	tunnel := dialTunnelOrFail(t, s, srv, "dev-1", deviceToken)
 	defer tunnel.CloseNow()
 
 	// 其他用户不得连接该设备。
@@ -244,12 +244,21 @@ func dialTunnel(t *testing.T, srv *httptest.Server, deviceID, token string) (*we
 	return conn, err
 }
 
-func dialTunnelOrFail(t *testing.T, srv *httptest.Server, deviceID, token string) *websocket.Conn {
+func dialTunnelOrFail(t *testing.T, s *Server, srv *httptest.Server, deviceID, token string) *websocket.Conn {
 	t.Helper()
 	conn, err := dialTunnel(t, srv, deviceID, token)
 	if err != nil {
 		t.Fatalf("隧道连接失败: %v", err)
 	}
+	// Dial 成功只说明 WS 握手完成；把隧道注册进 s.tunnels 发生在其后的
+	// 服务端步骤里。不等这一下，紧接着的 HTTP 转发会偶发 device_offline
+	// ——CPU 被其它测试占住时窗口会被放大（实测 10 轮里出现 1 次）。
+	// 设备在线的判定读的正是这张表。
+	testutil.WaitFor(t, "隧道注册进路由表", func() bool {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		return s.tunnels[deviceID] != nil
+	})
 	return conn
 }
 
@@ -295,7 +304,7 @@ func Test撤销后立即中断活跃隧道(t *testing.T) {
 	_, out2 := postJSON(t, srv, "/api/relay/claim", `{"pairingCode":"`+code+`"}`, ut)
 	dt, _ := out2["deviceToken"].(string)
 
-	tunnel := dialTunnelOrFail(t, srv, "dev-1", dt)
+	tunnel := dialTunnelOrFail(t, s, srv, "dev-1", dt)
 	defer tunnel.CloseNow()
 	// 确认隧道已注册。
 	testutil.WaitFor(t, "隧道注册", func() bool { return s.Stats()["tunnels"].(int) == 1 })
@@ -320,7 +329,7 @@ func Test撤销中断该设备的浏览器连接(t *testing.T) {
 	code, _ := out["pairingCode"].(string)
 	_, out2 := postJSON(t, srv, "/api/relay/claim", `{"pairingCode":"`+code+`"}`, ut)
 	dt, _ := out2["deviceToken"].(string)
-	dialTunnelOrFail(t, srv, "dev-1", dt)
+	dialTunnelOrFail(t, s, srv, "dev-1", dt)
 
 	client := dialClientOrFail(t, srv, "dev-1", "tab-1", ut)
 	if client == nil {

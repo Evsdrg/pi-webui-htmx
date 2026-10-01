@@ -180,11 +180,15 @@ htmx 片段替换同样触发清理，不只依赖整页卸载。附件按草稿
 ## 测试与验证
 
 ```bash
-pnpm test         # Vitest（jsdom）
+pnpm test         # Vitest（jsdom），22 个文件约 2 秒
 pnpm typecheck    # tsc --noEmit
 pnpm build        # 产物
 pnpm check        # 契约 + 对比度
 ```
+
+写等待时注意 `vi.waitFor` **默认 50ms 轮询一次**：本仓判断的都是同步 DOM 或
+调用状态，几十处等待累积起来就是几秒的虚耗（实测 workbench 那一处 6.9 秒 → 2.1 秒，
+全部来自把轮询间隔收到 1ms）。文件内的辅助 `waitFor` 已经这么定义，新增用例直接用它。
 
 | 层 | 负责 |
 |---|---|

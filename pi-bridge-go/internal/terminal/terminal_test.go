@@ -3,6 +3,7 @@ package terminal
 import (
 	"context"
 	"regexp"
+	"runtime"
 	"strconv"
 	"strings"
 	"syscall"
@@ -222,3 +223,54 @@ func Test关闭终端回收同组后代(t *testing.T) {
 
 // childPIDPattern 匹配 shell 回显的后代 PID。
 var childPIDPattern = regexp.MustCompile(`CHILD=(\d+)`)
+
+// Test进程退出后排空PTY剩余输出 覆盖一个真实竞态：
+//
+// shell 退出后，负责 Wait 的 goroutine 会关闭 ptmx 并清理订阅；而读取循环
+// 可能还没把 PTY 缓冲里的输出读出来——那一段（最后一条命令的结果）会连同
+// 订阅一起被丢掉，用户看到的是「命令执行了但没有输出」。
+//
+// 用 GOMAXPROCS(1) 固定调度顺序：单核下读取循环更容易输掉这场竞争，
+// 修复前 200 次里失败 88 次；多核下只是概率低，问题同样存在。
+// 该测试因此不加 t.Parallel，并在结束时恢复并行度。
+func Test进程退出后排空PTY剩余输出(t *testing.T) {
+	prev := runtime.GOMAXPROCS(1)
+	defer runtime.GOMAXPROCS(prev)
+
+	m := NewManager(Defaults())
+	defer m.Close()
+	// 失败率达到 44% 时，20 轮里至少命中一次的概率 > 99.99%；
+	// 修好后全部 20 轮都必须收到输出。
+	const rounds = 20
+	for i := 0; i < rounds; i++ {
+		term, err := m.Open(t.TempDir(), "/bin/sh", 80, 24)
+		if err != nil {
+			t.Fatalf("第 %d 轮打开终端失败: %v", i, err)
+		}
+		sub, err := term.Subscribe(64, 1<<20)
+		if err != nil {
+			t.Fatalf("第 %d 轮订阅失败: %v", i, err)
+		}
+		if err := term.Write([]byte("echo drain-marker\nexit\n")); err != nil {
+			t.Fatalf("第 %d 轮写入失败: %v", i, err)
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		got := strings.Builder{}
+		for {
+			chunk, err := sub.Next(ctx)
+			if err != nil {
+				break
+			}
+			got.Write(chunk)
+			if strings.Contains(got.String(), "drain-marker") {
+				break
+			}
+		}
+		cancel()
+		sub.Close()
+		_ = term.ForceClose()
+		if !strings.Contains(got.String(), "drain-marker") {
+			t.Fatalf("第 %d 轮丢掉了退出前的输出（收到 %d 字节: %q）", i, got.Len(), got.String())
+		}
+	}
+}

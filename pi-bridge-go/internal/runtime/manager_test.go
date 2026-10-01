@@ -380,7 +380,10 @@ func Test订阅与补发原子化(t *testing.T) {
 //
 // 窗口只有几微秒，单轮未必命中，因此循环多轮，漏检概率随轮数指数下降。
 func Test补发与实时流无序号缺口(t *testing.T) {
-	m, cwd := newTestManager(t)
+	// 30 轮发布循环在并行负载下会跑过默认的 150ms 空闲回收窗口，
+	// worker 被回收后订阅返回 worker_exited（实测 15 轮里偶发一次）。
+	// 这里只需要 worker 在循环期间活着，回收本身由别的测试覆盖。
+	m, cwd := newTestManager(t, func(c *Config) { c.IdleTimeout = 10 * time.Second })
 	ctx := context.Background()
 	w, err := m.Start(ctx, "", cwd)
 	if err != nil {

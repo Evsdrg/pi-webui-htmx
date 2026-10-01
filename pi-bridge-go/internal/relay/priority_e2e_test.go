@@ -29,7 +29,7 @@ func Test满预算时控制帧等待而不是断连(t *testing.T) {
 	_, out2 := postJSON(t, srv, "/api/relay/claim", `{"pairingCode":"`+code+`"}`, userToken)
 	deviceToken, _ := out2["deviceToken"].(string)
 
-	tunnel := dialTunnelOrFail(t, srv, "dev-1", deviceToken)
+	tunnel := dialTunnelOrFail(t, s, srv, "dev-1", deviceToken)
 	defer tunnel.CloseNow()
 	client := dialClientOrFail(t, srv, "dev-1", "tab-1", userToken)
 	defer client.CloseNow()

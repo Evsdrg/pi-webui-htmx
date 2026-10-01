@@ -68,6 +68,8 @@ func TestBrotliWindowMatchesDefaultOnResponseSizes(t *testing.T) {
 // 单位成本（并发几个请求就留几份）。默认窗口（22）实测约 9.8 MiB，
 // 统一窗口（19）约 2.8 MiB，阈值取 0.6 倍足以分辨，也不受测量噪声影响。
 func TestBrotliPoolWriterFootprint(t *testing.T) {
+	// 不并行：这条断言的是堆常驻量，与别的测试并行时 GC 压力互相干扰，
+	// 测量值会失真（实测并行下判定被翻转）。
 	footprint := func(lg int) float64 {
 		best := 1e9
 		for i := 0; i < 3; i++ {
@@ -114,6 +116,7 @@ func TestBrotliPoolWriterFootprint(t *testing.T) {
 // 用相对时序判定：串行时 N 个任务的总耗时接近 N 倍单次，并发时接近 1 倍。
 // 阈值取 2 倍以容忍调度噪声；单核机器上并行也接近串行，属于可接受的假阴性。
 func TestStaticAssetCompressionIsSerialized(t *testing.T) {
+	// 不并行：这条靠相对时序判断串行化，必须独占运行。
 	sample := sampleFragment(256<<10, 23)
 	start := time.Now()
 	if _, err := compressBytes(sample, EncBrotli); err != nil {
@@ -152,54 +155,29 @@ func TestStaticAssetCompressionIsSerialized(t *testing.T) {
 	}
 }
 
-// 大资源的压缩档位必须比 HQ 显著省内存，而小资源不受影响。
+// 静态资源按大小选压缩档位：小资源（首屏入口 58 KB）走最高压缩比，
+// 大 chunk（≥256 KiB）走低档。
 //
-// 阈值分档的理由见 staticQuality 的注释：大 chunk 是一次性下载 + 永久缓存，
-// 多出的流量只付一次，而内存峰值在每次冷启动后首次加载时都会出现。
-func TestStaticQualityTradesMemoryForOneTimeTraffic(t *testing.T) {
-	if got := staticQuality(58 << 10); got != brotli.BestCompression {
-		t.Errorf("首屏入口（58 KB）档位为 %d，应保持最高压缩比", got)
+// 为什么这样分，见 staticQuality 的注释（HQ 压 1.4 MB chunk 的堆峰值实测
+// 38 MiB，quality 7 只有 18 MiB，代价是输出 +13%）。这里只锁住**选择规则**
+// ——档位本身由那个纯函数决定，改错立刻红，不需要在测试里重复测内存峰值
+// （那是机器相关的测量，既慢又不稳）。
+func Test静态资源按大小选压缩档位(t *testing.T) {
+	cases := []struct {
+		name string
+		size int
+		want int
+	}{
+		{"首屏入口 58 KB → 最高压缩比", 58 << 10, brotli.BestCompression},
+		{"分界点下沿 255 KB → 最高压缩比", largeAssetBytes - 1, brotli.BestCompression},
+		{"分界点 256 KB → 低档", largeAssetBytes, brotliLowQuality},
+		{"按需加载的 1 MB chunk → 低档", 1 << 20, brotliLowQuality},
 	}
-	if got := staticQuality(1 << 20); got != brotliLowQuality {
-		t.Errorf("大 chunk（1 MB）档位为 %d，应为 %d", got, brotliLowQuality)
-	}
-
-	// 同一份大样本：低档位的堆峰值应显著更低（实测约 18 与 38 MiB）。
-	raw := sampleFragment(1400<<10, 31)
-	peak := func(quality int) float64 {
-		runtime.GC()
-		runtime.GC()
-		var ms runtime.MemStats
-		runtime.ReadMemStats(&ms)
-		base := ms.HeapAlloc
-		observed := uint64(0)
-		var out bytes.Buffer
-		w := newBrotliWriter(&out, quality)
-		chunk := 64 << 10
-		for i := 0; i < len(raw); i += chunk {
-			end := i + chunk
-			if end > len(raw) {
-				end = len(raw)
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := staticQuality(c.size); got != c.want {
+				t.Errorf("staticQuality(%d) = %d，应为 %d", c.size, got, c.want)
 			}
-			if _, err := w.Write(raw[i:end]); err != nil {
-				t.Fatal(err)
-			}
-			runtime.ReadMemStats(&ms)
-			if ms.HeapAlloc > observed {
-				observed = ms.HeapAlloc
-			}
-		}
-		if err := w.Close(); err != nil {
-			t.Fatal(err)
-		}
-		return float64(observed-base) / (1 << 20)
-	}
-	low := peak(brotliLowQuality)
-	hq := peak(brotli.BestCompression)
-	if testing.Verbose() {
-		fmt.Printf("1.4 MB 样本峰值：quality=%d → %.1f MiB，HQ → %.1f MiB\n", brotliLowQuality, low, hq)
-	}
-	if low > hq*0.75 {
-		t.Errorf("低档位峰值 %.1f MiB 未明显低于 HQ 的 %.1f MiB，分档失去意义", low, hq)
+		})
 	}
 }
