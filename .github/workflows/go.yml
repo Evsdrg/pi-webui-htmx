@@ -22,33 +22,44 @@ jobs:
         with:
           go-version-file: pi-bridge-go/go.mod
       # 跨目录契约测试要读 UI 包（模板、manifest、dist），所以先构建前端。
-      # 安装走与 UI 检查同一个脚本（重试 + 失败注解）。
+      # 安装走与 UI 检查同一个脚本（网络重试 + 失败注解）。
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version: '26'
       - name: 构建 UI 包（跨目录测试需要）
         working-directory: pi-webui-htmx
         run: |
+          set -o pipefail
           bash ../.github/scripts/install-deps.sh
-          pnpm build
+          pnpm build 2>&1 | tee /tmp/build-ui.log
       - name: 格式与 vet
         working-directory: pi-bridge-go
         run: |
-          test -z "$(gofmt -l .)"
-          go vet ./...
+          set -o pipefail
+          {
+            if [ -n "$(gofmt -l .)" ]; then
+              echo '以下文件没有格式化：'
+              gofmt -l .
+              exit 1
+            fi
+            go vet ./...
+          } 2>&1 | tee /tmp/vet.log
       # 固定版本：2025 及更早的 staticcheck 读不了 Go 1.27 的导出数据
       # （报 “export data version 4 is greater than maximum supported version 2”）。
       # 规则与排除项见 pi-bridge-go/staticcheck.conf。
       - name: staticcheck
         working-directory: pi-bridge-go
         run: |
-          go install honnef.co/go/tools/cmd/staticcheck@v0.8.1
-          "$(go env GOPATH)/bin/staticcheck" ./...
+          set -o pipefail
+          go install honnef.co/go/tools/cmd/staticcheck@v0.8.1 2>&1 | tee /tmp/staticcheck.log
+          "$(go env GOPATH)/bin/staticcheck" ./... 2>&1 | tee -a /tmp/staticcheck.log
       - name: 竞态测试（含跨目录契约）
         working-directory: pi-bridge-go
         env:
           PI_WEBUI_DIR: ../pi-webui-htmx
-        run: go test -race -count=1 ./...
+        run: |
+          set -o pipefail
+          go test -race -count=1 ./... 2>&1 | tee /tmp/race.log
       # UI 包在 CI 里必定存在，因此**不允许**有跨目录测试被跳过：
       # 一旦路径解析或构建产物出问题而测试静默跳过，上面的“全绿”就是假的。
       - name: 确认没有测试被跳过
@@ -56,9 +67,27 @@ jobs:
         env:
           PI_WEBUI_DIR: ../pi-webui-htmx
         run: |
-          go test -v -count=1 ./internal/transport/ ./internal/presentation/ > /tmp/skipcheck.log
+          set -o pipefail
+          go test -v -count=1 ./internal/transport/ ./internal/presentation/ 2>&1 | tee /tmp/skipcheck.log
           if grep -q '^--- SKIP' /tmp/skipcheck.log; then
             echo '以下测试被跳过，但 CI 环境应当全部执行：' >&2
             grep '^--- SKIP' /tmp/skipcheck.log >&2
             exit 1
           fi
+      # 每个会失败的步骤都把输出留在 /tmp，这里汇总成一条 error 注解。
+      # 原因：失败详情在 Actions 日志页里，而那个页面需要登录才能看；
+      # 注解是公开可读的，出问题时不必等人贴日志，也不必靠猜。
+      - name: 失败诊断
+        if: failure()
+        run: |
+          : > /tmp/diag.txt
+          for f in /tmp/deps-install.log /tmp/build-ui.log /tmp/vet.log \
+                   /tmp/staticcheck.log /tmp/race.log /tmp/skipcheck.log; do
+            [ -s "$f" ] || continue
+            echo "=== $f（尾部）" >> /tmp/diag.txt
+            tail -c 500 "$f" >> /tmp/diag.txt
+            echo >> /tmp/diag.txt
+          done
+          [ -s /tmp/diag.txt ] || echo '（各步骤都没留下日志，失败发生在更早的阶段）' >> /tmp/diag.txt
+          sed ':a;N;$!ba;s/%/%25/g;s/\n/%0A/g' /tmp/diag.txt > /tmp/ann.txt
+          echo "::error title=Go 检查失败详情::$(tail -c 3000 /tmp/ann.txt)"
