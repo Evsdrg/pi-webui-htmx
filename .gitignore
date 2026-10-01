@@ -1,0 +1,16 @@
+# 依赖与产物（两个子目录各有自己的 .gitignore，此处只放仓库根级规则）
+node_modules/
+dist/
+.next/
+*.log
+.DS_Store
+*.tmp
+
+# 运行期状态与本地配置
+/deploy/
+/backup-*/
+
+# 编辑器
+.idea/
+.vscode/
+*.swp
