@@ -669,8 +669,10 @@ export class Workbench {
     const input = el<HTMLTextAreaElement>('prompt'); const message = input.value.trim();
     if (!message) return;
     if (this.sending) {
-      // 发送进行中再次点击：不能静默吞掉——用户无法区分「上一跳仍在发」与
-      // 「点击没反应」，从外部也无从诊断。提示一下，输入内容保持原样。
+      // 发送进行中再次提交：不能静默吞掉——用户无法区分「上一条仍在发」与
+      // 「点击没反应」。注意可达路径是**回车提交**：disabled 的按钮不会派发
+      // click，但表单提交不受按钮禁用限制，所以「灰着按钮再敲回车」会走到这里。
+      // 输入内容保持原样，用户不会丢掉刚写的东西。
       this.notify('上一条消息仍在发送中，请稍候。', 'warning');
       return;
     }
