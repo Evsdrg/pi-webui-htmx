@@ -32,11 +32,39 @@ type SearchLimits struct {
 	LineBytes    int
 	MaxMatches   int
 	MaxSnippet   int
+	// MaxTotalBytes 是一次搜索累计读取的字节上限。
+	//
+	// MaxFileBytes 管单个文件，但它管不住「很多个大文件」：
+	// MaxFiles(200) × MaxFileBytes(256 MiB) 的理论最坏是几十 GB。
+	// 命中足够时搜索会提前停（MaxMatches），但罕见词必须读完所有候选，
+	// 所以需要一道按总量计的兕底。
+	MaxTotalBytes int64
+	// Cwd 非空时只搜该工作区的会话。
+	//
+	// 为什么要跟列表筛选一致：用户先筛到某个工作区、再在搜索框输入时，
+	// 他会以为搜的就是眼前这一批；返回别的项目的命中会很难理解。
+	Cwd string
 }
 
 // DefaultSearchLimits 给出默认搜索限额。
+//
+// MaxFileBytes 为什么从 16 MiB 提到与会话上限（256 MiB）一致：
+// 两个限制都在回答「这个文件能不能用」，给出不同答案本身就是缺陷——
+// 实测本机 86.9 MB 的会话在列表里能打开、在搜索里却完全搜不到
+// （默认限额下命中数为 0，而它就在那里）。同一个文件不该有两种命运。
+//
+// 代价（实测，真实记录构成的会话）：
+//
+//	常词（提前达 MaxMatches）  33 ms / 分配 10 MiB
+//	罕见词（读完全部候选）    652 ms / 分配 141 MiB（共 130 MB 文件）
+//
+// 652 ms 对一次用户主动触发的搜索是可接受的（命令超时预算是 1 分钟），
+// 而 MaxTotalBytes 把「装满大文件的目录」的最坏情况拦在 512 MiB 以内。
 func DefaultSearchLimits() SearchLimits {
-	return SearchLimits{MaxFiles: 200, MaxFileBytes: 16 << 20, LineBytes: 1 << 20, MaxMatches: 100, MaxSnippet: 240}
+	return SearchLimits{
+		MaxFiles: 200, MaxFileBytes: 256 << 20, LineBytes: 1 << 20,
+		MaxMatches: 100, MaxSnippet: 240, MaxTotalBytes: 512 << 20,
+	}
 }
 
 // Match 是一条搜索结果。
@@ -80,14 +108,36 @@ func (s *Store) Search(ctx context.Context, query string, limits SearchLimits) (
 	}
 	out := SearchResult{Matches: []Match{}}
 	scanned := 0
+	var totalBytes int64
+	// 按工作区筛选时，先向索引要一份该工作区的文件集合。
+	// 索引是现成的（列表与历史都靠它），这里只是取它的投影，
+	// 不在搜索路径上再解析一遍会话头部。
+	var allowed map[string]bool
+	if cwd := normalizeCwd(limits.Cwd); cwd != "" {
+		paths, err := s.index.PathsForCwd(ctx, cwd)
+		if err != nil {
+			return SearchResult{}, err
+		}
+		allowed = paths
+	}
 	walkErr := walkDir(ctx, s.root, ".", 0, func(path string, size int64, _ time.Time) error {
 		if err := ctx.Err(); err != nil {
 			return err
+		}
+		if allowed != nil && !allowed[path] {
+			return nil
 		}
 		if len(out.Matches) >= limits.MaxMatches || scanned >= limits.MaxFiles {
 			out.Truncated = true
 			return errStopWalk
 		}
+		// 总字节预算：候选文件无论被搜还是被跳过，都先记账。
+		// 否则一个装满大文件的目录会先逐个 stat 到 MaxFiles 才停（同 B43 的思路）。
+		if limits.MaxTotalBytes > 0 && totalBytes+size > limits.MaxTotalBytes {
+			out.Truncated = true
+			return errStopWalk
+		}
+		totalBytes += size
 		if size > limits.MaxFileBytes {
 			// 跳过的超大文件也占访问预算：否则一个装满大文件的目录
 			// 会把每个都 stat 一遍才停（B43）。

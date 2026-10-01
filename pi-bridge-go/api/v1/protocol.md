@@ -11,7 +11,7 @@
 | `GET /healthz` | 健康检查，不返回模型、路径或进程信息 |
 | `POST /api/v1/auth` | Bearer 换 Cookie |
 | `GET /api/v1/capabilities` | 版本、方法、能力、限额；限额来自运行时配置（终端数量/空闲秒数跟随 `--max-terminals`/`--terminal-idle`），不再有写死的阶段字段 |
-| `GET /api/v1/sessions?limit=50&offset=0` | 磁盘会话目录，不启动 worker |
+| `GET /api/v1/sessions?limit=50&offset=0&cwd=/path` | 磁盘会话目录，不启动 worker；`cwd` 非空时只返回该工作区的会话，并由 `cwds` 给出可选工作区与计数 |
 | `GET /api/v1/sessions/{id}/history?limit=50&before=ENTRY&leafId=LEAF` | 所选持久分支历史，不启动 worker |
 | `GET /api/v1/ws` | 文本 JSON 命令/响应/事件 |
 | `/`、`/assets/*`、`/ui/*` | 配置 `--ui-dir` 后的模板、资产和片段 |
@@ -149,6 +149,7 @@ Pi 原事件通过 `pi.event` 传递并绑定基线版本；不是跨 agent 通�
 - ID 通过受管根下的文件头索引解析；列表/普通历史只读、不启动 Pi，不重写/迁移 JSONL。
 - 目标校验包括完整坏行、重复 ID、断链、循环；仅忽略尾部半行。扫描缓存的命中以文件身份校验（大小/时间戳与平台可用的 inode/ctime），快路径同样做结构校验。
 - `sessions.search` 返回 `{matches:[{sessionId,entryId,title,cwd,role,snippet,timestamp}],scanned,truncated}`；标题优先取本次扫描中的 `session_info`，否则退回首条用户消息，不为匹配项额外重扫文件。UI 用 `entryId` 加载截至命中位置的只读历史，并明确提示可返回当前分支。搜索还需受命中、访问文件、目录、字节、时间与并发上限约束；客户端传入的 `limit` 只能降低服务端上限。
+- 搜索与列表共享工作区筛选：两者都接受 `cwd`，取值必须是会话的真实 `cwd`（客户端不得自行拼前缀）。筛选在分页之前生效，`hasMore`/`offset` 都相对于筛选后的集合。单文件搜索上限与会话读取上限一致（256 MiB）——实测本机最大的会话 86.9 MB 在旧的 16 MiB 搜索上限下**完全搜不到**（命中 0），而它在列表里是能打开的；同一个文件不该在「能不能看」与「能不能搜」上得到两个答案。代价是罕见词需要读完所有候选：实测 130 MB 候选 652 ms，因此另有总字节预算（512 MiB）兜底，超预算时置 `truncated`。
 - 删除前先协调活跃 worker；trash 存在但删除失败时返回错误，不降级为永久删除。永久删除需要显式 force 选项。
 
 ### 工具预设与思考强度
@@ -266,6 +267,8 @@ GET /ui/stats?sessionId=ID
 ## 6. 限额、能力与可观测性
 
 当前默认：WS 请求 1 MiB、响应 512 KiB；Pi JSONL 8 MiB；单事件 256 KiB。这些边界不同，不能用一个「支持 8 MiB 图片」的 UI 数字代替完整链路计算。
+
+会话读取另有两个上限：单文件 256 MiB（超过则 `limit_exceeded`，错误文本给出实际大小与上限）、索引条目 100000 条。单文件上限按实测选定：90 MB 会话冷扫描 125 ms（堆 +4.6 MiB），262 MB 冷扫描 393 ms；命中扫描缓存后首页是 200 µs。更早的 64 MiB 上限会把本机真实存在的会话（86.9 MB）整个挡在外面，用户只能看到一句「超过体积上限」，而代价仅为几百毫秒。
 
 目标由同一配置/方法描述生成：实际限额、方法期限、只读/副作用分类、存储健康与保留窗口、可用大内容接口。每连接/全局/每主体分别限额，HTTP 与 tunnel 不得绕开配额。
 

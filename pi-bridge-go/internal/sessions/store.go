@@ -24,7 +24,19 @@ type Limits struct {
 }
 
 // DefaultLimits 给出默认体积上限：文件、单行、单页、条目数与会话文件数。
-func DefaultLimits() Limits { return Limits{64 << 20, 8 << 20, 2 << 20, 100000, 10000} }
+//
+// FileBytes 为什么是 256 MiB：它决定「多大的会话还能在网页里打开」，所以
+// 取大小取决于真实会话的分布与全扫的开销。实测（真实记录构成的会话，线性
+// 可外推）：
+//
+//	 90 MB / 24489 条   冷扫描 125 ms，分配 8.5 MiB，堆 +4.6 MiB
+//	262 MB / 73119 条   冷扫描 393 ms，分配 26.6 MiB，堆 +17.3 MiB
+//
+// 扫描只在首次打开时发生：命中扫描缓存后首页是 200 µs（见 cache.go）。
+// 本机实际最大的会话是 86.8 MB（跑了几周的 CLI 会话）——原先的 64 MiB
+// 上限把它挡在外面，用户点开只看到一句「超过体积上限」，完全无法浏览；
+// 而扫描它只花 125 ms，属于得不偿失的过度保守。
+func DefaultLimits() Limits { return Limits{256 << 20, 8 << 20, 2 << 20, 100000, 10000} }
 
 // Store 通过 os.Root 访问受管会话目录，防止路径穿越与符号链接逃逸。
 // 列表与查找走内存索引，历史读取按需解析单个文件。
@@ -38,6 +50,31 @@ type Store struct {
 	// scan 缓存最近一次全文件扫描的结果，见 scanCache 的说明。
 	// 翻页时文件不变，可把约八成的解析开销省掉。
 	scan scanCache
+}
+
+// fileTooLargeError 报出实际大小与上限。
+//
+// 只说「超过体积上限」用户无法行动：不知道自己离上限有多远、也无从判断
+// 是不是换个会话就能看。带上两个数字后，至少能看出是「略微超一点」还是
+// 「大了几十倍」。错误码保持 limit_exceeded 不变，只有文案变具体。
+func fileTooLargeError(kind string, size, limit int64) error {
+	return protocol.E("limit_exceeded", fmt.Sprintf("%s %s 超过 %s 上限", kind, humanBytes(size), humanBytes(limit)))
+}
+
+// humanBytes 把字节数写成便于阅读的形式，保留一位小数。
+func humanBytes(n int64) string {
+	const unit = 1024
+	if n < unit {
+		return fmt.Sprintf("%d B", n)
+	}
+	v := float64(n)
+	for _, suffix := range []string{"KiB", "MiB", "GiB"} {
+		v /= unit
+		if v < unit {
+			return fmt.Sprintf("%.1f %s", v, suffix)
+		}
+	}
+	return fmt.Sprintf("%.1f TiB", v/unit)
 }
 
 // Header 是会话首条记录的解析结果，path 不对外暴露。
@@ -177,10 +214,26 @@ type Page struct {
 }
 
 // Listing 是会话目录分页结果。
+// Listing 是一页会话列表。
+//
+// Cwd 与 Cwds 服务于「按工作区筛选」：前者回显当前筛选（空串表示未筛选），
+// 后者给出已知工作区及各自的会话数，用来渲染下拉项。两者都由这里返回，
+// 而不是让前端从已渲染的行里自己收集——那样只能看到当前页的工作区，
+// 第二页、筛选后的列表都会给出不完整的候选。
 type Listing struct {
-	Items     []Header `json:"items"`
-	HasMore   bool     `json:"hasMore"`
-	Truncated bool     `json:"truncated"`
+	Items     []Header   `json:"items"`
+	HasMore   bool       `json:"hasMore"`
+	Truncated bool       `json:"truncated"`
+	Cwd       string     `json:"cwd,omitempty"`
+	Cwds      []CwdCount `json:"cwds,omitempty"`
+}
+
+// CwdCount 是一个工作区及其会话数。
+type CwdCount struct {
+	Cwd   string `json:"cwd"`
+	Count int    `json:"count"`
+	// Filtered 标记这是当前选中的工作区，模板据此决定 selected。
+	Filtered bool `json:"filtered,omitempty"`
 }
 
 func New(dir string, p *workspace.Policy, limits Limits) (*Store, error) {
@@ -223,11 +276,16 @@ func ValidID(id string) bool {
 
 // List 按最近修改时间倒序返回会话目录。
 // 命中索引缓存时不做任何磁盘遍历。
-func (s *Store) List(ctx context.Context, offset, limit int) (Listing, error) {
+// List 返回一页会话；cwd 非空时只返回该工作区的会话。
+//
+// 筛选发生在分页之前，所以 offset/HasMore 都是针对筛选后的集合——
+// 否则「加载更多」会在筛选后重复或跳过条目。
+func (s *Store) List(ctx context.Context, offset, limit int, cwd string) (Listing, error) {
 	if offset < 0 || limit < 1 || limit > 200 {
 		return Listing{}, protocol.E("invalid_params", "分页参数无效")
 	}
-	items, hasMore, truncated, err := s.index.Page(ctx, offset, limit)
+	cwd = normalizeCwd(cwd)
+	items, hasMore, truncated, err := s.index.Page(ctx, offset, limit, cwd)
 	if err != nil {
 		return Listing{}, err
 	}
@@ -238,7 +296,22 @@ func (s *Store) List(ctx context.Context, offset, limit int) (Listing, error) {
 			Timestamp: e.timestamp, Modified: e.modified, path: e.path,
 		})
 	}
-	return Listing{Items: out, HasMore: hasMore, Truncated: truncated}, nil
+	// 工作区清单在筛选之后统计：用户看到的计数应与「点下去会得到多少条」一致。
+	cwds, err := s.index.Workspaces(ctx)
+	if err != nil {
+		return Listing{}, err
+	}
+	return Listing{Items: out, HasMore: hasMore, Truncated: truncated, Cwd: cwd, Cwds: cwds}, nil
+}
+
+// normalizeCwd 把工作区路径归一化成可比较的形式。
+// 会话里存的是 Pi 写入的绝对路径，一般不带尾斜杠，但手改过的配置可能带。
+func normalizeCwd(cwd string) string {
+	cwd = strings.TrimSpace(cwd)
+	if cwd == "" || cwd == "/" {
+		return cwd
+	}
+	return strings.TrimRight(cwd, "/")
 }
 
 // Find 按会话 ID 查找会话元数据。
@@ -306,7 +379,7 @@ func (s *Store) History(ctx context.Context, id, leaf, before string, limit int)
 		return Page{}, err
 	}
 	if !st.Mode().IsRegular() || st.Size() > s.limits.FileBytes {
-		return Page{}, protocol.E("limit_exceeded", "历史文件超过体积上限")
+		return Page{}, fileTooLargeError("历史文件", st.Size(), s.limits.FileBytes)
 	}
 	// 先查缓存：翻页与切标签时文件不变，可省掉整个解析阶段。
 	// 失效判定见 scanCache 的说明——size、mtime 与文件身份都要一致。

@@ -12,7 +12,7 @@ func Test列表从持久记录读取最新会话名(t *testing.T) {
 	cwd := t.TempDir()
 	store, dir := newStore(t, cwd)
 	writeSession(t, dir, "named", cwd, entry("u1", ""), `{"type":"session_info","id":"n1","name":"设计评审"}`)
-	rows, _, _, err := store.index.Page(context.Background(), 0, 10)
+	rows, _, _, err := store.index.Page(context.Background(), 0, 10, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -28,7 +28,7 @@ func Test列表从持久记录读取最新会话名(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	rows, _, _, err = store.index.Page(context.Background(), 0, 10)
+	rows, _, _, err = store.index.Page(context.Background(), 0, 10, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -50,7 +50,7 @@ func Test无名称时采用首条用户文本且忽略末尾半行(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	rows, _, _, err := store.index.Page(context.Background(), 0, 10)
+	rows, _, _, err := store.index.Page(context.Background(), 0, 10, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -76,7 +76,7 @@ func Test列表与查找透传会话名(t *testing.T) {
 	store, dir := newStore(t, cwd)
 	writeSession(t, dir, "named", cwd, entry("u1", ""), `{"type":"session_info","id":"n1","name":"透传测试"}`)
 	writeSession(t, dir, "plain", cwd, `{"type":"message","id":"u1","parentId":null,"message":{"role":"user","content":"无名称时取首条消息"}}`)
-	listing, err := store.List(context.Background(), 0, 10)
+	listing, err := store.List(context.Background(), 0, 10, "")
 	if err != nil {
 		t.Fatal(err)
 	}

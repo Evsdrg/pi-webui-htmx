@@ -430,7 +430,8 @@ func (s *Server) serveUIFragments(w http.ResponseWriter, r *http.Request, encodi
 			if err != nil {
 				return "", err
 			}
-			list, err := s.store.List(r.Context(), offset, limit)
+			// cwd 是按工作区筛选：空串表示不筛。
+			list, err := s.store.List(r.Context(), offset, limit, r.URL.Query().Get("cwd"))
 			if err != nil {
 				return "", err
 			}
@@ -578,7 +579,11 @@ func (s *Server) serveUIFragments(w http.ResponseWriter, r *http.Request, encodi
 			query := r.URL.Query().Get("q")
 			var hits []presentation.SearchHit
 			if query != "" {
-				result, err := s.store.Search(r.Context(), query, sessions.DefaultSearchLimits())
+				// 搜索跟随当前工作区筛选：用户筛到某个工作区后在
+				// 搜索框输入时，期待的就是在眼前这批里搜。
+				limits := sessions.DefaultSearchLimits()
+				limits.Cwd = r.URL.Query().Get("cwd")
+				result, err := s.store.Search(r.Context(), query, limits)
 				if err != nil {
 					return "", err
 				}
@@ -884,7 +889,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			writeError(w, encoding, 400, err)
 			return
 		}
-		list, err := s.store.List(r.Context(), offset, limit)
+		list, err := s.store.List(r.Context(), offset, limit, r.URL.Query().Get("cwd"))
 		respond(w, encoding, list, err)
 	case "/api/v1/metrics":
 		sessionStats := s.store.Index().Stats()

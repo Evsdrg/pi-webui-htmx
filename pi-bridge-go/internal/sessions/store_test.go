@@ -221,7 +221,7 @@ func TestList隐藏越界工作区会话(t *testing.T) {
 	store, sessionDir := newStore(t, cwd)
 	writeSession(t, sessionDir, "mine", cwd, entry("a", ""))
 	writeSession(t, sessionDir, "theirs", other, entry("a", ""))
-	list, err := store.List(context.Background(), 0, 50)
+	list, err := store.List(context.Background(), 0, 50, "")
 	if err != nil {
 		t.Fatalf("列表失败: %v", err)
 	}

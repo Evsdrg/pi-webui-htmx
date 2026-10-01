@@ -64,6 +64,10 @@ a { color:var(--accent); }
 kbd { font-size:10px; color:var(--text-dim); margin-left:auto; }
 .search-box { display:flex; align-items:center; gap:8px; border:1px solid var(--border); background:var(--bg); border-radius:8px; padding:6px 9px; margin:12px 0 18px; }
 .search-box input { width:100%; border:0; outline:0; padding:0; background:transparent; font-size:12px; }
+/* 按工作区筛选：与搜索框同样的外观，就在它下面。
+   侧栏只有 260px，选项文本已在 Go 侧缩成短名（cwdLabels），完整路径在 title 里。 */
+.cwd-filter { display:block; width:100%; margin:-10px 0 14px; padding:6px 9px; font-size:12px; color:var(--text-muted); background:var(--bg); border:1px solid var(--border); border-radius:8px; text-overflow:ellipsis; }
+.cwd-filter:hover { background:var(--bg-hover); }
 .section-label { display:flex; align-items:center; padding:0 8px 8px; font-size:11px; color:var(--text-muted); }
 .section-label .icon-btn { margin-left:auto; }
 .session-item { display:flex; flex-direction:column; width:100%; padding:9px 10px; margin-bottom:3px; border:0; border-radius:8px; text-align:left; text-decoration:none; color:var(--text); background:transparent; }

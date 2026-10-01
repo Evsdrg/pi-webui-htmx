@@ -91,7 +91,7 @@ func Test标题跨块边界仍取最新重命名(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	rows, _, _, err := store.index.Page(context.Background(), 0, 10)
+	rows, _, _, err := store.index.Page(context.Background(), 0, 10, "")
 	if err != nil {
 		t.Fatal(err)
 	}

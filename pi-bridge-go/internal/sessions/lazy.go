@@ -203,7 +203,7 @@ func (s *Store) rawEntry(ctx context.Context, id, entryID string) (json.RawMessa
 		return nil, "", protocol.E("pi_error", "无法读取会话文件")
 	}
 	if !st.Mode().IsRegular() || st.Size() > s.limits.FileBytes {
-		return nil, "", protocol.E("limit_exceeded", "历史文件超过体积上限")
+		return nil, "", fileTooLargeError("历史文件", st.Size(), s.limits.FileBytes)
 	}
 	// 与 History 用同一个缓存键（绝对路径），两边才能互相命中。
 	nodes, _, err := s.scanNodes(ctx, h, f, st.Size(), st.ModTime().UnixNano())

@@ -24,7 +24,7 @@ func Test正文损坏的完整记录被拒绝(t *testing.T) {
 		t.Fatal(err)
 	}
 	ctx := context.Background()
-	if _, err := store.List(ctx, 0, 10); err != nil {
+	if _, err := store.List(ctx, 0, 10, ""); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := store.History(ctx, "broken", "", "", 1); err == nil {
@@ -45,7 +45,7 @@ func Test合法记录不被配平校验误伤(t *testing.T) {
 		t.Fatal(err)
 	}
 	ctx := context.Background()
-	if _, err := store.List(ctx, 0, 10); err != nil {
+	if _, err := store.List(ctx, 0, 10, ""); err != nil {
 		t.Fatal(err)
 	}
 	page, err := store.History(ctx, "ok", "", "", 50)

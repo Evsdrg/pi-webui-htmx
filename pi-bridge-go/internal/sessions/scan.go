@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 
@@ -35,7 +36,8 @@ func (s *Store) scanFile(ctx context.Context, f *os.File, size int64, id, cwd st
 			break
 		}
 		if e != nil {
-			return nil, "", protocol.E("limit_exceeded", "历史记录超过体积上限")
+			return nil, "", protocol.E("limit_exceeded",
+				fmt.Sprintf("历史记录超过单行 %s 上限", humanBytes(int64(s.limits.LineBytes))))
 		}
 		if !headerSeen {
 			var current Header
@@ -83,7 +85,8 @@ func (s *Store) scanFile(ctx context.Context, f *os.File, size int64, id, cwd st
 				}
 			}
 			if len(nodes) >= s.limits.Entries {
-				return nil, "", protocol.E("limit_exceeded", "历史索引条目数超过上限")
+				return nil, "", protocol.E("limit_exceeded",
+					fmt.Sprintf("历史条目数超过 %d 条上限", s.limits.Entries))
 			}
 			modelID := ""
 			if parent != "" {
@@ -117,7 +120,8 @@ func (s *Store) scanFile(ctx context.Context, f *os.File, size int64, id, cwd st
 			}
 		}
 		if len(nodes) >= s.limits.Entries {
-			return nil, "", protocol.E("limit_exceeded", "历史索引条目数超过上限")
+			return nil, "", protocol.E("limit_exceeded",
+				fmt.Sprintf("历史条目数超过 %d 条上限", s.limits.Entries))
 		}
 		modelID := ""
 		if parent != "" {

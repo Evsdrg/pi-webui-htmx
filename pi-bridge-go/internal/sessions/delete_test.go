@@ -13,7 +13,7 @@ func TestDelete删除会话并刷新索引(t *testing.T) {
 	store, sessionDir := newStore(t, cwd)
 	writeNested(t, sessionDir, cwd, "del-1", time.Now())
 	ctx := context.Background()
-	if _, err := store.List(ctx, 0, 10); err != nil {
+	if _, err := store.List(ctx, 0, 10, ""); err != nil {
 		t.Fatal(err)
 	}
 	out, err := store.Delete(ctx, "del-1")
@@ -59,7 +59,7 @@ func TestTrash失败不降级为永久删除(t *testing.T) {
 	cwd := t.TempDir()
 	store, sessionDir := newStore(t, cwd)
 	writeNested(t, sessionDir, cwd, "sess-trash", time.Now())
-	if _, err := store.List(context.Background(), 0, 10); err != nil {
+	if _, err := store.List(context.Background(), 0, 10, ""); err != nil {
 		t.Fatal(err)
 	}
 	// 用一个必定失败的假 trash 占据 PATH 前面的位置。
@@ -89,7 +89,7 @@ func Test没有trash时才真正删除(t *testing.T) {
 	cwd := t.TempDir()
 	store, sessionDir := newStore(t, cwd)
 	writeNested(t, sessionDir, cwd, "sess-notrash", time.Now())
-	if _, err := store.List(context.Background(), 0, 10); err != nil {
+	if _, err := store.List(context.Background(), 0, 10, ""); err != nil {
 		t.Fatal(err)
 	}
 	// 指向一个空的 bin 目录，确保找不到 trash。

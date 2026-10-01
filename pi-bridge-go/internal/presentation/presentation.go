@@ -443,6 +443,21 @@ type SessionsData struct {
 	Selected   string
 	HasMore    bool
 	NextOffset int
+	// Cwd 是当前筛选的工作区（空串=未筛），Cwds 是可选工作区。
+	// 两者都喂给模板：筛选控件由桥渲染，前端不自建 options。
+	Cwd  string
+	Cwds []CwdOption
+}
+
+// CwdOption 是工作区下拉里的一项。
+type CwdOption struct {
+	Cwd      string
+	Count    int
+	Selected bool
+	// Label 是下拉里显示的短名。完整路径在 option 的 title 属性里，
+	// 鼠标悬停可看——只有 260px 宽的侧栏放不下完整路径，
+	// 而 option 文本不像普通元素那样能靠 CSS 截断。
+	Label string
 }
 
 // RenderSessions 渲染侧栏会话列表。
@@ -461,10 +476,61 @@ func (r *Renderer) RenderSessionsPage(list sessions.Listing, selected string, of
 			Modified: h.Modified.Local().Format("01-02 15:04"),
 		})
 	}
+	cwds := make([]CwdOption, 0, len(list.Cwds))
+	labels := cwdLabels(list.Cwds)
+	for i, c := range list.Cwds {
+		cwds = append(cwds, CwdOption{Cwd: c.Cwd, Count: c.Count, Selected: c.Cwd == list.Cwd, Label: labels[i]})
+	}
 	return r.execute("sessions.html", SessionsData{
 		Items: items, Selected: selected, HasMore: list.HasMore,
 		NextOffset: offset + len(list.Items),
+		Cwd:        list.Cwd, Cwds: cwds,
 	})
+}
+
+// cwdLabels 给出每个工作区在下拉里的短名。
+//
+// 做法：只看末段会撞名（不同父目录下的同名项目），看全路径又太长。
+// 这里剪掉所有工作区的**公共目录前缀**（按路径段比较，不是字符串前缀——
+// /a/pi 与 /a/pi-extra 的字符串公共前缀是 "pi"，但作为路径段并不共享）。
+// 剪完之后各名字天然不重复，因为最长公共目录前缀之后的第一个段就已经不同。
+// 只有一个工作区时公共前缀就是它自己，此时退回末段，不要给出空名字。
+func cwdLabels(cwds []sessions.CwdCount) []string {
+	out := make([]string, len(cwds))
+	if len(cwds) == 0 {
+		return out
+	}
+	segs := make([][]string, len(cwds))
+	for i, c := range cwds {
+		segs[i] = strings.Split(strings.Trim(c.Cwd, "/"), "/")
+	}
+	common := 0
+	for {
+		if common >= len(segs[0]) {
+			break
+		}
+		s := segs[0][common]
+		same := true
+		for _, sg := range segs[1:] {
+			if common >= len(sg) || sg[common] != s {
+				same = false
+				break
+			}
+		}
+		if !same {
+			break
+		}
+		common++
+	}
+	for i := range segs {
+		// 至少保留末段：全部剪掉会得到空标签。
+		if common >= len(segs[i]) {
+			out[i] = segs[i][len(segs[i])-1]
+			continue
+		}
+		out[i] = strings.Join(segs[i][common:], "/")
+	}
+	return out
 }
 
 func sessionTitle(h sessions.Header) string {

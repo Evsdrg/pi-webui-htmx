@@ -61,7 +61,7 @@ func (s *Store) ExportDocument(ctx context.Context, id string, limits ExportLimi
 		return ExportDocument{}, protocol.E("pi_error", "无法读取会话文件")
 	}
 	if !st.Mode().IsRegular() || st.Size() > s.limits.FileBytes {
-		return ExportDocument{}, protocol.E("limit_exceeded", "历史文件超过体积上限")
+		return ExportDocument{}, fileTooLargeError("历史文件", st.Size(), s.limits.FileBytes)
 	}
 	nodes, last, err := s.scanNodes(ctx, h, f, st.Size(), st.ModTime().UnixNano())
 	if err != nil {

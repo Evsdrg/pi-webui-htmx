@@ -3,5 +3,9 @@
   <span class="session-title">{{.Title}}</span>
   <span class="session-meta"><time>{{.Modified}}</time><span title="{{.Cwd}}">{{.Cwd}}</span></span>
 </a>
-{{else}}<p class="empty-note">还没有会话。新建一个，开始协作。</p>{{end}}
-{{if .HasMore}}<button class="btn" hx-get="ui/sessions?offset={{.NextOffset}}" hx-target="this" hx-swap="outerHTML" hx-disabled-elt="this">加载更多会话</button>{{end}}
+{{else}}{{if $.Cwd}}<p class="empty-note">这个工作区下还没有会话。</p>{{else}}<p class="empty-note">还没有会话。新建一个，开始协作。</p>{{end}}{{end}}
+{{if .HasMore}}<button class="btn" hx-get="ui/sessions?offset={{.NextOffset}}{{if .Cwd}}&amp;cwd={{.Cwd | urlquery}}{{end}}" hx-target="this" hx-swap="outerHTML" hx-disabled-elt="this">加载更多会话</button>{{end}}
+{{/* 工作区下拉的选项随片段一起更新：候选与计数只能由桥算，
+     前端从已渲染的行里收集会漏掉当前页之外的会话。 */}}
+<div hx-swap-oob="innerHTML:#session-cwd-filter">
+<option value="">全部工作区</option>{{range .Cwds}}<option value="{{.Cwd}}" title="{{.Cwd}}"{{if .Selected}} selected{{end}}>{{.Label}}（{{.Count}}）</option>{{end}}</div>

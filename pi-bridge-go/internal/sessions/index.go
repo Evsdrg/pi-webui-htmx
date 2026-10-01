@@ -252,27 +252,41 @@ func (x *Index) Lookup(ctx context.Context, id string) (indexEntry, error) {
 }
 
 // Page 返回一页会话元数据，按最近修改倒序。
-func (x *Index) Page(ctx context.Context, offset, limit int) ([]indexEntry, bool, bool, error) {
+// Page 返回一页索引条目；cwd 非空时只取该工作区的。
+//
+// 筛选发生在切片之前：offset 与 hasMore 都相对于**筛选后**的集合，
+// 否则「加载更多」会重复或跳过条目。会话数量级在百、千以内，
+// 这里线性过滤足够，不值得为它维护每个 cwd 的独立索引。
+func (x *Index) Page(ctx context.Context, offset, limit int, cwd string) ([]indexEntry, bool, bool, error) {
 	truncated, err := x.Refresh(ctx)
 	if err != nil {
 		return nil, false, false, err
 	}
 	x.mu.RLock()
+	ids := x.order
+	if cwd != "" {
+		ids = make([]string, 0, len(x.order))
+		for _, id := range x.order {
+			if x.entries[id].cwd == cwd {
+				ids = append(ids, id)
+			}
+		}
+	}
 	if offset < 0 {
 		offset = 0
 	}
-	if offset > len(x.order) {
-		offset = len(x.order)
+	if offset > len(ids) {
+		offset = len(ids)
 	}
 	end := offset + limit
-	if end > len(x.order) {
-		end = len(x.order)
+	if end > len(ids) {
+		end = len(ids)
 	}
 	out := make([]indexEntry, 0, end-offset)
-	for _, id := range x.order[offset:end] {
+	for _, id := range ids[offset:end] {
 		out = append(out, x.entries[id])
 	}
-	hasMore := end < len(x.order)
+	hasMore := end < len(ids)
 	x.mu.RUnlock()
 	for i := range out {
 		var err error
@@ -282,6 +296,52 @@ func (x *Index) Page(ctx context.Context, offset, limit int) ([]indexEntry, bool
 		}
 	}
 	return out, hasMore, truncated, nil
+}
+
+// PathsForCwd 返回某个工作区下所有会话的相对路径集合，供搜索按工作区过滤。
+// 路径形式与 walkDir 给出的一致（相对 root、斜杠分隔），可直接当集合键。
+func (x *Index) PathsForCwd(ctx context.Context, cwd string) (map[string]bool, error) {
+	if _, err := x.Refresh(ctx); err != nil {
+		return nil, err
+	}
+	out := map[string]bool{}
+	x.mu.RLock()
+	for _, e := range x.entries {
+		if e.cwd == cwd {
+			out[e.path] = true
+		}
+	}
+	x.mu.RUnlock()
+	return out, nil
+}
+
+// Workspaces 返回已知工作区及各自的会话数，按数量倒序（同数按路径序）。
+//
+// 空 cwd 的会话（极老或被手改过的文件）不计入任何工作区，它们仍能被
+// 「全部」看到——这里只提供筛选选项。
+func (x *Index) Workspaces(ctx context.Context) ([]CwdCount, error) {
+	if _, err := x.Refresh(ctx); err != nil {
+		return nil, err
+	}
+	x.mu.RLock()
+	counts := map[string]int{}
+	for _, e := range x.entries {
+		if e.cwd != "" {
+			counts[e.cwd]++
+		}
+	}
+	x.mu.RUnlock()
+	out := make([]CwdCount, 0, len(counts))
+	for cwd, n := range counts {
+		out = append(out, CwdCount{Cwd: cwd, Count: n})
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Count != out[j].Count {
+			return out[i].Count > out[j].Count
+		}
+		return out[i].Cwd < out[j].Cwd
+	})
+	return out, nil
 }
 
 // Stats 返回索引规模，用于诊断。

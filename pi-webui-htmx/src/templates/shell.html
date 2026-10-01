@@ -23,8 +23,15 @@
      路径过长时靠 CSS 做左省略（保留尾部，与 Pi Web 的 PathLabel 同思路）。 -->
 <button class="btn new-session" data-action="new" id="new-session-btn" title=""><span aria-hidden="true">＋</span> <span class="new-session-cwd" id="new-session-cwd">新建会话</span> <kbd>⌘ K</kbd></button>
     <label class="search-box"><span aria-hidden="true">⌕</span><input id="session-search" type="search" placeholder="搜索会话" aria-label="搜索会话" autocomplete="off"></label>
+    {{/* 按工作区筛选。选项由桥渲染（见 sessions.html 的 OOB 片段）：
+         candidates 与计数只能由桥算出来，前端从已渲染的行里收集会漏掉当前页之外的会话。 */}}
+    <select id="session-cwd-filter" class="cwd-filter" name="cwd" aria-label="按工作区筛选会话"
+            hx-get="ui/sessions" hx-trigger="change" hx-include="#search-query,this"
+            hx-target="#session-list" hx-swap="innerHTML">
+      <option value="">全部工作区</option>
+    </select>
     <div class="section-label">会话 <span id="session-count"></span><button class="icon-btn" data-action="refresh-sessions" aria-label="刷新会话">↻</button></div>
-    <input type="hidden" id="search-query" name="q" value=""><span hidden hx-get="ui/search" hx-trigger="search-refresh from:body" hx-target="#session-list" hx-swap="innerHTML" hx-include="#search-query"></span><nav id="session-list" aria-label="会话列表" hx-get="ui/sessions" hx-trigger="sessions-refresh from:body" hx-swap="innerHTML"><p class="empty-note">连接后显示本地会话</p></nav>
+    <input type="hidden" id="search-query" name="q" value=""><span hidden hx-get="ui/search" hx-trigger="search-refresh from:body" hx-target="#session-list" hx-swap="innerHTML" hx-include="#search-query,#session-cwd-filter"></span><nav id="session-list" aria-label="会话列表" hx-get="ui/sessions" hx-trigger="sessions-refresh from:body" hx-swap="innerHTML" hx-include="#session-cwd-filter"><p class="empty-note">连接后显示本地会话</p></nav>
     <!-- 文件浏览器常驻侧栏下半，与会话列表同属一个 landmark。
          分隔条可拖动调整两区高度；折叠态只留一行标题栏，
          点一下展开——不占会话列表的空间。 -->

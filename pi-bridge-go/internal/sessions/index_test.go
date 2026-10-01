@@ -50,7 +50,7 @@ func TestIndex识别嵌套目录与顺序(t *testing.T) {
 	writeNested(t, sessionDir, cwd, "old", base)
 	writeNested(t, sessionDir, cwd, "new", base.Add(time.Hour))
 	ctx := context.Background()
-	list, err := store.List(ctx, 0, 10)
+	list, err := store.List(ctx, 0, 10, "")
 	if err != nil {
 		t.Fatalf("列表失败: %v", err)
 	}
@@ -75,7 +75,7 @@ func TestIndex缓存命中不做磁盘遍历(t *testing.T) {
 	store, sessionDir := newStore(t, cwd)
 	writeNested(t, sessionDir, cwd, "s1", time.Now())
 	ctx := context.Background()
-	if _, err := store.List(ctx, 0, 10); err != nil {
+	if _, err := store.List(ctx, 0, 10, ""); err != nil {
 		t.Fatal(err)
 	}
 	stats := store.Index().Stats()
@@ -84,7 +84,7 @@ func TestIndex缓存命中不做磁盘遍历(t *testing.T) {
 	}
 	// 直接改文件系统但不改目录 mtime 的情况：文件内容变化由 TTL 兜底。
 	writeNested(t, sessionDir, cwd, "s2", time.Now().Add(time.Minute))
-	if _, err := store.List(ctx, 0, 10); err != nil {
+	if _, err := store.List(ctx, 0, 10, ""); err != nil {
 		t.Fatal(err)
 	}
 	stats = store.Index().Stats()
@@ -112,7 +112,7 @@ func TestIndex超限时标记截断且不隐藏最新项(t *testing.T) {
 	for i := 0; i < 6; i++ {
 		writeNested(t, sessionDir, cwd, idFromIndex(i), base.Add(time.Duration(i)*time.Hour))
 	}
-	list, err := store.List(context.Background(), 0, 10)
+	list, err := store.List(context.Background(), 0, 10, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -150,7 +150,7 @@ func Test索引TTL内不做全树遍历(t *testing.T) {
 		writeNested(t, sessionDir, cwd, "sess-"+strconv.Itoa(i), time.Now().Add(time.Duration(i)*time.Second))
 	}
 	ctx := context.Background()
-	if _, err := store.List(ctx, 0, 200); err != nil {
+	if _, err := store.List(ctx, 0, 200, ""); err != nil {
 		t.Fatal(err)
 	}
 	// 破坏指纹：只有「TTL 内仍在算指纹」的实现会被它影响。
@@ -159,7 +159,7 @@ func Test索引TTL内不做全树遍历(t *testing.T) {
 	builtBefore := store.index.builtAt
 	store.index.mu.Unlock()
 
-	list, err := store.List(ctx, 0, 200)
+	list, err := store.List(ctx, 0, 200, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -203,7 +203,7 @@ func Test空目录不受文件上限约束(t *testing.T) {
 		}
 	}
 	ctx := context.Background()
-	list, err := store.List(ctx, 0, 200)
+	list, err := store.List(ctx, 0, 200, "")
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -95,6 +95,11 @@ xterm 等按需加载，不计入首屏。
 - 模型发现/连通测试用认证 POST（`/ui/models/discover`、`/ui/models/test`），**凭据不进 URL**
 - 思考正文走 lazy 路径的 `format=html` 变体
 - 模板声明动作、目标与同步域；需要 JS 参与时用隐藏输入或 `htmx.ajax`
+- **侧栏工作区筛选的下拉选项**：`/ui/sessions` 与 `/ui/search` 接受 `cwd`，候选项与计数随片段用
+  `hx-swap-oob` 一起更新。候选不交给前端收集——列表是分页的，前端只看得到当前页里的 cwd，
+  据此生成的选项会漏掉其余会话，计数也是错的。短名由桥删掉公共目录前缀得出
+  （`cwdLabels`：`/opt/projects/alpha` 与 `/opt/projects/beta` → `alpha`、`beta`），
+  完整路径放在 `title` 里；`<option>` 的文本不像普通元素那样能靠 CSS 截断。
 
 留浏览器（只有瞬时交互状态，服务端没有权威版本）：按键驱动的补全与斜杠菜单、滚动锚定、
 WS 流式增量、textarea 自适应、xterm、未上传的本地附件缩略图、富内容渲染管线、toast。
