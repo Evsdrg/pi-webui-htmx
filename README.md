@@ -72,11 +72,10 @@ go run ./cmd/pi-bridge \
 | [通信约定](pi-bridge-go/docs/communication.md) | 分层、受理序列、订阅与恢复、背压限额 |
 | [协议 v1](pi-bridge-go/api/v1/protocol.md) | 入口、方法、事件与限额 |
 | [Pi 兼容矩阵](pi-bridge-go/docs/pi-compatibility.md) | 上游能力对照与刻意排除项 |
-| [技术栈](pi-bridge-go/docs/tech-stack.md) | 依赖与版本清单 |
-| [开发说明](pi-bridge-go/docs/DEVELOPMENT.md) | 接口、测试证据、资源限制、后续优化 |
+| [开发说明](pi-bridge-go/docs/DEVELOPMENT.md) | 桥：接口、测试证据、资源限制、后续优化 |
+| [开发说明](pi-webui-htmx/docs/DEVELOPMENT.md) | 前端：目录结构、开发循环、常见坑 |
 | [UI 包契约](pi-webui-htmx/docs/contract.md) | 模板字段、构建与交换守卫 |
 | [组件选型](pi-webui-htmx/docs/components.md) | 前端依赖、样式组织与资源释放 |
-| [许可证核查](pi-bridge-go/docs/licensing.md) | 依赖兼容性与 AGPL 边界说明 |
 
 ## 测试
 
@@ -91,10 +90,27 @@ cd pi-webui-htmx
 pnpm test && pnpm typecheck && pnpm build && pnpm check
 ```
 
+## 技术栈
+
+| | |
+|---|---|
+| 桥 | Go 1.27，标准库优先；外部依赖只有 **3 个**（brotli 压缩、coder/websocket、creack/pty），无 CGO，可纯静态构建 |
+| 前端 | HTMX + Go 模板服务端渲染；TypeScript 仅做交互增强——**没有前端框架、路由、状态库** |
+| 构建 | Vite 8 + TypeScript 7；Tailwind 4 只用于 preflight 复位（模板里没有工具类，样式是手写 CSS） |
+| 浏览器侧依赖 | htmx、marked、highlight.js、KaTeX、DOMPurify、mermaid、xterm、ansi_up；除 htmx 外全部按需动态加载 |
+| 会话数据 | Pi 的 JSONL 是唯一权威（含工具结果与分支），桥只读、不复制；桥自身只存设备配对、允许根与设置 |
+| 要求 | Pi 可执行 `pi --mode rpc`（开发基准 0.85.1）；Go 1.27+；Node ≥ 20.19 与 pnpm 11 |
+
 ## 许可证
 
-**AGPL-3.0-or-later**（见 [LICENSE](LICENSE)）。
+**AGPL-3.0-or-later**（见 [LICENSE](LICENSE)）。依赖组件各自遵循其原许可证，全部与 AGPL-3.0 兼容。
 
-依赖组件各自遵循其原许可证，核查结论见 [docs/licensing.md](pi-bridge-go/docs/licensing.md)
-——其中有一条需要注意：前端构建产物包含一个 EPL-2.0 的传递依赖（mermaid → elkjs），
-因此**分发源码**与**分发构建产物**的合规要求不同，该文档说明了三种处理方案。
+⚠️ **一处需要知道的边界**：前端构建产物含一个 **EPL-2.0** 的传递依赖（`mermaid` → `elkjs`），
+而 EPL-2.0 与 GPL/AGPL 系列不兼容。这里要区分两种行为：
+
+| 行为 | 影响 |
+|---|---|
+| **分发源码**（本仓库现状：`dist/` 与 `node_modules/` 都不入库） | 仓库里不含 EPL 代码，只有依赖声明 —— 无影响 |
+| **分发构建产物**（发布 `dist/`、Docker 镜像、把 UI 内嵌进二进制） | EPL 代码随你分发，需先处理：移除 mermaid、改为可选运行时依赖，或从发布物中排除该 chunk |
+
+另：AGPL 第 13 节要求通过网络对该软件提供服务的一方，向使用者提供对应版本的完整源码。

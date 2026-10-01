@@ -4,7 +4,7 @@
 
 本地 Go 桥连接浏览器与独立 `pi --mode rpc` 子进程。目标是适配 HTMX 工作台、直接读取 Pi 数据、并使 agent 内存随进程退出释放。桥不嵌入 Pi SDK，不另建一份会话正文数据库。
 
-**目录结构：** 本目录是 Go 桥；相邻的 `../pi-webui-htmx` 是 HTMX 前端与 UI 包，二者在同一仓库内并列，跨仓改动分别提交并同时通过。配套契约见 [UI 包契约](../../pi-webui-htmx/docs/contract.md)。
+**目录结构：** 本目录是 Go 桥；相邻的 `../pi-webui-htmx` 是 HTMX 前端与 UI 包，二者在同一仓库内并列；跨目录改动分别提交并同时通过。配套契约见 [UI 包契约](../../pi-webui-htmx/docs/contract.md)。
 
 **状态：** 本地工作台与 relay/tunnel 后端均已实现，云端形态的整链路（relay 设备前缀 → 隧道 HTTP 帧 / WS 别名 → 桥）已端到端跑通并实测。未经真实环境验收的部分见 [architecture.md](architecture.md) 的「实现状态」。
 
@@ -17,8 +17,6 @@
 | [当前 v1 协议](../api/v1/protocol.md) | 入口、方法、事件与限额 |
 | [Pi 兼容矩阵](pi-compatibility.md) | Pi 0.85.1 的能力对照与刻意排除项 |
 | [方法清单](method-inventory.md) | 方法分类（由测试与代码交叉校验） |
-| [技术栈](tech-stack.md) | 依赖与版本清单 |
-| [许可证核查](licensing.md) | 依赖兼容性结论 |
 | [UI 包契约](../../pi-webui-htmx/docs/contract.md) | 模板/构建/前端行为与版本配套 |
 
 ## 当前能力
@@ -27,12 +25,11 @@
 |---|---|
 | ✅ 已接线 | 显式创建/恢复、发送/取消、模型/思考切换、压缩/重试、分支操作、bash |
 | ✅ 已接线 | 只读会话列表/历史、搜索、惰性思考/图片、文件/Git、PTY、扩展对话 |
-| ✅ 已接线 | 模型配置原始 JSON 编辑、discover/test、包版本只读清单 |
-| ⚠️ 有实现但有审查缺陷 | 持久去重、重放、身份变更、relay 凭据/配对、资源预算及配置保护 |
-| ⚠️ 未完成解耦 | 历史树、HTML 导出当前仍需要 worker |
-| ❌ 尚未接通 | 云浏览器经 relay 使用完整 HTMX/图片/上传/下载工作台 |
+| ✅ 已接线 | 模型配置（两级树表单 + JSON 源码）、discover/test、包版本只读清单、catalog |
+| ✅ 已接线 | 历史树与 HTML 导出：无 worker 时从磁盘投影，浏览不拉起进程 |
+| ✅ 已接通 | 云端经 relay 设备前缀的完整工作台：外壳、片段、资源、WS、图片、导出 |
 
-具体方法查 capabilities.methods 和协议清单。方法存在、基线测试通过，均不代表台账中的边界已经修好。
+具体方法查 `capabilities.methods` 与[协议清单](../api/v1/protocol.md)；方法存在不代表所有边界都已验收（见 [pi-compatibility.md](pi-compatibility.md) 的验证范围）。
 
 ## 本地运行
 
@@ -116,9 +113,9 @@ relay 启动的两条硬约束（都在启动期失败，不留到运行期）�
 
 - `--host` **必填**，值是精确的 Host 头（`relay.example.com`，或带端口 `relay.example.com:30143`
   表示精确匹配；不带端口则忽略请求端口）。没有它就不允许启动——旧行为在 `--host` 为空时
-  把 Host 与 Origin 两道校验一起跳过（B63）。
+  把 Host 与 Origin 两道校验一起跳过。
 - `--state-dir` 默认是 `$XDG_STATE_HOME/pi-relay`（回退 `~/.local/state/pi-relay`）；
-  设备注册表与用户表是持久身份，显式指到临时目录时启动会打 WARN（B55）。
+  设备注册表与用户表是持久身份，显式指到临时目录时启动会打 WARN。
 
 **反向代理形态**：桥侧用 `--public-origin`（或 `--listen` 绑非环回 + 显式来源）声明外部地址，
 Host 与 Origin 仍严格核对，只是多一个「声明过的外部来源」；cookie `Secure` 跟随该来源。
@@ -142,15 +139,15 @@ PI_WEBUI_DIR=../pi-webui-htmx go test -race ./internal/transport/
 | testdata/fake-pi | 可控夹具源码，不提交编译产物 |
 | tools/smoke-client | 手工真实 Pi 冒烟，不属于自动付费模型测试 |
 
-FakePi 已按测试进程使用独占构建目录，TestMain 在测试结束后清理，见 T01。真实 Pi 冒烟使用隔离配置，只做握手/状态/退出，不加载生产秘密或发送付费请求。
+FakePi 已按测试进程使用独占构建目录，TestMain 在测试结束后清理。真实 Pi 冒烟使用隔离配置，只做握手/状态/退出，不加载生产秘密或发送付费请求。
 
-跨仓验证必须显式设置 `PI_WEBUI_DIR` 并运行 `scripts/verify-pair.sh`，缺 UI 直接失败；[方法清单](method-inventory.md) 由 `ui_contract_test.go` 与 Go 注册表、UI 类型、模板交叉核对，此外还有 Go/TS/模板静态契约。
+跨目录验证需显式设置 `PI_WEBUI_DIR`（缺 UI 直接失败），或运行 `scripts/verify-pair.sh`；[方法清单](method-inventory.md) 由 `ui_contract_test.go` 与 Go 注册表、UI 类型、模板交叉核对，此外还有 Go/TS/模板静态契约。
 
 ## 资源、压缩与已知限制
 
-- 2026-09-26 隔离、无扩展、未发送 prompt 的历史测量：桥约 10.2 MiB RSS，Pi 约145 MiB。这不是本轮新测量，不能代表长会话/启用插件或与不同工作负载 Pi Web 的公平对比。
-- 桥已经有 br/gzip 和有界资产缓存；qvalue、identity/Vary 与资产命中已按 B39/B60/B61 修正。产物 gzip 预算是**首屏自有代码**的额度，不是实际页面传输量。
-- History 的扫描缓存有多槽与文件身份校验（dev+ino），同 size/mtime 替换不再误命中；标题、lazy 与 tree 共用同一份扫描产物（B12/B37/B38/U04）。
+- 隔离、无扩展、未发送 prompt 的空闲规模：桥约 10 MiB RSS，Pi 约 145 MiB。长会话与启用插件后显著更高。
+- 桥已经有 br/gzip 和有界资产缓存；qvalue、identity/Vary 与资产命中均已按协商规则处理。产物 gzip 预算是**首屏自有代码**的额度，不是实际页面传输量。
+- History 的扫描缓存有多槽与文件身份校验（dev+ino），同 size/mtime 替换不再误命中；标题、lazy 与 tree 共用同一份扫描产物；标题读取采用首尾双向有界读取，不扫全文件。
 - 当前 Linux 正常停止采用进程组（`Test停止回收同组后代` 覆盖）；Pdeathsig 不保证桥被 SIGKILL 后所有后代消失，生产模式使用受监督的 systemd cgroup（见「受管部署」），手工启动明确为较弱保证。
 - 非 Linux PTY 当前有编译缺口，不能宣传为完整可构建的显式拒绝路径。
 - 跨桥/外部 CLI 的非合作写入不受桥内互斥保证。

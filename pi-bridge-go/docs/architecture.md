@@ -139,7 +139,7 @@ S01–S12 均已实现（S03 的服务管理器监督属部署侧，见 [DEVELOP
 - 本机 add-user/add-device 与服务进程使用同一状态目录锁；先采用**离线管理，服务运行时拒绝第二写者**，不增加公网安装/任意管理接口。
 - TTL 在 Claim 时校验；一次性领取原子化。按 owner/来源地址及全局预算限流，code 分桶不是唯一保护；表项与连接有硬上限/过期淘汰。
 - Cookie 使用受限 opaque subject 或编码后的结构化 payload+HMAC，显示名不作为点分隔字段。撤销同时失效凭据/现有连接，Close 遍历 tunnels 与 browsers。
-- 非环回部署要求明确 external origin；反代只信显式配置的来源，不能相信任意 X-Forwarded-*。默认回源只绑定 loopback，cookie Secure 由已配置 HTTPS public origin 决定，Host/Origin 分别严格核对。**已实现（桥侧）：** `--public-origin` 声明对外来源后，桥额外接受该来源的 Host 与 Origin，`Secure` 跟随其 scheme；非环回监听只在该开关下放行，且只接受私有/overlay 网段地址（RFC1918、IPv6 ULA、链路本地、100.64.0.0/10）。WebSocket 的库层 origin 白名单必须与同一规则对齐——`coder/websocket` 默认要求 `Origin.Host == r.Host`，代理改写 Host 时会先拒掉桥自己已允许的来源。这是本地桥而非 relay 路径的实现；relay 侧仍按 B35 自行推断。
+- 非环回部署要求明确 external origin；反代只信显式配置的来源，不能相信任意 X-Forwarded-*。默认回源只绑定 loopback，cookie Secure 由已配置 HTTPS public origin 决定，Host/Origin 分别严格核对。**已实现（桥侧）：** `--public-origin` 声明对外来源后，桥额外接受该来源的 Host 与 Origin，`Secure` 跟随其 scheme；非环回监听只在该开关下放行，且只接受私有/overlay 网段地址（RFC1918、IPv6 ULA、链路本地、100.64.0.0/10）。WebSocket 的库层 origin 白名单必须与同一规则对齐——`coder/websocket` 默认要求 `Origin.Host == r.Host`，代理改写 Host 时会先拒掉桥自己已允许的来源。这是桥侧的处理；relay 自身也要求显式 `--host`，不以请求头推断来源。
 - 设备 token 放 WS upgrade Authorization，不放 query；非环回只允许 WSS。relay TLS 终止会看见转发明文，承诺只能是**不持久化正文、不记录秘密**，不是“接触不到模型密钥”或端到端加密。
 
 **验收：** CLI 发凭据后重启服务可认证；过期/重复领取失败；写失败重试、race、撤销活连接、点用户名、HTTPS 反代、连接洪峰均有探针。
@@ -168,9 +168,9 @@ S01–S12 均已实现（S03 的服务管理器监督属部署侧，见 [DEVELOP
 - 选择**同源 HTTP + WS 透明适配**：云端按设备前缀路由，relay 在授权后把允许的 HTTP 资源请求和 WS 控制帧送往本地桥。UI 仍用同一 BridgeClient/htmx，只有受信 basePath 不同；不另写一套云专属 DOM 协议。
 - tunnel HTTP 的边界落在**设备**身上而不是 relay：relay 只把请求转给它已配对的设备，设备在**自己的 HTTP handler** 上执行（鉴权、路由、上限全在桥侧）。因此不需要资源 allowlist——未知路径由桥回 404，任意第三方主机根本不在转发目标里。已实现：request ID 配对、有界 metadata 与 body（请求 4 MiB / 响应按内容上限派生）、总量与超时限制、控制帧与内容帧分通道（慢浏览器不再让控制消息排队）。**未实现**：chunk 与 credit——经核实四层上限自洽、没有装不下的内容，分片属无需求加复杂度。UI 资产和模板来自同一发布包；设备前缀同时承载 HTTP 与 WS，标签页隔离按 clientId。
 - backend `/client` 有路由封装不等于云 UI 可用——这条判断在执行时成立。现已完成：鉴权（relay 用户 Cookie → 设备归属校验 → 桥仍在自己的 handler 上鉴权）、WS（`/d/{id}/api/v1/ws` 复用 `/client` 的连接管理）、fragment、资源均经设备前缀转发的实测；图片与导出走同一条 HTTP 通道（上限按桥的内容上限派生，测试锁住）。**上传仍是 WS 通道**（图片附件），未改走 HTTP。
-- **协议版本仍是 v1**：订阅确认、请求状态、配置 revision/秘密操作都在 v1 的形状内补完，没有出现必须换版本才能表达的改动，因此没有升级为 v2。方法描述表已驱动 limits/timeouts（长任务按方法声明等待上限）；写死的 `phase=A` 与默认终端数已移除，capabilities 报运行时实际配置（B80）。
-- TUI SDK 独有能力、OAuth、插件远程安装等遵循 [兼容矩阵](pi-compatibility.md) 的范围决定。模型字段编辑与 catalog 接线已完成（B70）；PWA 等未决事项仍不擅自归入禁止项。
-- 修复附正式回归测试；Go 假 Pi 按测试进程/构建内容隔离临时路径并清理，不共享固定可覆盖二进制。增加两仓 CI，联测真实模板包；合同检查只管结构/构建，行为交给单测与浏览器。
+- **协议版本仍是 v1**：订阅确认、请求状态、配置 revision/秘密操作都在 v1 的形状内补完，没有出现必须换版本才能表达的改动，因此没有升级为 v2。方法描述表已驱动 limits/timeouts（长任务按方法声明等待上限）；写死的 `phase=A` 与默认终端数已移除，capabilities 报运行时实际配置。
+- TUI SDK 独有能力、OAuth、插件远程安装等遵循 [兼容矩阵](pi-compatibility.md) 的范围决定。模型字段编辑与 catalog 接线已完成；PWA 等未决事项不擅自归入禁止项。
+- 修复附正式回归测试；Go 假 Pi 按测试进程/构建内容隔离临时路径并清理，不共享固定可覆盖二进制。CI 在仓库根（`.github/workflows/`），Go 侧先构建 UI 包再跑跨目录契约；合同检查只管结构/构建，行为交给单测与浏览器。
 
 ## 修改这些部分时的约定
 

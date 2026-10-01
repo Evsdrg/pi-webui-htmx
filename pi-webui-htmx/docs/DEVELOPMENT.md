@@ -1,6 +1,6 @@
 # 开发说明（前端）
 
-> 面向使用者的安装与启动说明见[桥的 README](../pi-bridge-go/README.md)；设计取舍见
+> 面向使用者的安装与启动说明见[桥的 README](../../pi-bridge-go/README.md)；设计取舍见
 > [组件选型](components.md) 与 [UI 包契约](contract.md)。本文件是前端的开发细节与已知坑。
 
 ## 目录结构

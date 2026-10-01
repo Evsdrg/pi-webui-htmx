@@ -118,8 +118,6 @@ cp "$HOME/.pi/agent/models.json" "$HOME/.local/state/pi-bridge/agent/"
 
 | 文档 | 内容 |
 |---|---|
-| [docs/tech-stack.md](docs/tech-stack.md) | 技术栈与版本清单 |
-| [docs/licensing.md](docs/licensing.md) | 许可证核查（含依赖兼容性结论） |
 | [docs/architecture.md](docs/architecture.md) | 架构与设计约束 |
 | [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) | 开发说明：接口、测试证据、资源限制 |
 | [docs/method-inventory.md](docs/method-inventory.md) | RPC 方法清单 |
@@ -129,4 +127,4 @@ cp "$HOME/.pi/agent/models.json" "$HOME/.local/state/pi-bridge/agent/"
 
 **AGPL-3.0-or-later**（见仓库根的 [LICENSE](../LICENSE)）。
 
-依赖组件各自遵循其原许可证，详见 [docs/licensing.md](docs/licensing.md)。
+依赖组件各自遵循其原许可证；技术栈与 EPL-2.0 边界见仓库根的 [README](../README.md)。

@@ -4,7 +4,7 @@
 
 ## 1. 当前入口与鉴权
 
-本地桥提供 HTTP 与 WS；relay/tunnel 后端存在，但 HTMX 云端整链路尚未接通。浏览器通过 Bearer 认证换取 HttpOnly、SameSite=Strict Cookie 后连接同源 WS；原生客户端可在 upgrade 发 Authorization。Host、Origin 与 token 是独立检查。桥侧不以 query 接受 token；**当前 relay 设备 tunnel 仍用 query token，属于 B24 待修项**。
+本地桥提供 HTTP 与 WS；云端由 relay 按设备前缀转发同源 HTTP 与 WS（见第 7 节）。浏览器通过 Bearer 认证换取 HttpOnly、SameSite=Strict Cookie 后连接同源 WS；原生客户端可在 upgrade 发 Authorization。Host、Origin 与 token 是独立检查。桥侧只从 Authorization 头接受 token；relay 的设备 tunnel 同样优先取 header，query 仅作兼容回退（查询串会被代理、浏览器历史与访问日志原样记录）。
 
 | 入口 | 用途 |
 |---|---|
@@ -106,7 +106,7 @@ WebSocket 的 origin 白名单与同一规则对齐，否则库层（`Origin.Hos
 
 - 单条消息的目标：`prompt.params.streamingBehavior` 为 `steer` 或 `followUp`。
 - 投递设置：`session.set_queue_mode` 使用 `{kind:"steering"|"followUp", mode:"all"|"one-at-a-time"}`。
-- `steeringMode/followUpMode` 不能告诉 UI 用户下一条消息想发到哪个队列。当前 UI 把 steer 传作 kind 且混淆两者，B03/U11 尚未修。
+- `steeringMode/followUpMode` 是队列自身的投递模式，不能告诉 UI 用户下一条消息发往哪个队列。destination 由独立选项决定（`steering` / `followUp`），发送时先同步 `session.set_queue_mode`，再带 `streamingBehavior`（取值为 Pi 的 `steer` / `followUp`）提交——两处命名不同，不能互相推导。
 
 ### 配置与秘密
 
@@ -124,7 +124,7 @@ WebSocket 的 origin 白名单与同一规则对齐，否则库层（`Origin.Hos
 
 Pi 原事件通过 `pi.event` 传递并绑定基线版本；不是跨 agent 通用协议。按 contentIndex 组装 delta，message_end.message 替换成权威值；agent_end 不等于 settled。worker 状态使用 bridge.worker_state。
 
-**当前存在：** 有界订阅、epoch/seq、replay、持久回执和 unknown 状态。**当前缺口：** B04/B05/B30/B31/B47/B58/B65 等仍可造成重复派发、事件窗口丢失或恢复错误。
+有界订阅、epoch/seq、replay、持久回执与 unknown 状态均已实现：同一 requestId 并发只派发一次、不同指纹返回 conflict，intent 无终态时恢复为 unknown 且不自动重发。重放窗口不足、事件省略或身份变化时返回 `resync_required`，不静默遗漏。
 
 目标 S01/S02：
 
@@ -147,9 +147,9 @@ Pi 原事件通过 `pi.event` 传递并绑定基线版本；不是跨 agent 通�
 - entries 祖先到后代排列；before 排除边界且应属于所选 leaf 祖先链。默认磁盘叶子不声称是活跃 Pi 内存导航位置。
 - 原始条目 limit 不是 UI 消息数；回合对齐可额外取记录，但仍受硬字节/条目上限。
 - ID 通过受管根下的文件头索引解析；列表/普通历史只读、不启动 Pi，不重写/迁移 JSONL。
-- 目标校验包括完整坏行、重复 ID、断链、循环；仅忽略尾部半行。B12/B13 的缓存身份和快路径结构校验已修，剩余边界见审计台账。
-- `sessions.search` 返回 `{matches:[{sessionId,entryId,title,cwd,role,snippet,timestamp}],scanned,truncated}`；标题优先取本次扫描中的 `session_info`，否则退回首条用户消息，不为匹配项额外重扫文件。UI 用 `entryId` 加载截至命中位置的只读历史，并明确提示可返回当前分支。搜索还需受命中、访问文件、目录、字节、时间、并发上限约束；B28/B52 已修，B43/B72 仍待处理。
-- 删除前协调活跃 worker、trash 存在但失败不降级永久删除的 B08/B62 已修，具体 force 行为见审计台账。
+- 目标校验包括完整坏行、重复 ID、断链、循环；仅忽略尾部半行。扫描缓存的命中以文件身份校验（大小/时间戳与平台可用的 inode/ctime），快路径同样做结构校验。
+- `sessions.search` 返回 `{matches:[{sessionId,entryId,title,cwd,role,snippet,timestamp}],scanned,truncated}`；标题优先取本次扫描中的 `session_info`，否则退回首条用户消息，不为匹配项额外重扫文件。UI 用 `entryId` 加载截至命中位置的只读历史，并明确提示可返回当前分支。搜索还需受命中、访问文件、目录、字节、时间与并发上限约束；客户端传入的 `limit` 只能降低服务端上限。
+- 删除前先协调活跃 worker；trash 存在但删除失败时返回错误，不降级为永久删除。永久删除需要显式 force 选项。
 
 ### 工具预设与思考强度
 
@@ -176,7 +176,7 @@ GET /ui/sessions/{id}/lazy?kind=tool-image&entryId=ENTRY&blockIndex=1
 GET /ui/sessions/{id}/lazy?kind=user-image&entryId=USER_ENTRY&blockIndex=1
 ```
 
-thinking 返回 JSON；tool-image 与 user-image 分别只允许 toolResult/user 角色并返回图片字节。索引/格式/字节均校验，SVG 不作为受支持的图片。用户附件只在历史 HTML 中生成定位按钮，不内嵌 base64，点击时才取原图；定位必须保留每个真实 entryId，不能拿整轮最后 assistant 代替（B11）。Pi 的 `stopReason:"error"` 可能以空内容 assistant 写盘而不让 prompt RPC 抛错，历史与实时预览必须显示失败；只投影已知的安全类别（如 HTTP 402 余额不足、429 限流），不回显上游错误正文或 request_id。目标使用同一已验证文件索引读取正文，不缓存整份内容（B38）。
+thinking 返回 JSON；tool-image 与 user-image 分别只允许 toolResult/user 角色并返回图片字节。索引/格式/字节均校验，SVG 不作为受支持的图片。用户附件只在历史 HTML 中生成定位按钮，不内嵌 base64，点击时才取原图；定位必须保留每个真实 entryId，不能拿整轮最后 assistant 代替。Pi 的 `stopReason:"error"` 可能以空内容 assistant 写盘而不让 prompt RPC 抛错，历史与实时预览必须显示失败；只投影已知的安全类别（如 HTTP 402 余额不足、429 限流），不回显上游错误正文或 request_id。目标使用同一已验证文件索引读取正文，不缓存整份内容。
 
 ### 服务端渲染片段
 
@@ -232,7 +232,7 @@ htmx 换入的片段端点（`/ui/sessions`、`/ui/search`、`/ui/models`、`/ui
 - 与其在前端用 JS 强制交换错误响应，不如让端点把状态当作内容渲染（`internal/presentation` 的 `RenderNote`）：由服务端决定用户看到什么。
 - **真实状态码例外**：`/ui/file-text`、`/ui/file-image`、`/ui/sessions/{id}/lazy` 保留读取/参数失败的真实码。lazy 默认仍返回 JSON/图片，思考的 `format=html` 返回转义后的片段，错误由前端统一提示。`/ui/exports/*` 是浏览器导航。外壳 `/` 与 `/assets/*` 同理：缓存层按状态码判断，且资源名含内容哈希、带 `immutable` 缓存语义。
 
-新增片段契约（2026-09-30）：模型发现/测试 POST 与 WS 调用同用 management 服务、出站策略和全局操作槽；表单最大 64 KiB，字段为 `baseUrl/api/apiKey/headers`（头部一行一个 `名称: 值`）。鉴权与 Host/Origin 检查先于路由，不执行远程命令型密钥、不向供应商发送 `***` 占位值。结果由 Go 模板转义。模型数值上限字段必须是安全整数范围内的正整数；页面发送整份草稿快照，桥仍按原身份恢复秘密，不提供配置 CAS。
+模型发现/测试的 POST 与 WS 调用同用 management 服务、出站策略和全局操作槽；表单最大 64 KiB，字段为 `baseUrl/api/apiKey/headers`（头部一行一个 `名称: 值`）。鉴权与 Host/Origin 检查先于路由，不执行远程命令型密钥、不向供应商发送 `***` 占位值。结果由 Go 模板转义。模型数值上限字段必须是安全整数范围内的正整数；页面发送整份草稿快照，桥仍按原身份恢复秘密，不提供配置 CAS。
 
 记忆追加页用 `append=1`：返回 `#mc-rows` 的 OOB 追加和替换的 `#mc-more`，末页不再给按钮。正文入口限定分区白名单、正整数 ID、最多 65536 字符；只读、不缓存，不返回已归档的 memories 正文。目录片段的成功路径由 OOB 字段及成功标记共同确认，错误片段不承诺成功浏览。
 - **四处例外是状态信号，不是片段语义**（调用方在 `htmx:beforeSwap` 里读它们，见 `src/modules/workbench.ts`）：`/ui/sessions/{id}/history` 的 `204 + X-Session-Unsaved`（新分支尚未落盘）、`/ui/extensions/dialog/{id}` 的 `204`（对话已被回答，移除占位）、以及这两处「明确非法参数」回 `400`（本仓前端不可能发出这类请求）。
@@ -248,7 +248,7 @@ GET /ui/stats?sessionId=ID
 
 可复制的行（会话文件、ID、项目目录、Git 分支）带复制按钮，`data-copy-value` / `data-copy-label` 由桥输出，浏览器只负责写入剪贴板。
 
-**未包含「活跃时长」**：Pi Web 由前端从内存里的会话条目按时间戳累加得出，而 `get_session_stats` 不含该值。桥要给出它就得完整扫一遍 JSONL——那正是 B37（会话标题首读扫全文件）被判定为问题的模式，因此不在打开面板时重扫。需要的话应在索引构建时累加，与 B37 一并处理。
+**未包含「活跃时长」**：Pi Web 由前端从内存里的会话条目按时间戳累加得出，而 `get_session_stats` 不含该值。桥要给出它就得完整扫一遍 JSONL，因此不在打开面板时重扫；需要时应改为在索引构建时累加。
 
 **顶栏面板没有标题行**：Pi Web 的这几个面板都是「内容直接铺满」，关闭靠再点一次工具栏按钮。因此桥渲染的片段里不含标题；壳层只放一个绝对定位的 ×（不占垂直空间，读屏/键盘用户可用），并支持 Escape 关闭。模型、思考强度、工具预设不在这块面板里重复——输入栏各有一个控件。工具面板同样是两栏（左栏工具名列表、右栏该工具的定义），所有工具的详情一次性渲染进 HTML，切换选中项只是显示/隐藏，不再发请求——否则每点一次都要重新导出一次会话快照。
 
@@ -257,7 +257,7 @@ GET /ui/stats?sessionId=ID
 ### 工作区文件
 
 - `files.index` 无 query 返回 `{files:[...],truncated}`，有 query 返回 `{matches:[{path,isDir}],truncated}`；这是同方法的两种显式模式。
-- Git 索引已使用 NUL 增量分帧及硬字节/条目上限，截断状态进入缓存；仅非仓库/未安装 Git 才退回 walk，拒绝和取消不静默降级。walk 的 B27 仍待修复。
+- Git 索引已使用 NUL 增量分帧及硬字节/条目上限，截断状态进入缓存；仅非仓库/未安装 Git 才退回 walk（有 50000 文件硬上限），拒绝与取消不静默降级。
 - `git.status` 返回 `{branch,clean,files,truncated}`，文件项含 `{status,path}`，重命名可含 `from`。64 KiB 原始输出和文件条数限额保证完整记录并预留转义预算，截断时不宣称 clean，UI 必须提示。
 - Git 查询固定可执行文件并清理 Git 环境，禁 fsmonitor/external diff/textconv、pager、懒获取和可选锁；配置转换过滤器时明确拒绝。工作树与 Git 元数据目录必须在授权根内，需要支持 `--no-lazy-fetch` 的 Git。它不是任意 Git 命令或恶意本机进程的 OS 沙箱。
 - **当前 `files.image` WS 返回 base64，`GET /ui/file-image?path=...` 才返回二进制。** `files.read` 拒绝二进制；图片按魔数检测。
@@ -273,7 +273,7 @@ metrics 需鉴权，使用有界方法/错误标签；日志只记录关联 ID�
 
 ## 7. relay 与版本演进
 
-当前方向信封为 relay→bridge 的 `{from,data}` 与 bridge→relay 的 `{to,data}`；缺 to 不广播。同 clientId 重连应替换旧连接，但 B57 说明死 pump 复用仍需修。relay 接触转发明文，不应落盘或日志记录秘密；不能称为端到端加密。
+当前方向信封为 relay→bridge 的 `{from,data}` 与 bridge→relay 的 `{to,data}`；缺 to 不广播。同 clientId 重连创建新连接并替换旧的，旧连接的迟到关闭不影响新连接。relay 接触转发明文，不应落盘或日志记录秘密；不能称为端到端加密。
 
 目标 S12 在同源设备前缀下转发受控 HTTP 资源与 WS 命令，补齐 HTMX 云链路；分块/取消/credit/鉴权都属于新传输能力，当前接口不能假装已经支持。
 

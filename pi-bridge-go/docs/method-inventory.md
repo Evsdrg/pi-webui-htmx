@@ -51,4 +51,4 @@
 PI_WEBUI_DIR=/absolute/path/to/pi-webui-htmx scripts/verify-pair.sh
 ```
 
-脚本记录两侧实际 HEAD/工作树，使用锁文件安装，执行 UI 单测/类型/构建/契约及带真实 UI 包的 Go vet/race。缺少 UI 路径直接失败；桥 CI 未提供 UI 时明确跳过跨仓测试，不算联测通过。
+脚本记录两侧实际 HEAD/工作树，使用锁文件安装，执行 UI 单测/类型/构建/契约及带真实 UI 包的 Go vet/race。缺少 UI 路径直接失败；CI 未提供 UI 时明确跳过该组测试，不算联测通过。

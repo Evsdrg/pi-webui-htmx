@@ -73,11 +73,9 @@ dist/             生成资产与 Vite manifest，不提交
 
 ## 体积与渲染
 
-首屏预算拆成两个数字，都存在 ui-manifest 的 build 里：总预算 `firstLoadBudgetGzipKB`（当前 **50 KiB gzip**）与自有代码预算 `firstLoadOwnBudgetGzipKB`（当前 **30 KiB gzip**）。check 递归统计入口静态依赖闭包，并按 `vendorChunks` 把供应商分块单列。KaTeX、Mermaid、xterm 等按需加载。
+首屏预算是硬约束，两个数字都在 `ui-manifest.json` 的 `build` 里：总 **50 KiB**、自有代码 **30 KiB**（均为 gzip）。`pnpm check` 递归统计入口的静态依赖闭包，并按 `vendorChunks` 把供应商分块单列——htmx 是一块换不掉的固定成本（gzip 17.59 KiB），单列才能让「改 UI」只盯自己的额度。当前构成：自有 28.78 + htmx 17.59 = 46.37 KiB。
 
-需要把供应商和自己写的分开，是因为 htmx 是一块**换不掉的固定成本**：官方 `dist/htmx.min.js`（2.0.11）为 52,182 B / gzip 16,861 B，而 npm 包的 `main` 指向未压缩的 `dist/htmx.esm.js`（171,382 B），因此打包后是 gzip 17.59 KiB，比官方压缩版多约 0.73 KiB。把它混进同一个数字里，等于每次改 UI 都在和别人的体积抢额度。
-
-2026-09-30 实测构成：自有代码 28.73 KiB + 供应商（htmx）17.59 KiB = 46.32 KiB。htmx 由 vite.config.ts 的 `manualChunks` 单独成块，桥在 shell 里为它输出 `modulepreload`，因此拆分不会多一个往返，同时我们改自己的代码不会顶掉它的缓存。
+KaTeX、Mermaid、xterm 等按需加载，不计入首屏。`dist/` 不入库，改动后需重新构建并重启桥。
 
 历史优先按回合分页但遵守硬限额；滚动由前端用户位置决定，X-Scroll-Mode 只提示。Markdown 必须净化；模板保持 Go 转义。入口已关闭 htmx eval/script 标签处理，不能因此取消其他安全层。
 

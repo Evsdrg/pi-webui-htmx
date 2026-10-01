@@ -83,7 +83,7 @@ body 的 data-session-id 是当前显示目标，不得在长异步链中反复�
 
 ### 5.2 htmx 与其他读取
 
-2026-09-30已落实到 `fragment-requests.ts`：每个xhr的本地快照、beforeOnLoad守卫与会话切换取消。目录/模型发现使用独立revision。以下是规则，不代表所有RPC快照时序问题也已解决。
+由 `fragment-requests.ts` 落实：每个 xhr 的本地快照、`beforeOnLoad` 守卫与会话切换取消；目录与模型发现使用独立 revision。
 
 1. beforeRequest 把 session generation、面板序号、目标绑定到 xhr。
 2. **beforeOnLoad** 先检查归属，过期则 preventDefault；该钩子早于响应 HX-Trigger/重定向处理。
@@ -151,4 +151,4 @@ destination 与 mode 不能互相推导：界面队列选项 `steering` 对应 `
 | 浏览器 | 真实 htmx 交换顺序、HX 响应副作用、滚动、富内容、移动布局和闭环 |
 | 本地/云模式联测 | 认证、片段、WS、图片、上传/下载、断线恢复一致 |
 
-当前 72 项基线通过不意味着新增反例已修。修复必须把审查反例转为正式测试；不得以字符串正则代替行为接线验证。
+测试通过不意味着新边界已覆盖：新修复必须把反例转为正式测试，不得以字符串正则代替行为接线验证。
