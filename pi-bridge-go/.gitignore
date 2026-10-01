@@ -1,0 +1,6 @@
+/pi-bridge
+/pi-relay
+*.test
+# 假 Pi 的编译产物由 testutil.FakePi() 按需生成到临时目录，
+# 不应出现在仓库内。历史上曾放在 testdata/bin/，这里显式排除以防回潮。
+/testdata/bin/

@@ -1,0 +1,103 @@
+package presentation
+
+import (
+	"slices"
+	"testing"
+
+	"pi-bridge-go/internal/sessions"
+)
+
+// assistantEntry 造一条带思考块的 assistant 条目。
+func assistantEntry(id string, blocks ...int) sessions.Entry {
+	lazy := []sessions.LazyBlock{}
+	for _, b := range blocks {
+		lazy = append(lazy, sessions.LazyBlock{Kind: "thinking", BlockIndex: b})
+	}
+	return sessions.Entry{ID: id, Kind: sessions.KindAssistant, Text: "回答 " + id, Lazy: lazy}
+}
+
+func Test搜索条目均能定位所属回合(t *testing.T) {
+	turns := GroupTurns([]sessions.Entry{
+		{ID: "u1", Kind: sessions.KindUser, Text: "提问"},
+		assistantEntry("a1"),
+		{ID: "tool1", Kind: sessions.KindTool, Text: "工具输出"},
+		assistantEntry("a2"),
+		{ID: "comp1", Kind: sessions.KindCompaction, Text: "压缩摘要"},
+		assistantEntry("solo"),
+	})
+	if len(turns) != 2 || !slices.Equal(turns[0].EntryIDs, []string{"u1", "a1", "tool1", "a2"}) || !slices.Equal(turns[1].EntryIDs, []string{"comp1", "solo"}) {
+		t.Fatalf("搜索命中的原始条目找不到所属回合: %+v", turns)
+	}
+}
+
+// Test思考占位符归属各自条目 覆盖 B11：
+// 一个回合里多个 assistant 条目各带思考块时，旧实现把 AssistantEntryID
+// 覆盖成最后一个条目，却把各条目的块下标合并，于是较早的块按错误 ID 去取，
+// 既取不回原文，也可能重复出现同一段。
+func Test思考占位符归属各自条目(t *testing.T) {
+	entries := []sessions.Entry{
+		{ID: "u1", Kind: sessions.KindUser, Text: "问题"},
+		assistantEntry("a1", 0),
+		assistantEntry("a2", 0, 1),
+	}
+	turns := GroupTurns(entries)
+	if len(turns) != 1 {
+		t.Fatalf("应聚合成一个回合: %d", len(turns))
+	}
+	got := turns[0].Thinking
+	if len(got) != 3 {
+		t.Fatalf("应有 3 个占位符，实际 %d: %+v", len(got), got)
+	}
+	want := []ThinkingBlock{
+		{EntryID: "a1", BlockIndex: 0},
+		{EntryID: "a2", BlockIndex: 0},
+		{EntryID: "a2", BlockIndex: 1},
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("第 %d 个占位符归属错误: %+v，期望 %+v", i, got[i], want[i])
+		}
+	}
+}
+
+// Test孤儿assistant的思考归属 覆盖无 user 锚点分支：
+// 孤儿 assistant 单独成轮，占位符仍须指向它自己。
+func Test孤儿assistant的思考归属(t *testing.T) {
+	turns := GroupTurns([]sessions.Entry{assistantEntry("solo", 2)})
+	if len(turns) != 1 {
+		t.Fatalf("应单独成轮: %d", len(turns))
+	}
+	if len(turns[0].Thinking) != 1 || turns[0].Thinking[0].EntryID != "solo" || turns[0].Thinking[0].BlockIndex != 2 {
+		t.Fatalf("孤儿回合占位符归属错误: %+v", turns[0].Thinking)
+	}
+}
+
+func Test失败回合保留用户图片和安全错误(t *testing.T) {
+	turns := GroupTurns([]sessions.Entry{
+		{ID: "u1", Kind: sessions.KindUser, Text: "颜色？", Lazy: []sessions.LazyBlock{{Kind: "image", BlockIndex: 1}}},
+		{ID: "a1", Kind: sessions.KindAssistant, Error: "模型请求失败：供应商余额不足"},
+	})
+	if len(turns) != 1 || len(turns[0].UserImages) != 1 || turns[0].UserImages[0] != (ImageBlock{EntryID: "u1", BlockIndex: 1}) || turns[0].Error == "" {
+		t.Fatalf("失败回合缺少图片或错误提示: %+v", turns)
+	}
+	turns = GroupTurns([]sessions.Entry{
+		{ID: "u1", Kind: sessions.KindUser, Text: "颜色？"},
+		{ID: "a1", Kind: sessions.KindAssistant, Error: "模型请求失败"},
+		{ID: "a2", Kind: sessions.KindAssistant, Text: "红蓝"},
+	})
+	if len(turns) != 1 || turns[0].Error != "" || turns[0].AssistantText != "红蓝" {
+		t.Fatalf("自动恢复成功后不应继续显示上一次失败: %+v", turns)
+	}
+}
+
+// Test没有思考块时不产生占位符 覆盖反向边界。
+func Test没有思考块时不产生占位符(t *testing.T) {
+	entries := []sessions.Entry{
+		{ID: "u1", Kind: sessions.KindUser, Text: "问题"},
+		{ID: "a1", Kind: sessions.KindAssistant, Text: "回答"},
+	}
+	turns := GroupTurns(entries)
+	if len(turns) != 1 || len(turns[0].Thinking) != 0 {
+		t.Fatalf("不应产生占位符: %+v", turns)
+	}
+}
