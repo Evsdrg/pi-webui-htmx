@@ -20,7 +20,7 @@ import (
 // 不显眼，只有真去选模型时才发现。只测投影函数或只测回执都发现不了，
 // 必须把两者接起来测。
 func Test模型清单从配置文件一路读到选项(t *testing.T) {
-	uiDir := os.Getenv("PI_WEBUI_DIR")
+	uiDir := resolveWebUIDir(os.Getenv("PI_WEBUI_DIR"))
 	if uiDir == "" {
 		t.Skip("需要 PI_WEBUI_DIR 加载 UI 包")
 	}

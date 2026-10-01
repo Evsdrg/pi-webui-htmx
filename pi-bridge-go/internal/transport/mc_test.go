@@ -182,7 +182,7 @@ func TestMagicContextPanelPagination(t *testing.T) {
 // 所以测面板必须显式带 UI 包目录。
 func newTestServerWithUI(t *testing.T) *Server {
 	t.Helper()
-	dir := os.Getenv("PI_WEBUI_DIR")
+	dir := resolveWebUIDir(os.Getenv("PI_WEBUI_DIR"))
 	if dir == "" {
 		// 默认指向仓库内的检出；CI 上可用环境变量覆盖。
 		dir = "../../pi-webui-htmx"

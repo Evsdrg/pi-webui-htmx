@@ -107,7 +107,7 @@ func newTestServerTuned(t *testing.T, commandTimeout time.Duration, termOpts ...
 	}
 	// 有 UI 包目录时才加载；没有则 UI 层禁用（nil）。
 	var ui *presentation.Renderer
-	if dir := os.Getenv("PI_WEBUI_DIR"); dir != "" {
+	if dir := resolveWebUIDir(os.Getenv("PI_WEBUI_DIR")); dir != "" {
 		rendered, err := presentation.LoadFromDir(dir)
 		if err != nil {
 			t.Fatalf("加载 UI 包失败: %v", err)
