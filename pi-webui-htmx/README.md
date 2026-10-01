@@ -5,18 +5,16 @@
 
 Pi Bridge 的 HTMX 工作台。模板、TypeScript 与样式归本仓；桥负责数据、进程及受控接口。目标是接近 Pi Web 的工作台体验，保持较小首屏和独立 Pi 进程。
 
-**目录：** 本目录是 HTMX/TypeScript 前端与 UI 包；相邻的 `../pi-bridge-go` 是 Go 桥，二者同属一个仓库。跨目录改动分别提交并同时通过，配套关系见 [UI 包契约](docs/contract.md)。上游 Pi Web 仅作对照实现，不是本项目的依赖。
+**目录：** 本目录是 HTMX/TypeScript 前端与 UI 包；相邻的 `../pi-bridge-go` 是 Go 桥，二者同属一个仓库。跨目录改动分别提交并同时通过，配套关系见[前端开发说明](docs/DEVELOPMENT.md)。上游 Pi Web 仅作对照实现，不是本项目的依赖。
 
 **状态：** 本地与云端（relay 设备前缀）两条链路都已端到端跑通。云端形态下外壳、片段、资源与 WS 全部经设备前缀转发，前端因路径全部相对化而无需知道自己跑在哪种形态。**未验收**：真实模型的长时流式、公网跨机 RTT 与丢包、小时级长稳。
 
 ## 文档
 
-- [开发说明](docs/DEVELOPMENT.md)：目录结构、开发循环、样式规则、测试与常见坑。
-- [UI 包与交互契约](docs/contract.md)：模板字段、版本、构建与交换守卫。
-- [组件选型](docs/components.md)：依赖、样式组织、资源释放与职责边界。
-- [桥的架构](../pi-bridge-go/docs/architecture.md)：S01–S12、取舍与边界约束。
+- [开发说明](docs/DEVELOPMENT.md)：目录结构、技术栈、职责边界、样式与安全约束、常见坑。
+- [桥的 README](../pi-bridge-go/README.md)：安装、选项、部署形态、刻意不做的事。
 - [v1 协议](../pi-bridge-go/api/v1/protocol.md)：可调用的方法、事件与限额。
-- [通信约定](../pi-bridge-go/docs/communication.md)：分层、受理、订阅与背压。
+- [桥开发说明](../pi-bridge-go/docs/DEVELOPMENT.md)：设计边界、代码结构、关键不变量。
 
 ## 安装、构建和测试
 

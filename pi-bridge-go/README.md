@@ -103,6 +103,20 @@ cp "$HOME/.pi/agent/models.json" "$HOME/.local/state/pi-bridge/agent/"
 
 完整列表：`go run ./cmd/pi-bridge --help`。
 
+## 范围：刻意不做的事
+
+明确不提供，请不要期待（也不会因请求而改变）：
+
+| 不做 | 原因 |
+|---|---|
+| OAuth 设备码登录、供应商额度查询 | 本项目的用法是自备 API 凭据 |
+| 插件/技能的远程安装、更新、搜索与任意 CLI 透传 | 远程执行面；包由本机 CLI 管理，网页只读清单与版本 |
+| 任意会话正文写入、会话导入 | 会话持久化归 Pi，桥只读 |
+| 伪装 TUI 独有能力（自定义 footer/header/editor 组件、原地树导航、reload） | 这些不在 RPC 命令表里，装上开关也做不到 |
+
+暂缓或未立项：Web Push、PWA、版本自检与自动更新、PDF 导出、Minimap、多语言界面、worktree。
+「未实现」不等于「刻意不要」，这些由产品范围另行决定。
+
 ## 部署形态
 
 | 形态 | 说明 |
@@ -118,10 +132,10 @@ cp "$HOME/.pi/agent/models.json" "$HOME/.local/state/pi-bridge/agent/"
 
 | 文档 | 内容 |
 |---|---|
-| [docs/architecture.md](docs/architecture.md) | 架构与设计约束 |
-| [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) | 开发说明：接口、测试证据、资源限制 |
-| [docs/method-inventory.md](docs/method-inventory.md) | RPC 方法清单 |
-| [../pi-webui-htmx/docs/contract.md](../pi-webui-htmx/docs/contract.md) | 桥与 UI 的配套契约 |
+| [../README.md](../README.md) | 项目总览、技术栈、许可证 |
+| [api/v1/protocol.md](api/v1/protocol.md) | 协议 v1：入口、方法、事件与限额 |
+| [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) | 开发说明：设计边界、代码结构、不变量、限制 |
+| [docs/method-inventory.md](docs/method-inventory.md) | 方法分类（由测试与代码交叉校验） |
 
 ## 许可证
 

@@ -4,20 +4,43 @@
 
 本地 Go 桥连接浏览器与独立 `pi --mode rpc` 子进程。目标是适配 HTMX 工作台、直接读取 Pi 数据、并使 agent 内存随进程退出释放。桥不嵌入 Pi SDK，不另建一份会话正文数据库。
 
-**目录结构：** 本目录是 Go 桥；相邻的 `../pi-webui-htmx` 是 HTMX 前端与 UI 包，二者在同一仓库内并列；跨目录改动分别提交并同时通过。配套契约见 [UI 包契约](../../pi-webui-htmx/docs/contract.md)。
+**目录结构：** 本目录是 Go 桥；相邻的 `../pi-webui-htmx` 是 HTMX 前端与 UI 包，二者在同一仓库内并列；跨目录改动分别提交并同时通过。前端的开发说明见 [UI DEVELOPMENT](../../pi-webui-htmx/docs/DEVELOPMENT.md)。
 
-**状态：** 本地工作台与 relay/tunnel 后端均已实现，云端形态的整链路（relay 设备前缀 → 隧道 HTTP 帧 / WS 别名 → 桥）已端到端跑通并实测。未经真实环境验收的部分见 [architecture.md](architecture.md) 的「实现状态」。
+## 设计边界
+
+这些是项目层面的承诺，改动任何一条都要先想清楚影响：
+
+1. **Pi 是唯一写入方**：它以独立 `pi --mode rpc` 子进程运行，拥有 agent、模型上下文、工具、
+   扩展与会话 JSONL 的写入权。桥不嵌入 Pi SDK，不另存一份会话正文。
+2. **浏览不启动进程**：列表、普通历史与文件浏览只读磁盘；只有发消息或显式恢复会话才拉起 worker。
+3. **断线不等于取消**：命令被接受不等于完成；结果未知不自动重发；连接中断只取消等待与输出。
+4. **模板与产物归 UI 目录**，桥只加载可信发布物；模型输出、文件内容与标题一律按不可信内容处理。
+5. **工作区检查不是沙箱**：Pi 工具与显式 PTY 是被授权的执行能力；只读 Git/配置操作里隐藏的
+   执行必须消除，环境过滤不构成对同 UID 恶意进程的防护。
+
+## 代码结构
+
+| 位置 | 职责 |
+|---|---|
+| `cmd/pi-bridge`、`cmd/pi-relay` | 配置、装配与服务启动 |
+| `internal/transport` | 本地 HTTP/WS、隧道虚拟连接、命令分发与限额 |
+| `internal/runtime`、`internal/pi` | worker 生命周期、身份事务、扩展对话；RPC 分帧与关联 |
+| `internal/sessions` | JSONL 读取、索引、历史投影、搜索、惰性内容、导出、删除 |
+| `internal/workspace`、`internal/terminal` | 文件、Git、索引、PTY |
+| `internal/management` | 模型配置、供应商探测、包清单与 catalog |
+| `internal/events`、`internal/storage` | 有界事件队列与回执日志 |
+| `internal/relay`、`internal/tunnel` | 用户/设备身份、配对、路由、主动外连 |
+| `internal/presentation`、`internal/observe` | 模板/静态资源/压缩；指标 |
+
+不引入消息队列、通用 ORM、前端状态框架或 agent SDK。
 
 ## 文档入口
 
 | 文档 | 内容 |
 |---|---|
-| [架构](architecture.md) | S01–S12：目标形态、边界约束与关键设计决策 |
-| [通信约定](communication.md) | HTTP/WS/Pi 分层、作用域、受理/恢复和背压 |
 | [当前 v1 协议](../api/v1/protocol.md) | 入口、方法、事件与限额 |
-| [Pi 兼容矩阵](pi-compatibility.md) | Pi 0.85.1 的能力对照与刻意排除项 |
 | [方法清单](method-inventory.md) | 方法分类（由测试与代码交叉校验） |
-| [UI 包契约](../../pi-webui-htmx/docs/contract.md) | 模板/构建/前端行为与版本配套 |
+| [UI 开发说明](../../pi-webui-htmx/docs/DEVELOPMENT.md) | 前端：目录、样式、边界、常见坑 |
 
 ## 当前能力
 
@@ -29,7 +52,7 @@
 | ✅ 已接线 | 历史树与 HTML 导出：无 worker 时从磁盘投影，浏览不拉起进程 |
 | ✅ 已接通 | 云端经 relay 设备前缀的完整工作台：外壳、片段、资源、WS、图片、导出 |
 
-具体方法查 `capabilities.methods` 与[协议清单](../api/v1/protocol.md)；方法存在不代表所有边界都已验收（见 [pi-compatibility.md](pi-compatibility.md) 的验证范围）。
+具体方法查 `capabilities.methods` 与[协议清单](../api/v1/protocol.md)。**未验收**：真实模型在云端形态下的长时流式、公网 relay 的跨机 RTT 与丢包、小时级长稳、证书轮换。
 
 ## 本地运行
 
@@ -79,15 +102,41 @@ TimeoutStopSec=30
 
 ## 关键不变量
 
-改这些部分之前先读对应设计（[architecture.md](architecture.md) 的 S01–S12）：
+改动这些部分时，下面的规则不能破坏：
 
-1. 本地与 tunnel 共用同一 Executor：准入、去重、预算与超时按方法声明，不按连接类型分叉。
-2. replay 与 live 注册在同一锁内完成，快照末尾序号等于注册序号；身份变化换 epoch，游标不跨 epoch 接受。
-3. worker 身份是事务：先预留、后调 Pi、再按真实 ID 提交；删除前先收敛 writer。
-4. 配置写入按 revision 校验，`***` 是占位符而非凭据；网页不能新增 `!command` 形式的凭据表达式。
-5. 历史、tree、标题、lazy 共用一份带文件身份校验的偏移索引；大内容走 HTTP，控制帧保持小。
-6. UI 在 htmx 处理响应之前拦截过期响应（目标、会话代次、局部 revision 三重守卫）。
-7. relay 只转发不解析；设备前缀同时承载 HTTP 与 WS，鉴权始终在桥自己的 handler 上执行。
+1. **命令受理**：本地与 tunnel 共用同一 Executor——准入、去重（`requestId` + 指纹）、预算与超时
+   按方法声明，不按连接类型分叉。持久变更先写 intent 再派发；无终态时恢复为 `outcome_unknown`
+   且绝不自动重发。承诺是「保留期内至多派发一次」，不是 exactly-once。
+2. **订阅**：replay 截止与 live 注册在同一把锁内完成（快照末尾序号 == 注册序号）；输出顺序为
+   「确认 → replay → live」。epoch 只由当前连接的订阅确认建立，游标不跨 epoch 接受，迟到的确认
+   有归属守卫。缺口一律 `resync_required`，不静默遗漏。
+3. **worker 身份**：new/switch/fork/clone 是事务——先预留、再调 Pi、最后按 `get_state` 的真实 ID
+   提交并换 epoch；删除前先收敛 writer。退出清理按对象身份移除绑定，第二次 Stop 有界。
+4. **配置与凭据**：写入按 revision 校验、按 model id 合并、把 `***` 识别为占位符保留原值；
+   网页不能新增或修改 `!command` 形式的凭据表达式，discover/test 不执行命令表达式、默认禁止重定向。
+5. **会话索引**：历史、tree、标题、lazy 共用一份带文件身份校验（size/mtime + 平台可用的
+   inode/ctime）的偏移索引；标题用首尾双向有界读取。大内容走 HTTP 数据通道，控制帧保持小。
+6. **背压**：数据在入队/分配/启动 goroutine **之前**检查预算；受控超限返回 `limit_exceeded`/
+   `truncated` 并尽量保住连接，只有非法 framing 才关闭连接。Pi stdout 持续消费，不向 Pi 传播
+   浏览器背压。
+7. **relay 只转发不解析**：设备前缀同时承载 HTTP 与 WS，鉴权始终在桥自己的 handler 上执行；
+   桥自身的 Host/Origin 校验不因 relay 而放宽。
+8. **进程回收**：正常停止按进程组 TERM→限时 KILL；SIGKILL 场景依赖服务管理器（见下）。
+9. **环境过滤**：子进程移除桥/relay/设备凭据，覆盖 Pi、PTY、Git 与导出辅助进程；不同权限必须
+   用不同 UID 或沙箱实现，过滤不是隔离。
+
+### Pi 交互的事实（0.85.1）
+
+| 事实 | 含义 |
+|---|---|
+| prompt response 表示 accepted/queued/handled | 回执不是完成；接受后的失败走事件流 |
+| `message_update` 只有 delta | 重放窗口缺失时不能重建中途完整消息 |
+| `text_end` / `message_end` 有完整内容 | 用权威结果替换局部投影，不拼接重复文本 |
+| `tool_execution_update.partialResult` 是累计输出 | 不能当 delta 追加 |
+| `agent_settled` 表示队列/重试最终收敛 | 直接 bash、扩展对话、PTY 有各自生命周期 |
+| dialog 与 fire-and-forget 是两类 | 只有 select/confirm/input/editor 进入 pending，需要回执 |
+| RPC 只按 LF 分帧（可接受 CRLF） | U+2028/U+2029 不切行；外部 requestId 与内部 RPC id 相互独立 |
+| `models` 是数组，`api` 是协议标识 | `baseUrl` 才是 HTTP 地址；读、脱敏、恢复、校验共用同一 schema |
 
 ## 模型配置与执行边界
 

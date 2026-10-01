@@ -70,9 +70,6 @@ pnpm test && pnpm typecheck && pnpm build && pnpm check
 |---|---|
 | [README.md](README.md) | 项目总览与快速开始 |
 | [pi-bridge-go/README.md](pi-bridge-go/README.md) | 桥：安装、选项、首次模型配置、部署形态 |
-| [pi-bridge-go/docs/architecture.md](pi-bridge-go/docs/architecture.md) | S01–S12 设计决策 |
-| [pi-bridge-go/docs/communication.md](pi-bridge-go/docs/communication.md) | 分层、受理、订阅、背压 |
-| [pi-bridge-go/api/v1/protocol.md](pi-bridge-go/api/v1/protocol.md) | 协议 v1 |
+| [pi-bridge-go/api/v1/protocol.md](pi-bridge-go/api/v1/protocol.md) | 协议 v1：入口、方法、事件、限额 |
 | [pi-bridge-go/docs/DEVELOPMENT.md](pi-bridge-go/docs/DEVELOPMENT.md) | 桥的开发细节与已知限制 |
 | [pi-webui-htmx/docs/DEVELOPMENT.md](pi-webui-htmx/docs/DEVELOPMENT.md) | 前端开发细节与常见坑 |
-| [pi-webui-htmx/docs/contract.md](pi-webui-htmx/docs/contract.md) | UI 包与交互契约 |

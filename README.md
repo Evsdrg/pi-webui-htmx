@@ -49,12 +49,16 @@ go run ./cmd/pi-bridge \
 
 完整说明（选项、首次配置、部署形态、安全边界）见 **[桥的 README](pi-bridge-go/README.md)**。
 
-## 推荐用法
+## 设计原则
 
-- 发第一条消息时才拉起 Pi 进程；只浏览历史不启动任何进程。
-- `--workspace` 是**授权目录**：网页只能在这个根内浏览文件、开终端、起会话。
-  桥不是沙箱——Pi 及其扩展以你的用户身份运行，请只指向可信目录。
-- 模型凭据只保存在桥所在的机器上，不发送到浏览器。
+- **会话数据只有一份**：Pi 的 JSONL 是正文、工具结果与分支的唯一权威；桥只读、不复制。
+  改这些数据的只有 Pi 自己。
+- **浏览不启动进程**：列表、历史、文件浏览都只读磁盘；只有发消息或显式恢复会话才拉起 `pi` 子进程。
+- **断线不等于取消**：命令被接受不等于完成；结果未知时不自动重发；浏览器断开不影响已受理的任务。
+- **工作区是授权目录，不是沙箱**：`--workspace` 限定网页能碰的范围，但 Pi 工具与终端以**你的
+  用户身份**运行——请只指向可信目录。
+- **凭据只留在桥所在的机器上**：模型 API Key 不发送到浏览器；网页也不能新增命令型凭据表达式。
+- **不可信内容不升级信任**：模型输出、文件内容与会话标题一律按不可信处理，经转义与净化后渲染。
 
 ## 仓库结构
 
@@ -67,15 +71,10 @@ go run ./cmd/pi-bridge \
 
 | 文档 | 内容 |
 |---|---|
-| [桥 README](pi-bridge-go/README.md) | 安装、启动、选项、首次模型配置、部署形态 |
-| [架构](pi-bridge-go/docs/architecture.md) | S01–S12：目标形态、边界约束与关键设计决策 |
-| [通信约定](pi-bridge-go/docs/communication.md) | 分层、受理序列、订阅与恢复、背压限额 |
+| [桥 README](pi-bridge-go/README.md) | 安装、启动、选项、首次模型配置、部署形态、刻意不做的事 |
 | [协议 v1](pi-bridge-go/api/v1/protocol.md) | 入口、方法、事件与限额 |
-| [Pi 兼容矩阵](pi-bridge-go/docs/pi-compatibility.md) | 上游能力对照与刻意排除项 |
-| [开发说明](pi-bridge-go/docs/DEVELOPMENT.md) | 桥：接口、测试证据、资源限制、后续优化 |
-| [开发说明](pi-webui-htmx/docs/DEVELOPMENT.md) | 前端：目录结构、开发循环、常见坑 |
-| [UI 包契约](pi-webui-htmx/docs/contract.md) | 模板字段、构建与交换守卫 |
-| [组件选型](pi-webui-htmx/docs/components.md) | 前端依赖、样式组织与资源释放 |
+| [桥开发说明](pi-bridge-go/docs/DEVELOPMENT.md) | 桥：设计边界、代码结构、不变量、测试、限制 |
+| [前端开发说明](pi-webui-htmx/docs/DEVELOPMENT.md) | 前端：目录结构、技术栈、职责边界、样式、常见坑 |
 
 ## 测试
 

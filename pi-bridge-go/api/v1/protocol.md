@@ -1,6 +1,6 @@
 # Bridge Protocol v1
 
-本页描述 v1 的入口、方法与事件形状。以运行代码和 `capabilities` 为准；设计决策见 [architecture.md](../../docs/architecture.md)，跨层次序见 [communication.md](../../docs/communication.md)。
+本页描述 v1 的入口、方法与事件形状。以运行代码和 `capabilities` 为准；桥侧实现细节见 [DEVELOPMENT.md](../../docs/DEVELOPMENT.md)，前端契约见 [UI DEVELOPMENT](../../../pi-webui-htmx/docs/DEVELOPMENT.md)。
 
 ## 1. 当前入口与鉴权
 
@@ -80,7 +80,7 @@ WebSocket 的 origin 白名单与同一规则对齐，否则库层（`Origin.Hos
 
 ## 3. 当前方法清单
 
-运行时 `capabilities.methods` 是「是否可用」的依据；方法存在不代表所有边界都已验收（见 [pi-compatibility.md](../../docs/pi-compatibility.md) 的验证范围）。
+运行时 `capabilities.methods` 是「是否可用」的依据；方法存在不代表所有边界都已验收。
 
 | 分组 | 方法 |
 |---|---|
@@ -265,7 +265,7 @@ GET /ui/stats?sessionId=ID
 
 ## 6. 限额、能力与可观测性
 
-当前默认：WS 请求 1 MiB、响应 512 KiB；Pi JSONL 8 MiB；单事件 256 KiB。这些边界不同，不能用一个“支持 8 MiB 图片”的 UI 数字代替完整链路计算。详细错配见 [communication.md](../../docs/communication.md)。
+当前默认：WS 请求 1 MiB、响应 512 KiB；Pi JSONL 8 MiB；单事件 256 KiB。这些边界不同，不能用一个「支持 8 MiB 图片」的 UI 数字代替完整链路计算。
 
 目标由同一配置/方法描述生成：实际限额、方法期限、只读/副作用分类、存储健康与保留窗口、可用大内容接口。每连接/全局/每主体分别限额，HTTP 与 tunnel 不得绕开配额。
 

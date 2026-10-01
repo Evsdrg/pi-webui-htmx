@@ -15,7 +15,8 @@ import (
 //
 // Pdeathsig 只作用于直接子进程；桥被 SIGKILL 时，忽略 SIGTERM 的
 // 后代仍会存活——那一半属于「必须有服务管理器按 cgroup 监督」的边界
-// （见 architecture.md S03，systemd 用 KillMode=control-group）。
+// （正常 Stop 向整组发信号；SIGKILL 场景由服务管理器的 KillMode=control-group 兜底，
+// 见 docs/DEVELOPMENT.md 的「受管部署」）。
 // 这里锁住的是桥自己可控的一半：Stop 时向整组（-pid）发信号。
 func Test停止回收同组后代(t *testing.T) {
 	pidFile := filepath.Join(t.TempDir(), "child.pid")

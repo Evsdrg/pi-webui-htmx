@@ -16,7 +16,7 @@ import (
 //   - dialog.html  对应 select/confirm/input/editor（需回执）
 //
 // 与 Pi RPC 模式的对应关系见 pi-webui-htmx/ui-manifest.json 的
-// extensionChannel 段，以及 docs/pi-compatibility.md。
+// extensionChannel 段。
 
 // StatusItem 是一个插件的状态行。
 type StatusItem struct {
