@@ -48,7 +48,7 @@ Pi 包内 `docs/rpc.md`、`docs/session-format.md`、`dist/modes/rpc/rpc-mode.js
 
 ⚠️ 通过项不代表所有边界都已覆盖。已知的**未验收**范围：真实模型在云端形态下的长时流式、公网 relay 的跨机 RTT 与丢包、小时级长稳、证书轮换、全主题 axe。
 
-⚠️ 非 Linux 目前存在 PTY 编译缺口，不能写成「可构建但显式拒绝」。SIGKILL 场景的进程回收依赖服务管理器（见 [development.md](development.md) 的部署要点），手工启动只覆盖直接子进程。
+⚠️ 非 Linux 目前存在 PTY 编译缺口，不能写成「可构建但显式拒绝」。SIGKILL 场景的进程回收依赖服务管理器（见 [DEVELOPMENT.md](DEVELOPMENT.md) 的部署要点），手工启动只覆盖直接子进程。
 
 ## 范围决定
 

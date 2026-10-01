@@ -121,7 +121,7 @@ cp "$HOME/.pi/agent/models.json" "$HOME/.local/state/pi-bridge/agent/"
 | [docs/tech-stack.md](docs/tech-stack.md) | 技术栈与版本清单 |
 | [docs/licensing.md](docs/licensing.md) | 许可证核查（含依赖兼容性结论） |
 | [docs/architecture.md](docs/architecture.md) | 架构与设计约束 |
-| [docs/development.md](docs/development.md) | 开发说明：接口、测试证据、资源限制 |
+| [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) | 开发说明：接口、测试证据、资源限制 |
 | [docs/method-inventory.md](docs/method-inventory.md) | RPC 方法清单 |
 | [../pi-webui-htmx/docs/contract.md](../pi-webui-htmx/docs/contract.md) | 桥与 UI 的配套契约 |
 

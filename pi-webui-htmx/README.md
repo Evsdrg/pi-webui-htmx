@@ -11,6 +11,7 @@ Pi Bridge 的 HTMX 工作台。模板、TypeScript 与样式归本仓；桥负�
 
 ## 文档
 
+- [开发说明](docs/DEVELOPMENT.md)：目录结构、开发循环、样式规则、测试与常见坑。
 - [UI 包与交互契约](docs/contract.md)：模板字段、版本、构建与交换守卫。
 - [组件选型](docs/components.md)：依赖、样式组织、资源释放与职责边界。
 - [桥的架构](../pi-bridge-go/docs/architecture.md)：S01–S12、取舍与边界约束。

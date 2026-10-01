@@ -73,7 +73,7 @@ go run ./cmd/pi-bridge \
 | [协议 v1](pi-bridge-go/api/v1/protocol.md) | 入口、方法、事件与限额 |
 | [Pi 兼容矩阵](pi-bridge-go/docs/pi-compatibility.md) | 上游能力对照与刻意排除项 |
 | [技术栈](pi-bridge-go/docs/tech-stack.md) | 依赖与版本清单 |
-| [开发说明](pi-bridge-go/docs/development.md) | 接口、测试证据、资源限制、后续优化 |
+| [开发说明](pi-bridge-go/docs/DEVELOPMENT.md) | 接口、测试证据、资源限制、后续优化 |
 | [UI 包契约](pi-webui-htmx/docs/contract.md) | 模板字段、构建与交换守卫 |
 | [组件选型](pi-webui-htmx/docs/components.md) | 前端依赖、样式组织与资源释放 |
 | [许可证核查](pi-bridge-go/docs/licensing.md) | 依赖兼容性与 AGPL 边界说明 |

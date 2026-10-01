@@ -1,0 +1,51 @@
+name: Go 检查
+
+on:
+  push:
+    paths: ['pi-bridge-go/**', 'pi-webui-htmx/**', '.github/workflows/go.yml']
+  pull_request:
+    paths: ['pi-bridge-go/**', 'pi-webui-htmx/**', '.github/workflows/go.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: pi-bridge-go/go.mod
+      # 跨目录契约测试要读 UI 包（模板、manifest、dist），所以先构建前端。
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '26'
+      - name: 构建 UI 包（跨目录测试需要）
+        working-directory: pi-webui-htmx
+        run: |
+          npm install --global "$(node -p 'require("./package.json").packageManager')"
+          pnpm install --frozen-lockfile
+          pnpm build
+      - name: 格式与 vet
+        working-directory: pi-bridge-go
+        run: |
+          test -z "$(gofmt -l .)"
+          go vet ./...
+      # 固定版本：2025 及更早的 staticcheck 读不了 Go 1.27 的导出数据
+      # （报 “export data version 4 is greater than maximum supported version 2”）。
+      # 规则与排除项见 pi-bridge-go/staticcheck.conf。
+      - name: staticcheck
+        working-directory: pi-bridge-go
+        run: |
+          go install honnef.co/go/tools/cmd/staticcheck@v0.8.1
+          "$(go env GOPATH)/bin/staticcheck" ./...
+      - name: 竞态测试（含跨目录契约）
+        working-directory: pi-bridge-go
+        env:
+          PI_WEBUI_DIR: ../pi-webui-htmx
+        run: go test -race -count=1 ./...
