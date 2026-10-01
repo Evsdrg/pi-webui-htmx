@@ -5,15 +5,12 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
-	"os"
 	"strings"
 	"testing"
 )
 
 func Test对话框端点对话不存在返回204(t *testing.T) {
-	if os.Getenv("PI_WEBUI_DIR") == "" {
-		t.Skip("需要 PI_WEBUI_DIR")
-	}
+	requireUI(t)
 	s, _, _ := newTestServer(t)
 	req := httptest.NewRequest(http.MethodGet, "/ui/extensions/dialog/nope", nil)
 	req.Host = "127.0.0.1:30142"
@@ -26,9 +23,7 @@ func Test对话框端点对话不存在返回204(t *testing.T) {
 }
 
 func Test对话框端点拒绝非法ID(t *testing.T) {
-	if os.Getenv("PI_WEBUI_DIR") == "" {
-		t.Skip("需要 PI_WEBUI_DIR")
-	}
+	requireUI(t)
 	s, _, _ := newTestServer(t)
 	for _, bad := range []string{"/ui/extensions/dialog/", "/ui/extensions/dialog/a/b"} {
 		req := httptest.NewRequest(http.MethodGet, bad, nil)
@@ -43,9 +38,7 @@ func Test对话框端点拒绝非法ID(t *testing.T) {
 }
 
 func Test回执端点校验(t *testing.T) {
-	if os.Getenv("PI_WEBUI_DIR") == "" {
-		t.Skip("需要 PI_WEBUI_DIR")
-	}
+	requireUI(t)
 	s, _, _ := newTestServer(t)
 	cases := []struct {
 		name string
@@ -74,9 +67,7 @@ func Test回执端点校验(t *testing.T) {
 }
 
 func Test回执端点没有活跃worker时报错(t *testing.T) {
-	if os.Getenv("PI_WEBUI_DIR") == "" {
-		t.Skip("需要 PI_WEBUI_DIR")
-	}
+	requireUI(t)
 	s, _, _ := newTestServer(t)
 	form := url.Values{"id": {"d1"}, "value": {"choice-a"}}.Encode()
 	req := httptest.NewRequest(http.MethodPost,

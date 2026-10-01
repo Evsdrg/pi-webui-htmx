@@ -3,7 +3,6 @@ package transport
 import (
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"strings"
 	"testing"
 )
@@ -17,9 +16,7 @@ import (
 //
 // 这条测试不检查实现方式，只检查对外行为，因此两种约定各自钉住一份。
 func Test片段端点状态类失败仍是200(t *testing.T) {
-	if os.Getenv("PI_WEBUI_DIR") == "" {
-		t.Skip("需要 PI_WEBUI_DIR 加载 UI 包")
-	}
+	requireUI(t)
 	s, _, cwd := newTestServer(t)
 	// 会话不存在：这是状态类失败（不是渲染失败），必须当内容渲染。
 	writeSessionFile(t, s.store.Dir(), "known", cwd)
@@ -61,9 +58,7 @@ func Test片段端点状态类失败仍是200(t *testing.T) {
 
 // 非片段端点保留真实状态码；把它们改成 200 就是静默破坏调用方判断。
 func Test非片段端点保留真实状态码(t *testing.T) {
-	if os.Getenv("PI_WEBUI_DIR") == "" {
-		t.Skip("需要 PI_WEBUI_DIR 加载 UI 包")
-	}
+	requireUI(t)
 	s, _, _ := newTestServer(t)
 	cases := []struct {
 		name string
@@ -87,9 +82,7 @@ func Test非片段端点保留真实状态码(t *testing.T) {
 // 扩展对话的两个端点有意偏离片段约定：204 是给前端的状态信号
 // （对话已被回答 → 移除占位），非法 ID 回 400（本仓前端不可能发出）。
 func Test扩展端点保留状态信号(t *testing.T) {
-	if os.Getenv("PI_WEBUI_DIR") == "" {
-		t.Skip("需要 PI_WEBUI_DIR 加载 UI 包")
-	}
+	requireUI(t)
 	s, _, _ := newTestServer(t)
 	if got := getUI(t, s, "/ui/extensions/dialog/does-not-exist").Code; got != http.StatusNoContent {
 		t.Fatalf("对话不存在应回 204，得到 %d", got)
@@ -101,9 +94,7 @@ func Test扩展端点保留状态信号(t *testing.T) {
 
 // 外壳能正常渲染，且压缩协商仍然生效（编码改成具名类型后最容易坏的就是这里）。
 func Test外壳与压缩协商(t *testing.T) {
-	if os.Getenv("PI_WEBUI_DIR") == "" {
-		t.Skip("需要 PI_WEBUI_DIR 加载 UI 包")
-	}
+	requireUI(t)
 	s, _, _ := newTestServer(t)
 	plain := getUI(t, s, "/")
 	if plain.Code != http.StatusOK || !strings.Contains(plain.Body.String(), "<html") {
@@ -132,9 +123,7 @@ func Test外壳与压缩协商(t *testing.T) {
 
 // 静态资源的缓存语义必须留住：资源名含内容哈希，因此可长期不可变缓存。
 func Test静态资源缓存头(t *testing.T) {
-	if os.Getenv("PI_WEBUI_DIR") == "" {
-		t.Skip("需要 PI_WEBUI_DIR 加载 UI 包")
-	}
+	requireUI(t)
 	s, _, _ := newTestServer(t)
 	// 从外壳里取一个真实资源名，避免猜测命名规则。
 	shell := getUI(t, s, "/").Body.String()

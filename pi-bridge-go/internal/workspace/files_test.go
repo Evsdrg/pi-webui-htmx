@@ -88,7 +88,7 @@ func Test文件符号链接逃逸被拒绝(t *testing.T) {
 	}
 	link := filepath.Join(root, "link.txt")
 	if err := os.Symlink(filepath.Join(other, "target.txt"), link); err != nil {
-		t.Skip("当前环境不支持符号链接")
+		t.Skip("跳过：当前环境不支持符号链接")
 	}
 	f := newFiles(t, root)
 	if _, _, _, err := f.Read(link); err == nil {

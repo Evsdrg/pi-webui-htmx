@@ -15,10 +15,8 @@ import (
 // B76：导出是磁盘投影，不启动工作进程。
 // 老实现先 manager.Get 再让 Pi 写文件：只看历史不发送消息的导出也要拉一个进程。
 func Test导出不启动工作进程(t *testing.T) {
+	requireUI(t)
 	s, m, cwd := newTestServer(t)
-	if s.ui == nil {
-		t.Skip("未配置 UI 包，跳过导出断言")
-	}
 	writeSessionFile(t, s.store.Dir(), "sess-1", cwd)
 	if len(m.List()) != 0 {
 		t.Fatalf("前置：不应有工作进程: %+v", m.List())
@@ -55,9 +53,7 @@ func Test导出不启动工作进程(t *testing.T) {
 // 目录最终超过数量上限。
 func Test并发导出仍受配额约束(t *testing.T) {
 	s, _, cwd := newTestServer(t)
-	if s.ui == nil {
-		t.Skip("未配置 UI 包，跳过导出断言")
-	}
+	requireUI(t)
 	writeSessionFile(t, s.store.Dir(), "sess-1", cwd)
 	var wg sync.WaitGroup
 	for i := 0; i < maxExportFiles+8; i++ {

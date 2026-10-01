@@ -49,3 +49,16 @@ jobs:
         env:
           PI_WEBUI_DIR: ../pi-webui-htmx
         run: go test -race -count=1 ./...
+      # UI 包在 CI 里必定存在，因此**不允许**有跨目录测试被跳过：
+      # 一旦路径解析或构建产物出问题而测试静默跳过，上面的“全绿”就是假的。
+      - name: 确认没有测试被跳过
+        working-directory: pi-bridge-go
+        env:
+          PI_WEBUI_DIR: ../pi-webui-htmx
+        run: |
+          go test -v -count=1 ./internal/transport/ ./internal/presentation/ > /tmp/skipcheck.log
+          if grep -q '^--- SKIP' /tmp/skipcheck.log; then
+            echo '以下测试被跳过，但 CI 环境应当全部执行：' >&2
+            grep '^--- SKIP' /tmp/skipcheck.log >&2
+            exit 1
+          fi

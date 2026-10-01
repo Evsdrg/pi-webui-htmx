@@ -6,6 +6,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"pi-bridge-go/internal/testutil"
 )
 
 // Test隧道并发终端命令保护terms映射 覆盖 B73：
@@ -74,7 +76,7 @@ func Test隧道并发终端命令保护terms映射(t *testing.T) {
 	if !bridge.HandleFrame(context.Background(), wrapFrom(t, "tab-terms", last)) {
 		t.Fatal("收尾的终端开启未被处理")
 	}
-	waitFor(t, func() bool {
+	testutil.WaitFor(t, "并发终端命令登记进 terms", func() bool {
 		bridge.mu.Lock()
 		defer bridge.mu.Unlock()
 		return len(conn.terms) > 0

@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"pi-bridge-go/internal/jsonl"
+	"pi-bridge-go/internal/testutil"
 )
 
 // fakePipe 是一段可控的管道：写入被记录，读取可阻塞到测试注入数据为止。
@@ -146,17 +147,6 @@ func newPair(t *testing.T, onEvent func(json.RawMessage)) (*Client, *fakePipe, *
 }
 
 // waitFor 轮询直到条件满足，避免测试用固定 sleep 造成偶发失败。
-func waitFor(t *testing.T, what string, cond func() bool) {
-	t.Helper()
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		if cond() {
-			return
-		}
-		time.Sleep(time.Millisecond)
-	}
-	t.Fatalf("等待超时: %s", what)
-}
 
 func TestCall按ID关联响应(t *testing.T) {
 	var seen []string
@@ -164,7 +154,7 @@ func TestCall按ID关联响应(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	go func() {
-		waitFor(t, "命令写入 stdin", func() bool { return c.pendingCount() == 1 })
+		testutil.WaitFor(t, "命令写入 stdin", func() bool { return c.pendingCount() == 1 })
 		out.push(`{"type":"response","id":"rpc-1","success":true,"data":{"ok":1}}` + "\n")
 	}()
 	raw, err := c.Call(ctx, "get_state", nil)
@@ -185,7 +175,7 @@ func Test事件不按响应处理(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	go func() {
-		waitFor(t, "命令写入 stdin", func() bool { return c.pendingCount() == 1 })
+		testutil.WaitFor(t, "命令写入 stdin", func() bool { return c.pendingCount() == 1 })
 		out.push(`{"type":"agent_start"}` + "\n")
 		out.push(`{"type":"response","id":"rpc-1","success":true,"data":null}` + "\n")
 	}()
@@ -207,7 +197,7 @@ func TestCall返回Pi明确错误(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	go func() {
-		waitFor(t, "命令写入 stdin", func() bool { return c.pendingCount() == 1 })
+		testutil.WaitFor(t, "命令写入 stdin", func() bool { return c.pendingCount() == 1 })
 		out.push(`{"type":"response","id":"rpc-1","success":false,"error":"模型不存在"}` + "\n")
 	}()
 	_, err := c.Call(ctx, "set_model", map[string]any{"provider": "x"})
@@ -222,7 +212,7 @@ func TestCall连接关闭时结果未知(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	go func() {
-		waitFor(t, "命令写入 stdin", func() bool { return c.pendingCount() == 1 })
+		testutil.WaitFor(t, "命令写入 stdin", func() bool { return c.pendingCount() == 1 })
 		c.fail(io.ErrUnexpectedEOF)
 	}()
 	_, err := c.Call(ctx, "prompt", map[string]any{"message": "hi"})
@@ -273,7 +263,7 @@ func Test并发调用写入不交错(t *testing.T) {
 	for i := 0; i < total; i++ {
 		go func() { _, err := c.Call(ctx, "get_state", nil); errs <- err }()
 	}
-	waitFor(t, "所有命令写入 stdin", func() bool { return len(in.commands()) == total })
+	testutil.WaitFor(t, "所有命令写入 stdin", func() bool { return len(in.commands()) == total })
 	for _, line := range in.commands() {
 		if len(line) == 0 || line[len(line)-1] != '}' {
 			t.Fatalf("写入内容不是完整的一帧: %q", line)
@@ -321,7 +311,7 @@ func Test超大帧被拒绝(t *testing.T) {
 	if !errors.Is(err, jsonl.ErrTooLarge) {
 		t.Fatalf("应拒绝超大帧，实际 %v", err)
 	}
-	waitFor(t, "未写入超大帧", func() bool { return len(in.commands()) == 0 })
+	testutil.WaitFor(t, "未写入超大帧", func() bool { return len(in.commands()) == 0 })
 }
 
 // pendingCount 仅用于测试观察在途命令数。

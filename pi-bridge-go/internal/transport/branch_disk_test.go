@@ -10,13 +10,11 @@ import (
 // U04：没有 worker 时分支面板也从磁盘投影出树。
 // 老实现直接 manager.Get，于是打开分支面板等于要求先启动一个工作进程。
 func Test无worker时分支面板从磁盘投影(t *testing.T) {
+	requireUI(t)
 	s, m, cwd := newTestServer(t)
 	writeSessionFile(t, s.store.Dir(), "sess-1", cwd)
 	if len(m.List()) != 0 {
 		t.Fatalf("前置：不应有工作进程: %+v", m.List())
-	}
-	if s.ui == nil {
-		t.Skip("未配置 UI 包，跳过片段断言")
 	}
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/ui/branch?sessionId=sess-1", nil)

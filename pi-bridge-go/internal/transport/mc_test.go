@@ -10,7 +10,6 @@ import (
 	"testing"
 
 	"pi-bridge-go/internal/magiccontext"
-	"pi-bridge-go/internal/presentation"
 )
 
 // withMagicContextDB 建一个带假数据的 magic-context 库，并让桥指向它。
@@ -182,15 +181,7 @@ func TestMagicContextPanelPagination(t *testing.T) {
 // 所以测面板必须显式带 UI 包目录。
 func newTestServerWithUI(t *testing.T) *Server {
 	t.Helper()
-	dir := resolveWebUIDir(os.Getenv("PI_WEBUI_DIR"))
-	if dir == "" {
-		// 默认指向仓库内的检出；CI 上可用环境变量覆盖。
-		dir = "../../pi-webui-htmx"
-	}
-	rendered, err := presentation.LoadFromDir(dir)
-	if err != nil {
-		t.Skipf("加载 UI 包失败（设 PI_WEBUI_DIR 指向 pi-webui-htmx 检出）：%v", err)
-	}
+	rendered := requireUI(t)
 	server, _, _ := newTestServer(t)
 	server.ui = rendered
 	server.ui.SetMagicContext(magiccontext.NewStore())

@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"pi-bridge-go/internal/presentation"
+	"pi-bridge-go/internal/testutil"
 )
 
 // 缓存必须按 epoch 失效：fork/clone 之后系统提示词与工具集会变，
@@ -66,7 +67,7 @@ func Test会话元数据错误状态码(t *testing.T) {
 // 若按错误码返回，面板会停在旧内容上且没有任何解释。真机复现过：
 // 未启动 worker 时点「会话信息」，请求确实发出，但界面一直显示占位文字。
 func Test片段端点前置状态渲染成内容(t *testing.T) {
-	renderer, err := presentation.LoadFromDir("../../../pi-webui-htmx")
+	renderer, err := presentation.LoadFromDir(testutil.RequireWebUIDir(t))
 	if err != nil {
 		t.Skip("需要 pi-webui-htmx 构建产物")
 	}

@@ -10,15 +10,13 @@ import (
 
 	"pi-bridge-go/internal/presentation"
 	"pi-bridge-go/internal/sessions"
+	"pi-bridge-go/internal/testutil"
 )
 
 // TestUI方法契约核对静态声明，不替代命令与交互行为测试。
 // 联测脚本必须提供真实 UI 包；独立桥仓的 CI 不冒充跨仓验收。
 func TestUI方法契约(t *testing.T) {
-	dir := resolveWebUIDir(os.Getenv("PI_WEBUI_DIR"))
-	if dir == "" {
-		t.Skip("需要 PI_WEBUI_DIR；完整联测请运行 scripts/verify-pair.sh")
-	}
+	dir := testutil.RequireWebUIDir(t)
 	renderer, err := presentation.LoadFromDir(dir, SupportedMethods...)
 	if err != nil {
 		t.Fatalf("UI 包无法由当前桥加载：%v", err)

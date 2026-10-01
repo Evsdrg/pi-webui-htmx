@@ -47,7 +47,7 @@ func Test每个受支持方法都有执行策略(t *testing.T) {
 func Test清单文档与实现一致(t *testing.T) {
 	doc, err := os.ReadFile(filepath.Join("..", "..", "docs", "method-inventory.md"))
 	if err != nil {
-		t.Skip("清单文档缺失")
+		t.Skip("跳过：方法清单文档缺失（docs/method-inventory.md）")
 	}
 	for _, m := range SupportedMethods {
 		if !strings.Contains(string(doc), "`"+m+"`") {

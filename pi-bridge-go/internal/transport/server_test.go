@@ -22,7 +22,6 @@ import (
 	"pi-bridge-go/internal/management"
 	"pi-bridge-go/internal/observe"
 	"pi-bridge-go/internal/pi"
-	"pi-bridge-go/internal/presentation"
 	"pi-bridge-go/internal/protocol"
 	run "pi-bridge-go/internal/runtime"
 	"pi-bridge-go/internal/sessions"
@@ -105,15 +104,10 @@ func newTestServerTuned(t *testing.T, commandTimeout time.Duration, termOpts ...
 	if err := os.MkdirAll(exportDir, 0700); err != nil {
 		t.Fatal(err)
 	}
-	// 有 UI 包目录时才加载；没有则 UI 层禁用（nil）。
-	var ui *presentation.Renderer
-	if dir := resolveWebUIDir(os.Getenv("PI_WEBUI_DIR")); dir != "" {
-		rendered, err := presentation.LoadFromDir(dir)
-		if err != nil {
-			t.Fatalf("加载 UI 包失败: %v", err)
-		}
-		ui = rendered
-	}
+	// UI 包目录由 testutil 解析：环境变量优先，否则按单仓布局推断
+	// （仓库根的 pi-webui-htmx）。找不到时 UI 层禁用（nil）——那是合法状态；
+	// 目录存在但加载失败会让测试失败（见 ui_dir_test.go）。
+	ui := uiRenderer(t)
 	srv, err := New(Options{
 		Manager: m, Store: store, Terminals: terminals, Files: files,
 		Config: piConfig, Discovery: management.DefaultDiscoveryLimits(),
@@ -758,9 +752,7 @@ func Test发现接口拒绝非法URL与头部(t *testing.T) {
 }
 
 func Test活跃未落盘会话历史明确返回空状态(t *testing.T) {
-	if os.Getenv("PI_WEBUI_DIR") == "" {
-		t.Skip("需要 PI_WEBUI_DIR 加载 UI 包")
-	}
+	requireUI(t)
 	s, manager, cwd := newTestServer(t)
 	worker, err := manager.Start(context.Background(), "", cwd)
 	if err != nil {
@@ -794,9 +786,7 @@ func Test活跃未落盘会话历史明确返回空状态(t *testing.T) {
 }
 
 func TestUI端点返回滚动模式(t *testing.T) {
-	if os.Getenv("PI_WEBUI_DIR") == "" {
-		t.Skip("需要 PI_WEBUI_DIR 加载 UI 包")
-	}
+	requireUI(t)
 	s, _, cwd := newTestServer(t)
 	// 造一个会话文件。历史读取不应启动 worker。
 	writeSessionFile(t, s.store.Dir(), "sc1", cwd)
@@ -1348,9 +1338,7 @@ func TestWS实际读上限与预算一致(t *testing.T) {
 // 损坏的历史文件是 invalid_history，绝不能落进「分支尚未落盘」那条路——
 // 那会让真实的数据损坏在界面上表现成「稍后会出现的空分支」。
 func Test损坏历史不得被当作未落盘分支(t *testing.T) {
-	if os.Getenv("PI_WEBUI_DIR") == "" {
-		t.Skip("需要 PI_WEBUI_DIR 加载 UI 包")
-	}
+	requireUI(t)
 	s, manager, cwd := newTestServer(t)
 	worker, err := manager.Start(context.Background(), "", cwd)
 	if err != nil {
@@ -1378,9 +1366,7 @@ func Test损坏历史不得被当作未落盘分支(t *testing.T) {
 
 // 片段提示只显示最外层的中文提示；原因可能含本机路径或上游原文，不能露出去。
 func Test片段提示不泄露错误原因(t *testing.T) {
-	if os.Getenv("PI_WEBUI_DIR") == "" {
-		t.Skip("需要 PI_WEBUI_DIR 加载 UI 包")
-	}
+	requireUI(t)
 	s, _, _ := newTestServer(t)
 	rec := httptest.NewRecorder()
 	s.fragmentIssue(rec, "", protocol.Wrap("pi_error", "请求供应商失败",

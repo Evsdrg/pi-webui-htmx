@@ -8,6 +8,7 @@ import (
 
 	"pi-bridge-go/internal/management"
 	"pi-bridge-go/internal/presentation"
+	"pi-bridge-go/internal/testutil"
 )
 
 // 这条锁的是「信封」与「载荷」之间的那道接缝：`management.Config.Models()`
@@ -20,10 +21,7 @@ import (
 // 不显眼，只有真去选模型时才发现。只测投影函数或只测回执都发现不了，
 // 必须把两者接起来测。
 func Test模型清单从配置文件一路读到选项(t *testing.T) {
-	uiDir := resolveWebUIDir(os.Getenv("PI_WEBUI_DIR"))
-	if uiDir == "" {
-		t.Skip("需要 PI_WEBUI_DIR 加载 UI 包")
-	}
+	uiDir := testutil.RequireWebUIDir(t)
 	dir := t.TempDir()
 	doc := `{"providers":{
 		"CPA-Responses":{"api":"openai-responses","baseUrl":"http://127.0.0.1:1/v1",

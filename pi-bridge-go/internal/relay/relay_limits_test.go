@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
+
+	"pi-bridge-go/internal/testutil"
 )
 
 // Test单用户连接数有上限 覆盖 B23：
@@ -100,11 +102,11 @@ func Test关闭relay会中断浏览器连接(t *testing.T) {
 		t.Fatal("浏览器连接失败")
 	}
 	defer client.CloseNow()
-	waitFor(t, "浏览器连接注册", func() bool { return s.Stats()["clients"].(int) == 1 })
+	testutil.WaitFor(t, "浏览器连接注册", func() bool { return s.Stats()["clients"].(int) == 1 })
 
 	s.Close()
 	// 连接必须被服务端主动关闭，而不是留给对端超时。
-	waitFor(t, "浏览器连接被服务端关闭", func() bool { return s.Stats()["clients"].(int) == 0 })
+	testutil.WaitFor(t, "浏览器连接被服务端关闭", func() bool { return s.Stats()["clients"].(int) == 0 })
 	// 必须明确读到「连接已关闭」。原写法是「读失败即返回」，
 	// 那样即使 Close 什么都没做，也会因为读超时而误判为通过。
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)

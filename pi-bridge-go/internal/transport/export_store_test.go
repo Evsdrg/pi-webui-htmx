@@ -106,10 +106,8 @@ func Test导出目录按字节裁掉最旧的(t *testing.T) {
 // 先放一批历史产物，再真的走一次 session.export_html，
 // 目录必须被收在上限内，且刚导出的那个文件不能被自己删掉。
 func Test反复导出不会撑爆导出目录(t *testing.T) {
+	requireUI(t)
 	s, _, cwd := newTestServer(t)
-	if s.ui == nil {
-		t.Skip("未配置 UI 包，跳过导出断言")
-	}
 	// 导出是磁盘投影：有会话文件即可，不需要先启动工作进程（B76）。
 	writeSessionFile(t, s.store.Dir(), "sess-1", cwd)
 	for i := 0; i < maxExportFiles+5; i++ {

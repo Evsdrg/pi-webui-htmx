@@ -9,6 +9,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"pi-bridge-go/internal/testutil"
 )
 
 func TestTunnelBridge命令闭环(t *testing.T) {
@@ -230,7 +232,7 @@ func Test隧道发送失败后不再复用死连接(t *testing.T) {
 	}
 	// 让隧道进入失败状态，迫使 pump 退出。
 	fail.Store(true)
-	waitFor(t, func() bool {
+	testutil.WaitFor(t, "死连接的虚拟连接从映射中摘除", func() bool {
 		bridge.mu.Lock()
 		defer bridge.mu.Unlock()
 		_, ok := bridge.virtual["tab-1"]
@@ -245,7 +247,7 @@ func Test隧道发送失败后不再复用死连接(t *testing.T) {
 	if !bridge.HandleFrame(context.Background(), wrapFrom(t, "tab-1", second)) {
 		t.Fatal("重连后的隧道帧未被处理")
 	}
-	waitFor(t, func() bool {
+	testutil.WaitFor(t, "同一 clientId 重连后拿到新的活连接", func() bool {
 		bridge.mu.Lock()
 		defer bridge.mu.Unlock()
 		c, ok := bridge.virtual["tab-1"]
@@ -269,7 +271,7 @@ func Test隧道退订释放订阅配额(t *testing.T) {
 		t.Fatal("隧道帧未被处理")
 	}
 	// 等 worker 真正起来，否则后面的会话 ID 取不到。
-	waitFor(t, func() bool { return len(s.manager.List()) == 1 })
+	testutil.WaitFor(t, "worker 启动完成", func() bool { return len(s.manager.List()) == 1 })
 	workers := s.manager.List()
 	sessionID := workers[0].SessionID
 	if sessionID == "" {
@@ -304,23 +306,10 @@ func Test隧道退订释放订阅配额(t *testing.T) {
 			t.Fatalf("第 %d 次退订后 worker 订阅数应为 0，实际 %d", i, n)
 		}
 	}
-	waitFor(t, func() bool {
+	testutil.WaitFor(t, "退订后虚拟连接不再持有订阅", func() bool {
 		bridge.mu.Lock()
 		defer bridge.mu.Unlock()
 		c, ok := bridge.virtual["tab-1"]
 		return ok && len(c.subs) == 0
 	})
-}
-
-// waitFor 轮询等待条件成立，避免测试依赖固定睡眠。
-func waitFor(t *testing.T, cond func() bool) {
-	t.Helper()
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
-		if cond() {
-			return
-		}
-		time.Sleep(5 * time.Millisecond)
-	}
-	t.Fatal("等待条件超时")
 }

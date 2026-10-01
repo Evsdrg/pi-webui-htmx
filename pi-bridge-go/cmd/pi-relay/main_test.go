@@ -18,7 +18,7 @@ func Test默认状态目录是持久位置(t *testing.T) {
 	t.Setenv("XDG_STATE_HOME", "")
 	home, err := os.UserHomeDir()
 	if err != nil || home == "" {
-		t.Skip("无家目录，跳过")
+		t.Skip("跳过：环境没有家目录")
 	}
 	got := defaultStateDir()
 	if !strings.HasPrefix(got, home) {

@@ -81,7 +81,7 @@ func Test扩展状态快照不依赖订阅且按会话取(t *testing.T) {
 	}
 
 	if s.ui == nil {
-		t.Skip("未配置 UI 包，跳过片段断言")
+		t.Skip("跳过：未找到 UI 包（设 PI_WEBUI_DIR，或把 pi-webui-htmx 检出放在仓库根）")
 	}
 	get := func(query string) string {
 		rec := httptest.NewRecorder()

@@ -3,27 +3,22 @@ package presentation
 import (
 	"encoding/json"
 	"html/template"
-	"os"
 	"strings"
 	"testing"
 
 	"pi-bridge-go/internal/sessions"
+	"pi-bridge-go/internal/testutil"
 )
-
-// uiDir 是相邻检出的 UI 包。从本包目录往上三层才是工作区根，
-// 写两层会指向 pi-bridge-go/pi-webui-htmx，永远命中不了（旧测试就是这样静默跳过的）。
-const uiDir = "../../../pi-webui-htmx"
 
 // testRenderer 从真实 UI 包加载模板：模板缺失时这些断言就没有意义，
 // 所以检出不存在时跳过，存在但加载失败时直接失败。
+// 目录解析统一走 testutil（环境变量优先，否则按单仓布局推断）。
 func testRenderer(t *testing.T) *Renderer {
 	t.Helper()
-	if _, err := os.Stat(uiDir); err != nil {
-		t.Skip("需要 pi-webui-htmx 检出")
-	}
-	r, err := LoadFromDir(uiDir)
+	dir := testutil.RequireWebUIDir(t)
+	r, err := LoadFromDir(dir)
 	if err != nil {
-		t.Fatalf("加载 UI 包失败：%v", err)
+		t.Fatalf("UI 包在 %s 但加载失败（若缺 dist/assets，先执行 pnpm build）：%v", dir, err)
 	}
 	return r
 }

@@ -13,7 +13,7 @@ import (
 func withSQLite(t *testing.T) (*Store, bool) {
 	t.Helper()
 	if _, err := lookPath("sqlite3"); err != nil {
-		t.Skip("本机没有 sqlite3")
+		t.Skip("跳过：本机没有 sqlite3（读取 Magic Context 的库需要它）")
 	}
 	dir := t.TempDir()
 	db := filepath.Join(dir, "context.db")

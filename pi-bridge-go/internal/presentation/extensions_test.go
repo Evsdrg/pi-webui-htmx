@@ -3,6 +3,8 @@ package presentation
 import (
 	"strings"
 	"testing"
+
+	"pi-bridge-go/internal/testutil"
 )
 
 func TestDialogFromPi四类方法(t *testing.T) {
@@ -87,9 +89,10 @@ func TestDialogFromPi拒绝坏JSON(t *testing.T) {
 }
 
 func TestRenderExtensionStatus去重排序(t *testing.T) {
-	r, err := LoadFromDir("../../../pi-webui-htmx")
+	dir := testutil.RequireWebUIDir(t)
+	r, err := LoadFromDir(dir)
 	if err != nil {
-		t.Skip("需要 pi-webui-htmx 检出")
+		t.Fatalf("UI 包在 %s 但加载失败（若缺 dist/assets，先执行 pnpm build）：%v", dir, err)
 	}
 	html, err := r.RenderExtensionStatus([]StatusItem{
 		{Key: "zz", Text: "second"},
