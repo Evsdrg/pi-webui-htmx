@@ -1,6 +1,6 @@
 # Bridge Protocol v1
 
-更新：2026-09-28。本页描述当前 v1 的入口与方法，并单列尚未落地的目标语义。以运行代码和 `capabilities` 为准；方案及验收见 [architecture.md](../../docs/architecture.md)，遗留问题见 [code-audit.md](../../docs/code-audit.md)。
+本页描述 v1 的入口、方法与事件形状。以运行代码和 `capabilities` 为准；设计决策见 [architecture.md](../../docs/architecture.md)，跨层次序见 [communication.md](../../docs/communication.md)。
 
 ## 1. 当前入口与鉴权
 
@@ -80,7 +80,7 @@ WebSocket 的 origin 白名单与同一规则对齐，否则库层（`Origin.Hos
 
 ## 3. 当前方法清单
 
-运行时 `capabilities.methods` 是是否实现的入口依据，但方法存在不代表没有 [审查缺陷](../../docs/code-audit.md)。
+运行时 `capabilities.methods` 是「是否可用」的依据；方法存在不代表所有边界都已验收（见 [pi-compatibility.md](../../docs/pi-compatibility.md) 的验证范围）。
 
 | 分组 | 方法 |
 |---|---|
@@ -277,6 +277,6 @@ metrics 需鉴权，使用有界方法/错误标签；日志只记录关联 ID�
 
 目标 S12 在同源设备前缀下转发受控 HTTP 资源与 WS 命令，补齐 HTMX 云链路；分块/取消/credit/鉴权都属于新传输能力，当前接口不能假装已经支持。
 
-本次完整修复按 [整体规划](../../docs/repair-plan.md) 的 P6 集中升级到 v2，配套更新桥/UI/manifest/TS/工具；P1–P5 中可保持形状的修复继续按当前 v1 验证。当前版本仍为 v1；各批修复状态以审查台账为准。独立可选能力仍可协商，但不能在 v1 下暗改订阅、重复结果、配置秘密和资源引用语义。
+订阅确认、请求状态、配置 revision 与秘密操作都在 v1 的形状内补完，没有出现必须换版本才能表达的改动，因此**当前版本仍为 v1**。独立可选能力通过能力协商引入；不能在 v1 下暗改订阅、重复结果、配置秘密和资源引用语义。
 
 新版写入口上线后，旧写协议明确拒绝并提示升级；不保留旧盲写/去重路径作为回退。必要旧读取适配必须有期限并复用相同业务服务。Journal 的离线迁移、保守导入与不可恢复旧快照的回滚边界见整体规划。本文目标说明不是启用新能力的依据。

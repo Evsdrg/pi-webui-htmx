@@ -4,22 +4,21 @@
 
 本地 Go 桥连接浏览器与独立 `pi --mode rpc` 子进程。目标是适配 HTMX 工作台、直接读取 Pi 数据、并使 agent 内存随进程退出释放。桥不嵌入 Pi SDK，不另建一份会话正文数据库。
 
-**仓库边界：** 本仓只含 Go 桥。相邻的 `../pi-webui-htmx`（HTMX 前端与 UI 包）是独立 git 仓库；二者没有共同父仓库，也不要为它们建一个总仓库。上游 `pi-web` 的只读参考检出在 `../../src-read-only/pi-web`（不在 `pi/` 下）。跨仓改动分两边提交，配套关系写在 [UI 包契约](../../pi-webui-htmx/docs/contract.md)。
+**目录结构：** 本目录是 Go 桥；相邻的 `../pi-webui-htmx` 是 HTMX 前端与 UI 包，二者在同一仓库内并列，跨仓改动分别提交并同时通过。配套契约见 [UI 包契约](../../pi-webui-htmx/docs/contract.md)。
 
-**状态：** 本地工作台与 relay/tunnel 后端均已实现，云端形态的整链路（relay 设备前缀 → 隧道 HTTP 帧 / WS 别名 → 桥）已端到端跑通并实测。台账 B01–B81、U01–U21、T01、D01–D02 在此前多轮修复中逐项关闭；剩余的**部署约束**与**未经真实环境验收的部分**见 [剩余问题联合分析](remaining-issues-plan.md)，逐项证据见 [code-audit.md](code-audit.md)。
+**状态：** 本地工作台与 relay/tunnel 后端均已实现，云端形态的整链路（relay 设备前缀 → 隧道 HTTP 帧 / WS 别名 → 桥）已端到端跑通并实测。未经真实环境验收的部分见 [architecture.md](architecture.md) 的「实现状态」。
 
 ## 文档入口
 
 | 文档 | 内容 |
 |---|---|
-| [剩余问题联合分析与实施](remaining-issues-plan.md) | 批次 A–J、影响矩阵、依赖与最终状态（**当前**） |
-| [架构与修复决策](architecture.md) | S01–S12 设计、取舍与**逐节实施状态表** |
-| [整体实施规划（历史）](repair-plan.md) | 更早一版的 P0–P7 依赖与回归门槛，仅作参考 |
+| [架构](architecture.md) | S01–S12：目标形态、边界约束与关键设计决策 |
 | [通信约定](communication.md) | HTTP/WS/Pi 分层、作用域、受理/恢复和背压 |
-| [当前 v1 协议](../api/v1/protocol.md) | 已有入口/方法与目标语义的区别 |
-| [Pi 兼容矩阵](pi-compatibility.md) | Pi 0.85.1、桥、UI 和刻意排除/暂缓项 |
-| [审查台账](code-audit.md) | 问题、证据、方案归属与待修状态 |
-| [Go 惯用写法复核](go-idioms-review.md) | G01–G19：错误链、类型表达、结构体量与工程配置的对照结论 |
+| [当前 v1 协议](../api/v1/protocol.md) | 入口、方法、事件与限额 |
+| [Pi 兼容矩阵](pi-compatibility.md) | Pi 0.85.1 的能力对照与刻意排除项 |
+| [方法清单](method-inventory.md) | 方法分类（由测试与代码交叉校验） |
+| [技术栈](tech-stack.md) | 依赖与版本清单 |
+| [许可证核查](licensing.md) | 依赖兼容性结论 |
 | [UI 包契约](../../pi-webui-htmx/docs/contract.md) | 模板/构建/前端行为与版本配套 |
 
 ## 当前能力
@@ -75,31 +74,27 @@ TimeoutStopSec=30
 ## 核心接口
 
 - `/healthz`：健康状态；`/api/v1/auth`：Bearer 换 Cookie。
-- `/api/v1/capabilities`：当前版本、方法和限额（B80 的硬编码待修）。
+- `/api/v1/capabilities`：当前版本、方法和限额（限额引用运行时真实配置）。
 - `/api/v1/sessions`、`/api/v1/sessions/{id}/history`：只读磁盘，不启动 Pi。
 - `/api/v1/ws`：命令、回执、事件；`/ui/*`：HTMX 片段及受控资源。
 
 `requestId` 是请求关联/去重键，`epoch/seq` 是传输游标，`entryId` 是持久历史标识。prompt accepted 不等于完成；timeout/outcome_unknown 不能自动重发。浏览器断开不等于取消已受理工作。
 
-## 修复方向与落地状态
+## 关键不变量
 
-下面这些方向在批次 A–J 中逐项落地（台账 107 项中 105 项已修，保留 B40/B71 两项部署侧事项）：
+改这些部分之前先读对应设计（[architecture.md](architecture.md) 的 S01–S12）：
 
-1. 本地/tunnel 共用 Executor 与预算 ✅；持久去重与 unknown 恢复 ✅；PTY、订阅、安全控制分别处理 ✅。
-2. replay 与 live 注册原子化 ✅；连接拥有订阅与取消资源 ✅；身份变化换 epoch ✅。
-3. Manager 用稳定 workerID 与 session 预留完成身份事务 ✅；删除前收敛 writer ✅。
-4. 同一配置 schema 处理数组/脱敏/恢复 ✅；revision、秘密保留、默认拒绝重定向 ✅；
-   禁止远程新增 `!command` 凭据表达式 ✅。
-5. 历史/tree/title/lazy 共用验证后的偏移索引 ✅；大内容走 HTTP ✅；控制帧保持小 ✅。
-6. UI SessionScope 在 htmx 处理响应前拦截旧结果 ✅；固定命令目标 ✅。
-7. relay 持久身份、TTL、部署信任与连接回收 ✅；同源 HTTP+WS 设备路由 ✅。
-
-逐项证据（含反例名与文件）见 [code-audit.md](code-audit.md)，批次与影响矩阵见
-[remaining-issues-plan.md](remaining-issues-plan.md)。
+1. 本地与 tunnel 共用同一 Executor：准入、去重、预算与超时按方法声明，不按连接类型分叉。
+2. replay 与 live 注册在同一锁内完成，快照末尾序号等于注册序号；身份变化换 epoch，游标不跨 epoch 接受。
+3. worker 身份是事务：先预留、后调 Pi、再按真实 ID 提交；删除前先收敛 writer。
+4. 配置写入按 revision 校验，`***` 是占位符而非凭据；网页不能新增 `!command` 形式的凭据表达式。
+5. 历史、tree、标题、lazy 共用一份带文件身份校验的偏移索引；大内容走 HTTP，控制帧保持小。
+6. UI 在 htmx 处理响应之前拦截过期响应（目标、会话代次、局部 revision 三重守卫）。
+7. relay 只转发不解析；设备前缀同时承载 HTTP 与 WS，鉴权始终在桥自己的 handler 上执行。
 
 ## 模型配置与执行边界
 
-`config.models.*` 由前端触发；桥提供原语。Pi 的 models 是数组，api 是协议标识，baseUrl 才是 HTTP 地址。当前 raw/write 的秘密保护、摘要计数和固定临时文件有已知缺陷；不能将“临时文件+rename”概括为所有安全/并发问题已解决。
+`config.models.*` 由前端触发；桥提供原语。Pi 的 models 是数组，`api` 是协议标识，`baseUrl` 才是 HTTP 地址。写入按 revision 校验、按 model id 合并、把 `***` 识别为占位符保留原值；临时文件为同目录独占创建 + Sync + rename。这些保护覆盖桥自己的写入路径；外部 CLI 的不合作并发写入不受桥控制。
 
 config.packages 只读清单与版本，不安装/更新。只读 Git 同样要防 fsmonitor/external diff/textconv 等隐式执行。Pi 工具和显式 PTY 本身具有执行能力；工作区根与环境过滤不是对它们的系统隔离。
 
@@ -149,7 +144,7 @@ PI_WEBUI_DIR=../pi-webui-htmx go test -race ./internal/transport/
 
 FakePi 已按测试进程使用独占构建目录，TestMain 在测试结束后清理，见 T01。真实 Pi 冒烟使用隔离配置，只做握手/状态/退出，不加载生产秘密或发送付费请求。
 
-2026-09-27 的 P0 本地联测：Go race/vet/gofmt、UI 72 项、typecheck、build、check 通过；首屏 gzip 36.64 KiB。两仓独立 CI 已配置但托管运行尚未验证。跨仓验证必须显式设置 `PI_WEBUI_DIR` 并运行 `scripts/verify-pair.sh`，缺 UI 直接失败；[方法与入口清单](method-inventory.md) 和 Go/TS/模板静态契约同时检查。其他审查反例仍须随各项修复进入正式回归测试。
+跨仓验证必须显式设置 `PI_WEBUI_DIR` 并运行 `scripts/verify-pair.sh`，缺 UI 直接失败；[方法清单](method-inventory.md) 由 `ui_contract_test.go` 与 Go 注册表、UI 类型、模板交叉核对，此外还有 Go/TS/模板静态契约。
 
 ## 资源、压缩与已知限制
 
@@ -159,5 +154,18 @@ FakePi 已按测试进程使用独占构建目录，TestMain 在测试结束后�
 - 当前 Linux 正常停止采用进程组（`Test停止回收同组后代` 覆盖）；Pdeathsig 不保证桥被 SIGKILL 后所有后代消失，生产模式使用受监督的 systemd cgroup（见「受管部署」），手工启动明确为较弱保证。
 - 非 Linux PTY 当前有编译缺口，不能宣传为完整可构建的显式拒绝路径。
 - 跨桥/外部 CLI 的非合作写入不受桥内互斥保证。
+- 压缩器：动态与静态资源统一 `lgwin=19`（实测与本项目响应体积下 `lgwin=22` 输出逐字节相同，而单 writer 常驻从 9.9 MiB 降到 2.9 MiB）；静态资源压缩串行化并把 ≥256 KiB 的 chunk 降到 quality 7，并发 3 个大 chunk 的峰值从 121 MB 降到 50 MB 左右。
+- 未设 `SetMemoryLimit`/`SetGCPercent`：小内存 VPS 部署建议显式限制。
+
+## 后续可做的优化（未实施）
+
+以下是已测量、尚未实施的候选，按收益/风险排序。数字来自隔离原型（冻结的真实会话副本、环回、假 Pi），不是产品实现的收益承诺。
+
+| 候选项 | 问题 | 方向 |
+|---|---|---|
+| 合并消息投影的重复解码 | `sessions` 投影对同一条 message 多次解码（外层、块类型、用量、工具状态各一次） | 共用一份解码结果；须对错误类型、null、缺失字段、未知 role 建差分测试——原型曾因共用结构让整条 message 被错误类型清零 |
+| 收起态预览有界 | 工具块收起时仍把完整正文渲染进预览（实测占页面 96.8%，而 CSS 是单行省略） | 只为预览截断（约 200 字符）并只遍历边界内 UTF-8；详情、复制、导出不得截断 |
+| 惰性内容按索引定位 | thinking/图片展开仍从头读文件（实约 146 ms） | 复用扫描索引的 offset/size 做 ReadAt（原型约 0.3 ms）；必须校验返回记录 ID 与请求一致 |
+| 小型多会话缓存 | 单槽扫描缓存在会话交替浏览时反复重扫（A→B→A 约 112–131 ms） | 2–4 槽覆盖切换；保留 size/mtime/identity 失效校验，先建立可信的保留内存预算 |
 
 OAuth/额度查询、插件远程安装等排除项，以及 Web Push 暂缓、PWA/版本检查等未立项项，统一见兼容矩阵；不要把“未实现”自行改写成“用户不要”。

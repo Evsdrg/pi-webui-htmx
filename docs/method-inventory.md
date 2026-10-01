@@ -1,6 +1,6 @@
-# 修复基线：入口与方法分类
+# 入口与方法分类
 
-P0 清单，基于当前 62 个方法及 HTTP 路由。以下分类是 P2 共用执行器的设计输入，**不代表当前已经按此执行限流/持久化**。`ui_contract_test.go` 核对本表、Go 注册表、配套 UI 类型与模板；这里不替代行为测试。
+基于当前方法与 HTTP 路由的执行分类。`ui_contract_test.go` 与 `methods_test.go` 交叉核对本表、Go 注册表、配套 UI 类型与模板，防止文档与代码漂移；这里不替代行为测试。
 
 ## 方法分类
 
@@ -23,7 +23,7 @@ P0 清单，基于当前 62 个方法及 HTTP 路由。以下分类是 P2 共用
 | `session.ui_response` | 一次性对话回复 | worker + epoch/transition + dialogId | dialog claim、控制队列与 stdin 写入结果 |
 | `session.export_html` | 有界产物生成 | 磁盘投影（**不需要 worker**，见 noWorkerSessionMethods） | 单文件 ≤ 64 MiB、目录 32 个 / 256 MiB、原子写入、全程持锁；不将产物视为会话正文 |
 
-只读仍会消耗资源或向外发请求，不能跳过鉴权与预算。新建与恢复的 start 不能用一个幂等标签概括。具体策略落地时以共用 MethodSpec 为唯一执行事实来源；此表保留说明，静态集合检查防止漏列。
+只读仍会消耗资源或向外发请求，不能跳过鉴权与预算。新建与恢复的 start 不能用一个幂等标签概括。执行策略以共用 MethodSpec 为唯一事实来源；此表是说明，静态集合检查防止漏列。
 
 ## HTTP 入口
 
@@ -43,7 +43,7 @@ P0 清单，基于当前 62 个方法及 HTTP 路由。以下分类是 P2 共用
 | POST `/ui/sessions/{id}/ui-response` | 对话服务 | 与 WS session.ui_response 相同 claim/验证/写入确认 |
 | GET `/ui/exports/{name}` | 受控产物下载 | 授权、名称限制、完成/取消/TTL 清理 |
 | GET `/api/v1/ws` | 本地接入 | 升级鉴权、每连接/全局准入与唯一 writer |
-| tunnel 的虚拟连接 | 隧道接入 | 可信主体/设备，复用以上服务；当前尚无完整 HTTP tunnel |
+| tunnel 的虚拟连接 | 隧道接入 | 可信主体/设备，复用以上服务；HTTP 请求与 WS 都经设备前缀转发 |
 
 ## 可复现验证
 
@@ -51,6 +51,4 @@ P0 清单，基于当前 62 个方法及 HTTP 路由。以下分类是 P2 共用
 PI_WEBUI_DIR=/absolute/path/to/pi-webui-htmx scripts/verify-pair.sh
 ```
 
-脚本记录两仓实际 HEAD/工作树，使用锁文件安装，执行 UI 单测/类型/构建/契约及带真实 UI 包的 Go vet/race。缺少 UI 路径直接失败。两仓独立 CI 已配置；桥 CI 未提供 UI 时明确跳过跨仓测试，不算联测通过。当前没有 Git remote，未配置未知来源的跨仓下载，也未声称托管 CI 已运行。
-
-P0 本地联测：72 项前端测试通过，首屏 gzip 36.64 KiB / 40 KiB，Go 16 个测试包通过。假 Pi 独立构建测试已反向验证：临时恢复固定输出路径会失败，已恢复正确实现。
+脚本记录两侧实际 HEAD/工作树，使用锁文件安装，执行 UI 单测/类型/构建/契约及带真实 UI 包的 Go vet/race。缺少 UI 路径直接失败；桥 CI 未提供 UI 时明确跳过跨仓测试，不算联测通过。
