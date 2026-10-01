@@ -1,6 +1,6 @@
 # UI 包与交互契约
 
-更新：2026-09-27。本文约定 UI 包/模板/浏览器行为；应用协议归 [Bridge Protocol v1](../../pi-bridge-go/api/v1/protocol.md)。[桥架构 S01–S12](../../pi-bridge-go/docs/architecture.md) 是设计说明（含逐节实施状态表），[审查台账](../../pi-bridge-go/docs/code-audit.md) 逐项记录问题与证据。**本文约定的行为已在批次 A–J 中落地并配有回归**；仍属目标态的部分在文中就地标注（例如跨浏览器/CLI 的 revision/CAS）。
+本文约定 UI 包/模板/浏览器行为；应用协议归 [Bridge Protocol v1](../../pi-bridge-go/api/v1/protocol.md)，设计决策见[桥架构 S01–S12](../../pi-bridge-go/docs/architecture.md)。
 
 ## 1. 所有权与实际目录
 
@@ -72,7 +72,7 @@ body 的 data-session-id 是当前显示目标，不得在长异步链中反复�
 
 ## 5. 会话作用域（目标 S07）
 
-使用轻量 SessionScope，不引入状态管理框架。作用域持有固定 session/draft 身份、generation、AbortController、资源 disposer；新草稿绑定真实 ID 不算另选会话。面板另有 request sequence；设备、连接、工作区和配置编辑使用独立作用域，具体所有权见 [整体规划](../../pi-bridge-go/docs/repair-plan.md)。切聊天不能丢全局配置草稿，同 cwd 切聊天不能误关 PTY；实际换 cwd 仍按当前行为关闭旧 PTY，关闭失败保留 ID 供清理。DOM 是投影，不是已发起操作的唯一事实来源。
+使用轻量 SessionScope，不引入状态管理框架。作用域持有固定 session/draft 身份、generation、AbortController、资源 disposer；新草稿绑定真实 ID 不算另选会话。面板另有 request sequence；设备、连接、工作区和配置编辑使用独立作用域，具体所有权见[架构](../../pi-bridge-go/docs/architecture.md) 的 S07。切聊天不能丢全局配置草稿，同 cwd 切聊天不能误关 PTY；实际换 cwd 仍按当前行为关闭旧 PTY，关闭失败保留 ID 供清理。DOM 是投影，不是已发起操作的唯一事实来源。
 
 ### 5.1 命令
 
@@ -114,7 +114,7 @@ destination 与 mode 不能互相推导：界面队列选项 `steering` 对应 `
 
 ## 7. 事件与流式
 
-- 当前 WS 有 requestId 关联、超时和断线处理；目标按当前连接的订阅确认确定 epoch，旧 epoch/旧 connection 的事件忽略。当前 subscribe 调用方尚未消费确认的身份数据，需显式建立订阅状态后再派发业务事件，必要暂存须有界。
+- WS 有 requestId 关联、超时与断线处理；epoch 只由当前连接的订阅确认建立，旧 epoch、旧 connection 的事件一律忽略。迟到的确认有归属守卫，必要暂存有界。
 - 收到 omitted/resync 立即标记 live 缺口并重读持久历史。重放只对保留窗口有效，不能伪造无损恢复。
 - 文本与 thinking 使用有界 buffer+rAF 批量 append；不能每 token 复制完整已有 textContent。
 - message_end 是权威内容；agent_settled 后对账持久投影；不只凭 agent_end 宣告全部结束。
@@ -138,8 +138,8 @@ destination 与 mode 不能互相推导：界面队列选项 `steering` 对应 `
 - 首屏预算当前 40 KiB gzip，按入口静态依赖闭包累计；KaTeX/Mermaid/xterm/Markdown 等按实际导入边界惰性加载。不能只数入口或用总 dist 体积代替首屏。
 - 桥读取 ui-manifest、验证 protocolVersion/requiredMethods，再读取 Vite manifest 解析 JS/CSS。路径按各 manifest 的定义解析，不能把 dist 资产当 src vendor。
 - 没有“内嵌备用模板/CDN 缺库回退”；缺依赖/产物应明确失败。
-- 新增可选字段可以协商；完整修复按整体规划 P6 集中升级 v2，并一起更新 manifest、模板、TS、桥和测试工具。当前代码仍是 v1，没有提前改变版本。requiredFeatures 等协商字段尚未实现；旧标签页遇到版本不符须保留草稿并停止新写操作，不回退旧危险接口。
-- 本地与云端目标共用 HTTP/WS UI，只改变受信 basePath。当前云端 relay UI、上传数据通道、磁盘树/导出尚未交付。
+- 新增可选字段通过能力协商引入；**当前协议仍是 v1**——订阅确认、请求状态、配置 revision 与秘密操作都在 v1 形状内补完。旧标签页遇到版本不符须保留草稿并停止新写操作，不回退旧接口。
+- 本地与云端共用同一套 HTTP/WS UI，只改变受信 basePath。云端经 relay 设备前缀的完整链路已交付：外壳、片段、资源、WS、图片与导出同源；图片附件上传仍走 WS。
 
 ## 10. 验收分工
 

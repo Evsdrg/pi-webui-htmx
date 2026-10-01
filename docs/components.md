@@ -1,6 +1,6 @@
 # 组件选型、工具链与资源约束
 
-更新：2026-09-30。当前实现以本页职责边界和 [F01–F19 落地记录](htmx-css-ts-review.md) 为准；带日期的历史测量不是持续验收结果。依赖版本以 `package.json` 和 `pnpm-lock.yaml` 为准，不升级依赖。[交互契约](contract.md) 区分当前实现与目标修复。
+依赖版本以 `package.json` 和 `pnpm-lock.yaml` 为准。[交互契约](contract.md) 约定模板字段与交换守卫。
 
 ## 1. 保留现有技术栈
 

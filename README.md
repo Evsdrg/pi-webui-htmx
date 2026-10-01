@@ -5,20 +5,17 @@
 
 Pi Bridge 的 HTMX 工作台。模板、TypeScript 与样式归本仓；桥负责数据、进程及受控接口。目标是接近 Pi Web 的工作台体验，保持较小首屏和独立 Pi 进程。
 
-**仓库边界：** 本仓只含 HTMX/TypeScript 前端与 UI 包。相邻的 `../pi-bridge-go`（Go 桥）是独立 git 仓库；二者没有共同父仓库，也不要为它们建一个总仓库。上游 Pi Web 的只读参考检出在 `../../src-read-only/pi-web`（不在 `pi/` 下）。跨仓改动分两边提交，配套关系见 [UI 包契约](docs/contract.md)。
+**目录：** 本目录是 HTMX/TypeScript 前端与 UI 包；相邻的 `../pi-bridge-go` 是 Go 桥，二者同属一个仓库。跨目录改动分别提交并同时通过，配套关系见 [UI 包契约](docs/contract.md)。上游 Pi Web 仅作对照实现，不是本项目的依赖。
 
-**状态（2026-09-30）：** 本地与云端（relay 设备前缀）两条链路都已端到端跑通；审查台账 F01–F19 与桥侧问题逐项关闭（批次 A–J，台账 107 项中 105 项已修，保留两项部署侧事项）。云端形态下外壳、片段、资源与 WS 全部经设备前缀转发，前端因路径全部相对化而无需知道自己跑在哪种形态。
+**状态：** 本地与云端（relay 设备前缀）两条链路都已端到端跑通。云端形态下外壳、片段、资源与 WS 全部经设备前缀转发，前端因路径全部相对化而无需知道自己跑在哪种形态。**未验收**：真实模型的长时流式、公网跨机 RTT 与丢包、小时级长稳。
 
 ## 文档
 
-- [UI 包与交互契约](docs/contract.md)：当前模板字段、版本、构建与目标 SessionScope/交换守卫。
-- [组件选型](docs/components.md)：依赖、样式组织、资源释放与当前职责边界。
-- [前端改动复核](docs/htmx-css-ts-review.md)：F01–F19 的历史证据与跨仓落地验收。
-- [跨仓实施方案](docs/frontend-repair-plan.md)：草稿、请求归属、服务端片段与验证顺序。
-- [整体实施规划](../pi-bridge-go/docs/repair-plan.md)：P0–P7、影响矩阵、作用域边界、配套发布与状态迁移。
-- [桥的架构与修复决策](../pi-bridge-go/docs/architecture.md)：S01–S12、技术取舍和验收条件。
-- [审查台账](../pi-bridge-go/docs/code-audit.md)：未解决问题及逐项方案归属。
-- [v1 协议](../pi-bridge-go/api/v1/protocol.md)：当前可调用的方法，不把拟议能力当现成接口。
+- [UI 包与交互契约](docs/contract.md)：模板字段、版本、构建与交换守卫。
+- [组件选型](docs/components.md)：依赖、样式组织、资源释放与职责边界。
+- [桥的架构](../pi-bridge-go/docs/architecture.md)：S01–S12、取舍与边界约束。
+- [v1 协议](../pi-bridge-go/api/v1/protocol.md)：可调用的方法、事件与限额。
+- [通信约定](../pi-bridge-go/docs/communication.md)：分层、受理、订阅与背压。
 
 ## 安装、构建和测试
 
@@ -30,7 +27,7 @@ pnpm build
 pnpm check
 ```
 
-当前工具链：pnpm 11.22、Vite 8、TypeScript 7、Tailwind 4、Vitest 5；精确安装版本以锁文件为准。Vite 构建 JS/CSS，Go 在运行时渲染模板，Tailwind 通过 @source 扫描模板类名。
+当前工具链：pnpm 11.22、Vite 8、TypeScript 7、Tailwind 4、Vitest 5；精确安装版本以锁文件为准。Vite 构建 JS/CSS，Go 在运行时渲染模板；Tailwind 只用于 preflight 复位（模板里没有工具类，因此不写 `@source`），组件样式是手写 CSS。
 
 在相邻桥目录启动时指定 `--ui-dir ../pi-webui-htmx`。模板、ui-manifest 和 dist 必须是同一构建；桥在启动时快照资源，重新 build 后重启桥。没有内嵌模板/CDN 缺库回退。
 
@@ -85,8 +82,8 @@ dist/             生成资产与 Vite manifest，不提交
 
 ## 验收基线
 
-2026-09-30：22 个 Vitest 文件共 178 项通过，typecheck、build、check、对比度核算通过。审查反例已按 F01–F19 逐条补上判定性测试，见 [docs/htmx-css-ts-review.md](docs/htmx-css-ts-review.md)。
+22 个 Vitest 文件共 184 项通过，typecheck、build、check 与对比度核算通过。
 
-既有隔离浏览器验收使用真实 Go 桥+假 Pi，覆盖普通发送/分页、扩展确认、富内容、终端关闭、移动布局等，不调用付费模型。新方案还需验证迟到响应、每个 await 的切换、并发附件、重连/大文件和云模式。
+隔离浏览器验收使用真实 Go 桥 + 假 Pi，覆盖普通发送/分页、扩展确认、富内容、终端关闭、迟到的响应、并发附件、三视口布局，不调用付费模型。
 
 Go 测模板/数据，TypeScript 测类型，契约脚本测产物结构，Vitest 测状态/异步，浏览器测真实交换/滚动；任何一层都不能替其他层背书。
