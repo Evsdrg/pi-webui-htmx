@@ -22,14 +22,14 @@ jobs:
         with:
           go-version-file: pi-bridge-go/go.mod
       # 跨目录契约测试要读 UI 包（模板、manifest、dist），所以先构建前端。
+      # 安装走与 UI 检查同一个脚本（重试 + 失败注解）。
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version: '26'
       - name: 构建 UI 包（跨目录测试需要）
         working-directory: pi-webui-htmx
         run: |
-          npm install --global "$(node -p 'require("./package.json").packageManager')"
-          pnpm install --frozen-lockfile
+          bash ../.github/scripts/install-deps.sh
           pnpm build
       - name: 格式与 vet
         working-directory: pi-bridge-go
