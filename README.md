@@ -1,5 +1,8 @@
 # pi-webui-htmx
 
+> **面向使用者的说明（安装、启动、配置）见桥仓的 [README](../pi-bridge-go/README.md)。**
+> 本文件是前端的开发说明。
+
 Pi Bridge 的 HTMX 工作台。模板、TypeScript 与样式归本仓；桥负责数据、进程及受控接口。目标是接近 Pi Web 的工作台体验，保持较小首屏和独立 Pi 进程。
 
 **仓库边界：** 本仓只含 HTMX/TypeScript 前端与 UI 包。相邻的 `../pi-bridge-go`（Go 桥）是独立 git 仓库；二者没有共同父仓库，也不要为它们建一个总仓库。上游 Pi Web 的只读参考检出在 `../../src-read-only/pi-web`（不在 `pi/` 下）。跨仓改动分两边提交，配套关系见 [UI 包契约](docs/contract.md)。
