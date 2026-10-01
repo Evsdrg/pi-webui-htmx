@@ -11,6 +11,8 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
+
+	"pi-bridge-go/internal/testutil"
 )
 
 type recordingHandler struct {
@@ -95,12 +97,19 @@ func fakeRelay(t *testing.T) (*httptest.Server, func()) {
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
 	kick := func() {
+		// 先等连接真正注册进 relay 再关。客户端 Dial 成功 ≠ 服务端 handler
+		// 已执行到 tunnels[id] = conn——两者之间有个窗口，而测试是在客户端
+		// Ready 之后立刻 kick 的：踢到空就什么都不会发生，客户端当然不重连
+		// （表现为 15 秒超时，偶发）。
+		testutil.WaitFor(t, "隧道连接注册到 relay", func() bool {
+			mu.Lock()
+			defer mu.Unlock()
+			return tunnels["dev-1"] != nil
+		})
 		mu.Lock()
 		conn := tunnels["dev-1"]
 		mu.Unlock()
-		if conn != nil {
-			conn.CloseNow()
-		}
+		conn.CloseNow()
 	}
 	return srv, kick
 }

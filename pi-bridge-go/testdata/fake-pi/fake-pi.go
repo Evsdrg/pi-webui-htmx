@@ -219,6 +219,22 @@ func main() {
 			}})
 		case "abort_bash":
 			emit(frame{Type: "response", ID: cmd.ID, Success: true})
+		case "abort", "steer", "follow_up":
+			// 桥忽略这三个的返回值（只看成败）；steer/follow_up 的参数
+			// 由 FAKE_PI_CMDS_FILE 记录，测试从那里断言真实载荷。
+			emit(frame{Type: "response", ID: cmd.ID, Success: true})
+		case "clear_queue":
+			// 脚本 `queued` 时让队列非空，用来验证「中止前先把排队消息取回」
+			// 这条交互（Pi 的 clear_queue 返回被移除的消息文本）。
+			if script["queued"] {
+				emit(frame{Type: "response", ID: cmd.ID, Success: true, Data: map[string]any{
+					"steering": []string{"排队中的引导"}, "followUp": []string{"排队中的后续"},
+				}})
+				continue
+			}
+			emit(frame{Type: "response", ID: cmd.ID, Success: true, Data: map[string]any{
+				"steering": []string{}, "followUp": []string{},
+			}})
 		case "export_html":
 			// 回显请求里的 outputPath，让桥能校验路径一致性。
 			// 可选地真写一个文件（FAKE_PI_EXPORT_BYTES），供配额相关的测试使用。
@@ -232,7 +248,12 @@ func main() {
 		case "crash":
 			os.Exit(3)
 		default:
-			emit(frame{Type: "response", ID: cmd.ID, Success: true})
+			// 严格失败而不是静默成功：假 Pi 以前对任何未知方法都回 success，
+			// 于是「桥调用了 Pi 根本不存在的命令」在测试里看不出来——
+			// 方法名拼错、旧协议残留都会被当作正常工作。
+			// 补齐后会暴露夹具漏实现的方法（clear_queue 就是这样发现的），
+			// 补实现即可；真实 Pi 对它不认识的方法正是这样回错的。
+			emit(frame{Type: "response", ID: cmd.ID, Success: false, Error: "unknown method: " + cmd.Type})
 		}
 	}
 }
