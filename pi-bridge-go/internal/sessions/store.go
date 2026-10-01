@@ -226,6 +226,18 @@ type Listing struct {
 	Truncated bool       `json:"truncated"`
 	Cwd       string     `json:"cwd,omitempty"`
 	Cwds      []CwdCount `json:"cwds,omitempty"`
+	// Groups 只在分组视图（view=workspace）下填充：按工作区分组，
+	// 每组只带最近若干条。分组视图不做分页——它要回答的是
+	// 「我有哪些工作区、各自最近在忙什么」，翻页由「查看该工作区全部」
+	// 切回时间线视图完成。
+	Groups []Group `json:"groups,omitempty"`
+}
+
+// Group 是一个工作区及其最近若干条会话。
+type Group struct {
+	Cwd   string   `json:"cwd"`
+	Total int      `json:"total"`
+	Items []Header `json:"items"`
 }
 
 // CwdCount 是一个工作区及其会话数。
@@ -280,6 +292,34 @@ func ValidID(id string) bool {
 //
 // 筛选发生在分页之前，所以 offset/HasMore 都是针对筛选后的集合——
 // 否则「加载更多」会在筛选后重复或跳过条目。
+// GroupedPerCwd 是分组视图里每组默认展示的条数。
+//
+// 取 5 是因为侧栏一屏最多显示十来个会话，每组 5 条已经能看出
+// 「这个项目最近在做什么」，而组数不受限制时也不会把列表撑得太长。
+const GroupedPerCwd = 5
+
+// ListGrouped 按工作区分组返回会话，每组最近 GroupedPerCwd 条。
+func (s *Store) ListGrouped(ctx context.Context, perGroup int) (Listing, error) {
+	groups, truncated, err := s.index.Groups(ctx, perGroup)
+	if err != nil {
+		return Listing{}, err
+	}
+	out := make([]Group, 0, len(groups))
+	cwds := make([]CwdCount, 0, len(groups))
+	for _, g := range groups {
+		items := make([]Header, 0, len(g.Items))
+		for _, e := range g.Items {
+			items = append(items, Header{
+				Type: "session", Version: e.version, ID: e.id, Cwd: e.cwd, Name: e.name,
+				Timestamp: e.timestamp, Modified: e.modified, path: e.path,
+			})
+		}
+		out = append(out, Group{Cwd: g.Cwd, Total: g.Total, Items: items})
+		cwds = append(cwds, CwdCount{Cwd: g.Cwd, Count: g.Total})
+	}
+	return Listing{Truncated: truncated, Cwds: cwds, Groups: out}, nil
+}
+
 func (s *Store) List(ctx context.Context, offset, limit int, cwd string) (Listing, error) {
 	if offset < 0 || limit < 1 || limit > 200 {
 		return Listing{}, protocol.E("invalid_params", "分页参数无效")
@@ -344,17 +384,33 @@ type node struct {
 
 // scanNodes 返回会话文件的父链索引：命中扫描缓存就直接用，
 // 否则全扫一次并写入缓存。History、惰性读取与磁盘树共用它（O03/O04）。
-func (s *Store) scanNodes(ctx context.Context, h Header, f *os.File, size, mtime int64) (map[string]node, string, error) {
+// scanNodes 返回可用于取页的索引。
+//
+// 先查缓存；未命中只扫尾部窗口（快），并告知窗口是否覆盖整个文件。
+// 窗口不够时由调用方走 scanFullAll。
+func (s *Store) scanNodes(ctx context.Context, h Header, f *os.File, size, mtime int64, minNodes int) (map[string]node, string, bool, error) {
 	// 缓存键用绝对路径：索引里存的是相对路径。
 	abs := filepath.Join(s.dir, filepath.FromSlash(h.path))
-	if nodes, last, ok := s.scan.get(abs, size, mtime); ok {
-		return nodes, last, nil
+	if nodes, last, complete, ok := s.scan.get(abs, size, mtime); ok {
+		return nodes, last, complete, nil
 	}
+	nodes, last, complete, err := s.scanTail(ctx, f, size, h.ID, h.Cwd, minNodes)
+	if err != nil {
+		return nil, "", false, err
+	}
+	s.scan.put(abs, size, mtime, nodes, last, complete)
+	return nodes, last, complete, nil
+}
+
+// scanFullAll 全量扫描并缓存（记为 complete）。
+// 只在尾部窗口不够用时才走到这里。
+func (s *Store) scanFullAll(ctx context.Context, h Header, f *os.File, size, mtime int64) (map[string]node, string, error) {
+	abs := filepath.Join(s.dir, filepath.FromSlash(h.path))
 	nodes, last, err := s.scanFile(ctx, f, size, h.ID, h.Cwd)
 	if err != nil {
 		return nil, "", err
 	}
-	s.scan.put(abs, size, mtime, nodes, last)
+	s.scan.put(abs, size, mtime, nodes, last, true)
 	return nodes, last, nil
 }
 
@@ -381,27 +437,67 @@ func (s *Store) History(ctx context.Context, id, leaf, before string, limit int)
 	if !st.Mode().IsRegular() || st.Size() > s.limits.FileBytes {
 		return Page{}, fileTooLargeError("历史文件", st.Size(), s.limits.FileBytes)
 	}
-	// 先查缓存：翻页与切标签时文件不变，可省掉整个解析阶段。
-	// 失效判定见 scanCache 的说明——size、mtime 与文件身份都要一致。
-	nodes, last, err := s.scanNodes(ctx, h, f, st.Size(), st.ModTime().UnixNano())
+	// 先把尾部窗口建出来（未命中缓存时只读最后几 MiB），首页与相邻翻页
+	// 都落在窗口内；窗口不够用（要看的页比窗口更早）时才退到全扫。
+	//
+	// +64 是给轮边界对齐留的余量：alignToTurn 会向前多取到 user 锚点。
+	// 多要几十条比全扫便宜几个数量级。
+	mtime := st.ModTime().UnixNano()
+	want := limit + 64
+	nodes, last, complete, err := s.scanNodes(ctx, h, f, st.Size(), mtime, want)
 	if err != nil {
 		return Page{}, err
 	}
+	page, ok, err := s.historyPage(ctx, f, id, leaf, before, limit, nodes, last, complete)
+	if err != nil {
+		return Page{}, err
+	}
+	if ok {
+		return page, nil
+	}
+	// 窗口不够：全扫一次，之后这份完整索引会进缓存。
+	nodes, last, err = s.scanFullAll(ctx, h, f, st.Size(), mtime)
+	if err != nil {
+		return Page{}, err
+	}
+	page, _, err = s.historyPage(ctx, f, id, leaf, before, limit, nodes, last, true)
+	return page, err
+}
+
+// historyPage 用给定索引取一页历史。
+//
+// 返回 ok=false 表示这份索引不足以回答这次请求（尾部窗口不够早），
+// 调用方应用完整索引重试；complete 为真时不会出现 ok=false——
+// 那时「找不到叶子」「游标不在分支上」都是真实的业务错误，直接返回。
+func (s *Store) historyPage(ctx context.Context, f *os.File, id, leaf, before string, limit int, nodes map[string]node, last string, complete bool) (Page, bool, error) {
 	if leaf == "" {
 		leaf = last
 	}
 	if leaf != "" {
 		if _, ok := nodes[leaf]; !ok {
-			return Page{}, protocol.E("not_found", "叶子条目不存在")
+			if complete {
+				return Page{}, false, protocol.E("not_found", "叶子条目不存在")
+			}
+			return Page{}, false, nil
 		}
 	}
 	start := leaf
 	if before != "" {
 		for start != "" && start != before {
-			start = nodes[start].parent
+			n, ok := nodes[start]
+			if !ok {
+				if complete {
+					return Page{}, false, protocol.E("conflict", "分页游标不在所选分支上")
+				}
+				return Page{}, false, nil
+			}
+			start = n.parent
 		}
 		if start == "" {
-			return Page{}, protocol.E("conflict", "分页游标不在所选分支上")
+			if complete {
+				return Page{}, false, protocol.E("conflict", "分页游标不在所选分支上")
+			}
+			return Page{}, false, nil
 		}
 		start = nodes[start].parent
 	}
@@ -411,10 +507,14 @@ func (s *Store) History(ctx context.Context, id, leaf, before string, limit int)
 	total := 0
 	cursor := start
 	for cursor != "" && len(selected) < limit {
-		node := nodes[cursor]
+		node, ok := nodes[cursor]
+		if !ok {
+			// 走到窗口边界：页还没取够，交给全扫重来。
+			return Page{}, false, nil
+		}
 		if total+node.size > s.limits.PageBytes {
 			if len(selected) == 0 {
-				return Page{}, protocol.E("limit_exceeded", "单条历史记录超过单页体积上限")
+				return Page{}, false, protocol.E("limit_exceeded", "单条历史记录超过单页体积上限")
 			}
 			break
 		}
@@ -426,6 +526,15 @@ func (s *Store) History(ctx context.Context, id, leaf, before string, limit int)
 	// 轮边界对齐：见 alignToTurn 的说明。它会向前多取条目，
 	// 因此返回更新后的游标，HasMore 必须用它而不是原 cursor。
 	selected, cursor = s.alignToTurn(nodes, selected, total, cursor)
+	// 对齐可能多走了几步，若已踩到窗口边界就退到全扫重来——
+	// 否则会给出比预期短的一页，而且不报错。
+	// 对齐可能多走了几步，若已踩到窗口边界就交给全扫——否则会给出
+	// 比预期短的一页，而且不报错。HasMore 也可能因此算错。
+	if !complete && cursor != "" {
+		if _, ok := nodes[cursor]; !ok {
+			return Page{}, false, nil
+		}
+	}
 
 	// 整页只分配一次：条目长度之和就是需要的字节数，逐条 ReadAt 填进去。
 	// 以前是每条一次 make([]byte, node.size)——分配次数与条目数同阶，
@@ -444,12 +553,12 @@ func (s *Store) History(ctx context.Context, id, leaf, before string, limit int)
 	for i := len(selected) - 1; i >= 0; i-- {
 		node := nodes[selected[i]]
 		slot := buf[at : at+node.size]
-		if _, err = f.ReadAt(slot, node.offset); err != nil {
-			return Page{}, protocol.E("conflict", "读取期间历史文件发生变化")
+		if _, err := f.ReadAt(slot, node.offset); err != nil {
+			return Page{}, false, protocol.E("conflict", "读取期间历史文件发生变化")
 		}
 		trimmed := bytes.TrimSpace(slot)
 		if !json.Valid(trimmed) {
-			return Page{}, protocol.E("conflict", "读取期间历史文件发生变化")
+			return Page{}, false, protocol.E("conflict", "读取期间历史文件发生变化")
 		}
 		page.Entries = append(page.Entries, json.RawMessage(trimmed))
 		at += node.size
@@ -457,11 +566,12 @@ func (s *Store) History(ctx context.Context, id, leaf, before string, limit int)
 	if len(selected) > 0 {
 		page.OldestEntryID = selected[len(selected)-1]
 	}
-	page.HistoricalModel, err = historicalModel(ctx, f, nodes, leaf, before, page.Entries)
+	model, err := historicalModel(ctx, f, nodes, leaf, before, page.Entries)
 	if err != nil {
-		return Page{}, err
+		return Page{}, false, err
 	}
-	return page, nil
+	page.HistoricalModel = model
+	return page, true, nil
 }
 
 // historicalModel 优先使用当前叶子最近一次模型切换；首页若有更新的助手回复，

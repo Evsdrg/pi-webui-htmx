@@ -453,11 +453,11 @@ func Test扫描缓存保留多个会话(t *testing.T) {
 	}
 	var c scanCache
 	size0, mtime0 := stat(paths[0])
-	c.put(paths[0], size0, mtime0, map[string]node{"a": {}}, "a")
+	c.put(paths[0], size0, mtime0, map[string]node{"a": {}}, "a", true)
 	size1, mtime1 := stat(paths[1])
-	c.put(paths[1], size1, mtime1, map[string]node{"b": {}}, "b")
+	c.put(paths[1], size1, mtime1, map[string]node{"b": {}}, "b", true)
 	// 切换回第一个会话必须仍然命中；单槽实现下它已被挤掉。
-	if _, _, ok := c.get(paths[0], size0, mtime0); !ok {
+	if _, _, _, ok := c.get(paths[0], size0, mtime0); !ok {
 		t.Fatal("会话之间切换后仍应命中先前缓存的扫描结果")
 	}
 	nodes, _ := c.stats()
@@ -465,7 +465,7 @@ func Test扫描缓存保留多个会话(t *testing.T) {
 		t.Fatalf("两格都应在缓存里，实际节点数 %d", nodes)
 	}
 	// 同一文件写入新版本：只替换自己那一格，不新增。
-	c.put(paths[0], size0+1, mtime0, map[string]node{"a": {}, "a2": {}}, "a2")
+	c.put(paths[0], size0+1, mtime0, map[string]node{"a": {}, "a2": {}}, "a2", true)
 	nodes, _ = c.stats()
 	if nodes != 3 {
 		t.Fatalf("同文件更新应替换旧格，实际节点数 %d", nodes)
@@ -494,14 +494,14 @@ func Test扫描缓存淘汰最久未用(t *testing.T) {
 	var lastSize, lastMtime int64
 	for i, p := range paths {
 		size, mtime := stat(p)
-		c.put(p, size, mtime, map[string]node{strconv.Itoa(i): {}}, "")
+		c.put(p, size, mtime, map[string]node{strconv.Itoa(i): {}}, "", true)
 		lastSize, lastMtime = size, mtime
 	}
 	firstSize, firstMtime := mustStat(t, paths[0])
-	if _, _, ok := c.get(paths[0], firstSize, firstMtime); ok {
+	if _, _, _, ok := c.get(paths[0], firstSize, firstMtime); ok {
 		t.Fatal("超出格数后应淘汰最久未使用的一格")
 	}
-	if _, _, ok := c.get(paths[len(paths)-1], lastSize, lastMtime); !ok {
+	if _, _, _, ok := c.get(paths[len(paths)-1], lastSize, lastMtime); !ok {
 		t.Fatal("最近写入的一格应命中")
 	}
 	if nodes, _ := c.stats(); nodes != scanCacheSlots {

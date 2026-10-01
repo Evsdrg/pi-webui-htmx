@@ -38,6 +38,38 @@ export function mountLayout(): () => void {
   if (font) { font.value = readPreference('chat-font-offset') || '0'; font.addEventListener('input', () => { syncChat(); savePreference('chat-font-offset', font.value); }, { signal: abort.signal }); }
   if (width) { width.value = readPreference('chat-width') || '820'; width.addEventListener('input', () => { syncChat(); savePreference('chat-width', width.value); }, { signal: abort.signal }); }
   syncChat();
+  // 会话列表视图（时间线 / 按工作区）记忆。
+  //
+  // 选中态与携带的 view 值都由这里从偏好推导，控件本身不保存状态：
+  // 用按钮而不是 select，正是为了避开浏览器在 reload 时对表单控件的值恢复——
+  // 恢复出来的值可能与偏好无关，控件显示与列表内容就会对不上（真机复现过）。
+  // 片段里的 OOB 会整块换掉这段控件（例如从分组视图点「查看全部」切回时间线），
+  // 所以换入之后要再读一次服务端给的值写回偏好，避免两边各说各话。
+  const viewSwitch = document.getElementById('view-switch');
+  if (viewSwitch) {
+    const syncView = (value?: string) => {
+      const view = value ?? readPreference('session-view');
+      const want = view === 'workspace' ? 'workspace' : 'timeline';
+      const buttons = viewSwitch.querySelectorAll<HTMLButtonElement>('.view-btn');
+      buttons.forEach((button) => button.setAttribute('aria-pressed', String(button.dataset.view === want)));
+      const carrier = document.getElementById('session-view-value') as HTMLInputElement | null;
+      if (carrier) carrier.value = want;
+      savePreference('session-view', want);
+      return want;
+    };
+    const saved = syncView();
+    // 偏好不是默认视图时先按它加载一次，否则页面会先渲染时间线再跳成分组。
+    if (saved === 'workspace') window.htmx.trigger(document.body, 'sessions-refresh');
+    viewSwitch.addEventListener('click', (event) => {
+      const button = (event.target as Element).closest<HTMLElement>('.view-btn');
+      if (button) syncView(button.dataset.view);
+    }, { signal: abort.signal });
+    document.body.addEventListener('htmx:afterSwap', () => {
+      // 服务端换入的整块控件已经带上 aria-pressed，这里只把偏好对齐。
+      const carrier = document.getElementById('session-view-value') as HTMLInputElement | null;
+      if (carrier) savePreference('session-view', carrier.value === 'workspace' ? 'workspace' : 'timeline');
+    }, { signal: abort.signal });
+  }
   const resize = document.querySelector<HTMLElement>('.sidebar-resizer')!;
   let drag: { x: number; width: number; pointer: number } | null = null;
   const setWidth = (width: number) => { const w = clampSidebar(width); shell.style.setProperty('--sidebar-width', `${w}px`); resize.setAttribute('aria-valuenow', String(w)); return w; };

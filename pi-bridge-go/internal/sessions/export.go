@@ -63,7 +63,8 @@ func (s *Store) ExportDocument(ctx context.Context, id string, limits ExportLimi
 	if !st.Mode().IsRegular() || st.Size() > s.limits.FileBytes {
 		return ExportDocument{}, fileTooLargeError("历史文件", st.Size(), s.limits.FileBytes)
 	}
-	nodes, last, err := s.scanNodes(ctx, h, f, st.Size(), st.ModTime().UnixNano())
+	// 导出要遍历整条会话，尾部窗口不够——直接全扫。
+	nodes, last, err := s.scanFullAll(ctx, h, f, st.Size(), st.ModTime().UnixNano())
 	if err != nil {
 		return ExportDocument{}, err
 	}

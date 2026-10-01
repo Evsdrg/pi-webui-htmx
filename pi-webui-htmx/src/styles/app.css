@@ -66,8 +66,26 @@ kbd { font-size:10px; color:var(--text-dim); margin-left:auto; }
 .search-box input { width:100%; border:0; outline:0; padding:0; background:transparent; font-size:12px; }
 /* 按工作区筛选：与搜索框同样的外观，就在它下面。
    侧栏只有 260px，选项文本已在 Go 侧缩成短名（cwdLabels），完整路径在 title 里。 */
+/* 分组视图：每个工作区一小节，组标题本身就是「切到该工作区时间线」的入口，
+   所以不留单独的下拉。组标题用按钮而不是标题文字，键盘与读屏都能直接到达。 */
+.cwd-group { margin-bottom:10px; }
+.cwd-group-head { display:flex; align-items:center; gap:6px; margin:0 0 4px; padding:0 8px; }
+.cwd-group-name { flex:1 1 auto; min-width:0; padding:2px 0; border:0; background:transparent; color:var(--text-dim); font-size:11px; font-weight:600; text-align:left; text-overflow:ellipsis; overflow:hidden; white-space:nowrap; }
+.cwd-group-name:hover { color:var(--accent); }
+.cwd-group-count { flex:0 0 auto; color:var(--text-dim); font-size:11px; }
+.cwd-group-more { width:calc(100% - 16px); margin:2px 8px 6px; padding:5px 8px; font-size:11px; }
 .cwd-filter { display:block; width:100%; margin:-10px 0 14px; padding:6px 9px; font-size:12px; color:var(--text-muted); background:var(--bg); border:1px solid var(--border); border-radius:8px; text-overflow:ellipsis; }
 .cwd-filter:hover { background:var(--bg-hover); }
+/* 视图切换：两个按钮共用一条边框，像分段控件。
+   用按钮而不是 select 是为了避开浏览器对表单控件的 reload 恢复——
+   恢复出来的值可能与偏好不一致，控件显示与列表内容就会对不上。 */
+.view-switch { display:flex; margin:-10px 0 8px; }
+.view-btn { flex:1 1 0; min-width:0; padding:5px 8px; font-size:12px; color:var(--text-muted); background:var(--bg); border:1px solid var(--border); }
+.view-btn:first-child { border-radius:8px 0 0 8px; }
+.view-btn:last-child { border-radius:0 8px 8px 0; border-left:0; }
+.view-btn:hover { background:var(--bg-hover); }
+.view-btn[aria-pressed="true"] { color:var(--text); background:var(--bg-selected); font-weight:600; }
+#cwd-filter-wrap[hidden] { display:none; }
 .section-label { display:flex; align-items:center; padding:0 8px 8px; font-size:11px; color:var(--text-muted); }
 .section-label .icon-btn { margin-left:auto; }
 .session-item { display:flex; flex-direction:column; width:100%; padding:9px 10px; margin-bottom:3px; border:0; border-radius:8px; text-align:left; text-decoration:none; color:var(--text); background:transparent; }

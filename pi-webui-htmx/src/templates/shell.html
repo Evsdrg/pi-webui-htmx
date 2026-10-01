@@ -23,15 +23,32 @@
      路径过长时靠 CSS 做左省略（保留尾部，与 Pi Web 的 PathLabel 同思路）。 -->
 <button class="btn new-session" data-action="new" id="new-session-btn" title=""><span aria-hidden="true">＋</span> <span class="new-session-cwd" id="new-session-cwd">新建会话</span> <kbd>⌘ K</kbd></button>
     <label class="search-box"><span aria-hidden="true">⌕</span><input id="session-search" type="search" placeholder="搜索会话" aria-label="搜索会话" autocomplete="off"></label>
-    {{/* 按工作区筛选。选项由桥渲染（见 sessions.html 的 OOB 片段）：
-         candidates 与计数只能由桥算出来，前端从已渲染的行里收集会漏掉当前页之外的会话。 */}}
-    <select id="session-cwd-filter" class="cwd-filter" name="cwd" aria-label="按工作区筛选会话"
-            hx-get="ui/sessions" hx-trigger="change" hx-include="#search-query,this"
-            hx-target="#session-list" hx-swap="innerHTML">
-      <option value="">全部工作区</option>
-    </select>
+    {{/* 视图切换：时间线（默认，全部会话按时间倒序）与按工作区分组。
+         默认是时间线——「看到全部会话」不该需要先做一次选择。
+         用按钮而不是 select：浏览器在 reload 时会自己恢复表单控件的值，
+         于是控件显示「按工作区」而列表按时间线渲染。按钮不在恢复范围内，
+         选中态由 data-view 属性（服务端片段与本地偏好）唯一决定。 */}}
+    <div class="view-switch" id="view-switch" role="group" aria-label="会话列表视图">
+      <button type="button" class="view-btn" data-view="timeline" aria-pressed="true"
+              hx-get="ui/sessions?view=timeline" hx-include="#search-query,#session-cwd-filter"
+              hx-target="#session-list" hx-swap="innerHTML">时间线</button>
+      <button type="button" class="view-btn" data-view="workspace" aria-pressed="false"
+              hx-get="ui/sessions?view=workspace" hx-include="#search-query"
+              hx-target="#session-list" hx-swap="innerHTML">按工作区</button>
+      <input type="hidden" id="session-view-value" name="view" value="timeline">
+    </div>
+    {{/* 按工作区筛选。整块由桥渲染（见 sessions.html 的 OOB 片段）：
+         候选与计数只能由桥算出来，前端从已渲染的行里收集会漏掉当前页之外的会话。
+         分组视图下这块被换成 hidden 版本，分类改由分组标题承担。 */}}
+    <div id="cwd-filter-wrap">
+      <select id="session-cwd-filter" class="cwd-filter" name="cwd" aria-label="按工作区筛选会话"
+              hx-get="ui/sessions" hx-trigger="change" hx-include="#search-query,#session-view-value"
+              hx-target="#session-list" hx-swap="innerHTML">
+        <option value="">全部工作区</option>
+      </select>
+    </div>
     <div class="section-label">会话 <span id="session-count"></span><button class="icon-btn" data-action="refresh-sessions" aria-label="刷新会话">↻</button></div>
-    <input type="hidden" id="search-query" name="q" value=""><span hidden hx-get="ui/search" hx-trigger="search-refresh from:body" hx-target="#session-list" hx-swap="innerHTML" hx-include="#search-query,#session-cwd-filter"></span><nav id="session-list" aria-label="会话列表" hx-get="ui/sessions" hx-trigger="sessions-refresh from:body" hx-swap="innerHTML" hx-include="#session-cwd-filter"><p class="empty-note">连接后显示本地会话</p></nav>
+    <input type="hidden" id="search-query" name="q" value=""><span hidden hx-get="ui/search" hx-trigger="search-refresh from:body" hx-target="#session-list" hx-swap="innerHTML" hx-include="#search-query,#session-cwd-filter"></span><nav id="session-list" aria-label="会话列表" hx-get="ui/sessions" hx-trigger="sessions-refresh from:body" hx-swap="innerHTML" hx-include="#session-cwd-filter,#session-view-value"><p class="empty-note">连接后显示本地会话</p></nav>
     <!-- 文件浏览器常驻侧栏下半，与会话列表同属一个 landmark。
          分隔条可拖动调整两区高度；折叠态只留一行标题栏，
          点一下展开——不占会话列表的空间。 -->

@@ -447,6 +447,16 @@ type SessionsData struct {
 	// 两者都喂给模板：筛选控件由桥渲染，前端不自建 options。
 	Cwd  string
 	Cwds []CwdOption
+	// Groups 只在分组视图（sessions-grouped.html）里使用。
+	Groups []SessionGroup
+}
+
+// SessionGroup 是分组视图里的一个工作区。
+type SessionGroup struct {
+	Cwd   string
+	Label string
+	Total int
+	Items []SessionRow
 }
 
 // CwdOption 是工作区下拉里的一项。
@@ -467,15 +477,7 @@ func (r *Renderer) RenderSessions(list sessions.Listing, selected string) (strin
 
 // RenderSessionsPage 保留翻页偏移，避免第二页之后重复加载同一页。
 func (r *Renderer) RenderSessionsPage(list sessions.Listing, selected string, offset int) (string, error) {
-	items := make([]SessionRow, 0, len(list.Items))
-	for _, h := range list.Items {
-		items = append(items, SessionRow{
-			ID:       h.ID,
-			Cwd:      h.Cwd,
-			Title:    sessionTitle(h),
-			Modified: h.Modified.Local().Format("01-02 15:04"),
-		})
-	}
+	items := sessionRows(list.Items)
 	cwds := make([]CwdOption, 0, len(list.Cwds))
 	labels := cwdLabels(list.Cwds)
 	for i, c := range list.Cwds {
@@ -486,6 +488,41 @@ func (r *Renderer) RenderSessionsPage(list sessions.Listing, selected string, of
 		NextOffset: offset + len(list.Items),
 		Cwd:        list.Cwd, Cwds: cwds,
 	})
+}
+
+// RenderSessionsGrouped 渲染按工作区分组的会话列表。
+//
+// 与时间线视图共用 sessionRows，保证两种视图里同一会话的呈现完全一致
+// （标题取值、时间格式）。组名沿用下拉的短名规则，两个视图对同一个
+// 工作区给出同一个名字——否则用户会以为它们是两个不同的项目。
+func (r *Renderer) RenderSessionsGrouped(list sessions.Listing, selected string) (string, error) {
+	counts := make([]sessions.CwdCount, 0, len(list.Groups))
+	for _, g := range list.Groups {
+		counts = append(counts, sessions.CwdCount{Cwd: g.Cwd, Count: g.Total})
+	}
+	labels := cwdLabels(counts)
+	groups := make([]SessionGroup, 0, len(list.Groups))
+	for i, g := range list.Groups {
+		label := labels[i]
+		if label == "" {
+			label = "未标注工作区"
+		}
+		groups = append(groups, SessionGroup{Cwd: g.Cwd, Label: label, Total: g.Total, Items: sessionRows(g.Items)})
+	}
+	return r.execute("sessions-grouped.html", SessionsData{Groups: groups, Selected: selected})
+}
+
+func sessionRows(headers []sessions.Header) []SessionRow {
+	items := make([]SessionRow, 0, len(headers))
+	for _, h := range headers {
+		items = append(items, SessionRow{
+			ID:       h.ID,
+			Cwd:      h.Cwd,
+			Title:    sessionTitle(h),
+			Modified: h.Modified.Local().Format("01-02 15:04"),
+		})
+	}
+	return items
 }
 
 // cwdLabels 给出每个工作区在下拉里的短名。

@@ -36,7 +36,8 @@ func (s *Store) Tree(ctx context.Context, id string) (map[string]any, error) {
 	if !st.Mode().IsRegular() || st.Size() > s.limits.FileBytes {
 		return nil, fileTooLargeError("历史文件", st.Size(), s.limits.FileBytes)
 	}
-	nodes, last, err := s.scanNodes(ctx, h, f, st.Size(), st.ModTime().UnixNano())
+	// 分支树要覆盖整条会话（每一层分支都要列出来），窗口不够。
+	nodes, last, err := s.scanFullAll(ctx, h, f, st.Size(), st.ModTime().UnixNano())
 	if err != nil {
 		return nil, err
 	}

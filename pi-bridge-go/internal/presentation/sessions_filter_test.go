@@ -31,8 +31,13 @@ func Test会话片段渲染工作区筛选(t *testing.T) {
 
 	// 选项必须随片段一起更新，且带 OOB 目标——否则筛选控件永远停在
 	// 外壳里的初始状态（只有「全部工作区」）。
-	if !strings.Contains(html, `hx-swap-oob="innerHTML:#session-cwd-filter"`) {
+	// 整块替换（而不是只换 option）：分组视图会把这块换成 hidden 版本，
+	// 两个视图的显隐只能有一个来源。
+	if !strings.Contains(html, `hx-swap-oob="outerHTML:#cwd-filter-wrap"`) {
 		t.Fatalf("片段应携带工作区下拉的 OOB 更新:\n%s", html)
+	}
+	if strings.Contains(html, `id="cwd-filter-wrap" hx-swap-oob="outerHTML:#cwd-filter-wrap" hidden`) {
+		t.Fatalf("时间线视图的下拉不应带 hidden:\n%s", html)
 	}
 	if !strings.Contains(html, `value="/opt/projects/alpha"`) || !strings.Contains(html, `value="/opt/projects/beta"`) {
 		t.Fatalf("下拉应列出两个工作区:\n%s", html)
@@ -142,5 +147,79 @@ func Test筛选空结果的空态文案(t *testing.T) {
 	}
 	if !strings.Contains(html2, "还没有会话") {
 		t.Fatalf("未筛选空结果应保留原文案:\n%s", html2)
+	}
+}
+
+// 分组视图：按工作区把会话分组，每组带总数与「查看全部」入口。
+//
+// 用户要的是「不用先做选择就能看到全部会话」，分组视图回答另一半：
+// 「我有哪些工作区、各自最近在忙什么」。两者都不该要求先选一个工作区。
+func Test分组视图按工作区折叠(t *testing.T) {
+	r := testRenderer(t)
+	list := sessions.Listing{
+		Groups: []sessions.Group{
+			{Cwd: "/opt/projects/alpha", Total: 7, Items: []sessions.Header{
+				{ID: "a1", Cwd: "/opt/projects/alpha", Name: "会话一"},
+				{ID: "a2", Cwd: "/opt/projects/alpha", Name: "会话二"},
+			}},
+			{Cwd: "/opt/projects/beta", Total: 1, Items: []sessions.Header{
+				{ID: "b1", Cwd: "/opt/projects/beta", Name: "会话三"},
+			}},
+		},
+		Cwds: []sessions.CwdCount{
+			{Cwd: "/opt/projects/alpha", Count: 7},
+			{Cwd: "/opt/projects/beta", Count: 1},
+		},
+	}
+	html, err := r.RenderSessionsGrouped(list, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 组名沿用下拉的短名规则：同一个工作区在两个视图里必须同名。
+	if !strings.Contains(html, ">alpha</button>") || !strings.Contains(html, ">beta</button>") {
+		t.Fatalf("分组标题应使用短名:\\n%s", html)
+	}
+	// 总数来自后端统计，不是当前列出的条数。
+	if !strings.Contains(html, `class="cwd-group-count">7<`) {
+		t.Fatalf("组标题应给出该工作区的会话总数:\\n%s", html)
+	}
+	// 只列了 2 条但共 7 条 → 给出「查看全部」。
+	if !strings.Contains(html, "查看全部 7 条") {
+		t.Fatalf("被折叠时应有查看全部的入口:\\n%s", html)
+	}
+	// 只有 1 条、已全部列出 → 不出现「查看全部 1 条」。
+	if strings.Contains(html, "查看全部 1 条") {
+		t.Fatalf("没有折叠就不该出现查看全部:\\n%s", html)
+	}
+	// 点组标题与点「查看全部」都切回时间线视图，并筛到该工作区。
+	for _, want := range []string{"view=timeline&amp;cwd=%2Fopt%2Fprojects%2Falpha", "view=timeline&amp;cwd=%2Fopt%2Fprojects%2Fbeta"} {
+		if !strings.Contains(html, want) {
+			t.Fatalf("缺少切回时间线的链接 %q:\\n%s", want, html)
+		}
+	}
+	// 分组视图里隐藏按工作区下拉：分类已经体现在分组标题上。
+	if !strings.Contains(html, `hx-swap-oob="outerHTML:#cwd-filter-wrap" hidden`) {
+		t.Fatalf("分组视图应隐藏工作区下拉:\\n%s", html)
+	}
+}
+
+// 空的 cwd（极老或被手改过的会话文件）不该从列表里消失。
+func Test分组视图保留未标注工作区的会话(t *testing.T) {
+	r := testRenderer(t)
+	list := sessions.Listing{
+		Groups: []sessions.Group{{Cwd: "", Total: 2, Items: []sessions.Header{
+			{ID: "x1", Cwd: "", Name: "旧会话"},
+		}}},
+		Cwds: []sessions.CwdCount{{Cwd: "", Count: 2}},
+	}
+	html, err := r.RenderSessionsGrouped(list, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(html, "未标注工作区") {
+		t.Fatalf("空 cwd 的组要有可读名字，不能渲染成空标题:\\n%s", html)
+	}
+	if !strings.Contains(html, `data-session="x1"`) {
+		t.Fatalf("空 cwd 的会话仍应列出:\\n%s", html)
 	}
 }

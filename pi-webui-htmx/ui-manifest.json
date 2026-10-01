@@ -6,6 +6,7 @@
   "templates": {
     "shell": "templates/shell.html",
     "sessions": "templates/sessions.html",
+    "sessions-grouped": "templates/sessions-grouped.html",
     "history": "templates/history.html",
     "models": "templates/models.html",
     "packages": "templates/packages.html",

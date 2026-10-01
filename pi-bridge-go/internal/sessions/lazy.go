@@ -206,7 +206,9 @@ func (s *Store) rawEntry(ctx context.Context, id, entryID string) (json.RawMessa
 		return nil, "", fileTooLargeError("历史文件", st.Size(), s.limits.FileBytes)
 	}
 	// 与 History 用同一个缓存键（绝对路径），两边才能互相命中。
-	nodes, _, err := s.scanNodes(ctx, h, f, st.Size(), st.ModTime().UnixNano())
+	// 这里只要能覆盖最近内容的窗口就够：目标不在窗口内时会走下面的
+	// 线性扫描回退，那一条路径本来就存在（偏移错位时也走它）。
+	nodes, _, _, err := s.scanNodes(ctx, h, f, st.Size(), st.ModTime().UnixNano(), 1)
 	if err != nil {
 		return nil, "", err
 	}

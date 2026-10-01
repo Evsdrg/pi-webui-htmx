@@ -430,12 +430,22 @@ func (s *Server) serveUIFragments(w http.ResponseWriter, r *http.Request, encodi
 			if err != nil {
 				return "", err
 			}
+			selected := r.URL.Query().Get("selected")
+			// view=workspace 走分组视图：按工作区把会话分组，每组最近几条。
+			// 默认（含 view=timeline）是时间线——看到全部会话不该先做一次选择。
+			if r.URL.Query().Get("view") == "workspace" {
+				list, err := s.store.ListGrouped(r.Context(), sessions.GroupedPerCwd)
+				if err != nil {
+					return "", err
+				}
+				return s.ui.RenderSessionsGrouped(list, selected)
+			}
 			// cwd 是按工作区筛选：空串表示不筛。
 			list, err := s.store.List(r.Context(), offset, limit, r.URL.Query().Get("cwd"))
 			if err != nil {
 				return "", err
 			}
-			return s.ui.RenderSessionsPage(list, r.URL.Query().Get("selected"), offset)
+			return s.ui.RenderSessionsPage(list, selected, offset)
 		})
 
 	// 惰性内容：思考文本与工具结果图片。

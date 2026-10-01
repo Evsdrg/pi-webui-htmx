@@ -5,7 +5,25 @@
 </a>
 {{else}}{{if $.Cwd}}<p class="empty-note">这个工作区下还没有会话。</p>{{else}}<p class="empty-note">还没有会话。新建一个，开始协作。</p>{{end}}{{end}}
 {{if .HasMore}}<button class="btn" hx-get="ui/sessions?offset={{.NextOffset}}{{if .Cwd}}&amp;cwd={{.Cwd | urlquery}}{{end}}" hx-target="this" hx-swap="outerHTML" hx-disabled-elt="this">加载更多会话</button>{{end}}
-{{/* 工作区下拉的选项随片段一起更新：候选与计数只能由桥算，
-     前端从已渲染的行里收集会漏掉当前页之外的会话。 */}}
-<div hx-swap-oob="innerHTML:#session-cwd-filter">
-<option value="">全部工作区</option>{{range .Cwds}}<option value="{{.Cwd}}" title="{{.Cwd}}"{{if .Selected}} selected{{end}}>{{.Label}}（{{.Count}}）</option>{{end}}</div>
+{{/* 工作区下拉整体替换：候选与计数只能由桥算，前端从已渲染的行里收集
+     会漏掉当前页之外的会话。整块替换（而不是只换 option）还能把分组视图
+     藏起来的下拉恢复出来，两个视图的显隐状态因此只有一个来源。 */}}
+{{/* 视图切回时间线。从分组视图里点「查看全部」走的是 hx-get 带 view=timeline，
+     切换控件不会自己跟着变——不同步的话，下一次刷新或搜索又会跳回分组视图。
+     整块换掉（含隐藏 input）比逐个改属性简单，且选中态只有一个来源。 */}}
+<div class="view-switch" id="view-switch" role="group" aria-label="会话列表视图" hx-swap-oob="outerHTML:#view-switch">
+  <button type="button" class="view-btn" data-view="timeline" aria-pressed="true"
+          hx-get="ui/sessions?view=timeline" hx-include="#search-query,#session-cwd-filter"
+          hx-target="#session-list" hx-swap="innerHTML">时间线</button>
+  <button type="button" class="view-btn" data-view="workspace" aria-pressed="false"
+          hx-get="ui/sessions?view=workspace" hx-include="#search-query"
+          hx-target="#session-list" hx-swap="innerHTML">按工作区</button>
+  <input type="hidden" id="session-view-value" name="view" value="timeline">
+</div>
+<div id="cwd-filter-wrap" hx-swap-oob="outerHTML:#cwd-filter-wrap">
+  <select id="session-cwd-filter" class="cwd-filter" name="cwd" aria-label="按工作区筛选会话"
+          hx-get="ui/sessions" hx-trigger="change" hx-include="#search-query,#session-view"
+          hx-target="#session-list" hx-swap="innerHTML">
+    <option value="">全部工作区</option>{{range .Cwds}}<option value="{{.Cwd}}" title="{{.Cwd}}"{{if .Selected}} selected{{end}}>{{.Label}}（{{.Count}}）</option>{{end}}
+  </select>
+</div>

@@ -1,0 +1,47 @@
+{{/* 分组视图：按工作区把会话分组，每组只列最近几条。
+     为什么不做分页：这个视图回答的是「我有哪些工作区、各自最近在忙什么」，
+     一屏就能看完；要看某个工作区的完整历史，点组标题切回时间线视图。 */}}
+{{range .Groups}}
+<section class="cwd-group">
+  <h3 class="cwd-group-head">
+    <button class="cwd-group-name" hx-get="ui/sessions?view=timeline&amp;cwd={{.Cwd | urlquery}}"
+            hx-target="#session-list" hx-swap="innerHTML" hx-include="#search-query"
+            title="{{if .Cwd}}{{.Cwd}}{{else}}未标注工作区的会话{{end}}">{{.Label}}</button>
+    <span class="cwd-group-count">{{.Total}}</span>
+  </h3>
+  {{range .Items}}
+  <a class="session-item{{if eq .ID $.Selected}} selected{{end}}" href="?session={{.ID}}" data-session="{{.ID}}" data-cwd="{{.Cwd}}" data-title="{{.Title}}">
+    <span class="session-title">{{.Title}}</span>
+    <span class="session-meta"><time>{{.Modified}}</time></span>
+  </a>
+  {{end}}
+  {{if gt .Total (len .Items)}}
+  <button class="btn cwd-group-more" hx-get="ui/sessions?view=timeline&amp;cwd={{.Cwd | urlquery}}"
+          hx-target="#session-list" hx-swap="innerHTML" hx-include="#search-query"
+          hx-disabled-elt="this">查看全部 {{.Total}} 条</button>
+  {{end}}
+</section>
+{{else}}
+<p class="empty-note">还没有会话。新建一个，开始协作。</p>
+{{end}}
+{{/* 视图控件：分组视图由服务端渲染（客户端偏好只决定「进来时先请求哪个视图」），
+     所以选中态写在这里，而不是让前端去比对偏好。 */}}
+<div class="view-switch" id="view-switch" role="group" aria-label="会话列表视图" hx-swap-oob="outerHTML:#view-switch">
+  <button type="button" class="view-btn" data-view="timeline" aria-pressed="false"
+          hx-get="ui/sessions?view=timeline" hx-include="#search-query,#session-cwd-filter"
+          hx-target="#session-list" hx-swap="innerHTML">时间线</button>
+  <button type="button" class="view-btn" data-view="workspace" aria-pressed="true"
+          hx-get="ui/sessions?view=workspace" hx-include="#search-query"
+          hx-target="#session-list" hx-swap="innerHTML">按工作区</button>
+  <input type="hidden" id="session-view-value" name="view" value="workspace">
+</div>
+{{/* 分组视图下隐藏按工作区筛选的下拉：分类已经体现在分组标题上，
+     再放一个等效控件只会让人以为两者是不同的东西。
+     时间线视图的片段会把它换回来。 */}}
+<div id="cwd-filter-wrap" hx-swap-oob="outerHTML:#cwd-filter-wrap" hidden>
+  <select id="session-cwd-filter" class="cwd-filter" name="cwd" aria-label="按工作区筛选会话"
+          hx-get="ui/sessions" hx-trigger="change" hx-include="#search-query,#session-view"
+          hx-target="#session-list" hx-swap="innerHTML">
+    <option value="">全部工作区</option>
+  </select>
+</div>

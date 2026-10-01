@@ -315,6 +315,65 @@ func (x *Index) PathsForCwd(ctx context.Context, cwd string) (map[string]bool, e
 	return out, nil
 }
 
+// CwdGroup 是一个工作区及其最近若干条会话。
+type CwdGroup struct {
+	Cwd   string
+	Items []indexEntry
+	Total int
+}
+
+// Groups 按工作区分组，每组取最近 perGroup 条。
+//
+// 顺序沿用 x.order（时间倒序），因此组按「组内最新一条」排——最近用过的
+// 工作区排在最前，与用户对「我刚才在哪儿干活」的预期一致。
+//
+// 空 cwd 的会话（极老或被手改过的文件）自成一组，用空串作键；
+// 它们不该因为缺少工作区就从列表里消失。
+func (x *Index) Groups(ctx context.Context, perGroup int) ([]CwdGroup, bool, error) {
+	truncated, err := x.Refresh(ctx)
+	if err != nil {
+		return nil, false, err
+	}
+	if perGroup < 1 {
+		perGroup = 1
+	}
+	x.mu.RLock()
+	byCwd := map[string][]string{}
+	var order []string
+	for _, id := range x.order {
+		cwd := x.entries[id].cwd
+		if _, seen := byCwd[cwd]; !seen {
+			order = append(order, cwd)
+		}
+		byCwd[cwd] = append(byCwd[cwd], id)
+	}
+	out := make([]CwdGroup, 0, len(order))
+	for _, cwd := range order {
+		ids := byCwd[cwd]
+		n := len(ids)
+		if n > perGroup {
+			n = perGroup
+		}
+		items := make([]indexEntry, 0, n)
+		for _, id := range ids[:n] {
+			items = append(items, x.entries[id])
+		}
+		out = append(out, CwdGroup{Cwd: cwd, Items: items, Total: len(ids)})
+	}
+	x.mu.RUnlock()
+
+	for i := range out {
+		for j := range out[i].Items {
+			entry, err := x.titleForPage(ctx, out[i].Items[j])
+			if err != nil {
+				return nil, false, err
+			}
+			out[i].Items[j] = entry
+		}
+	}
+	return out, truncated, nil
+}
+
 // Workspaces 返回已知工作区及各自的会话数，按数量倒序（同数按路径序）。
 //
 // 空 cwd 的会话（极老或被手改过的文件）不计入任何工作区，它们仍能被
