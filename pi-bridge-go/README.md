@@ -127,6 +127,6 @@ cp "$HOME/.pi/agent/models.json" "$HOME/.local/state/pi-bridge/agent/"
 
 ## 许可证
 
-**待定**：自研部分计划采用 AGPL-3.0（见 [docs/licensing.md](docs/licensing.md) 的核查结论与一处 EPL-2.0 依赖边界）。
+**AGPL-3.0-or-later**（见仓库根的 [LICENSE](../LICENSE)）。
 
 依赖组件各自遵循其原许可证，详见 [docs/licensing.md](docs/licensing.md)。
