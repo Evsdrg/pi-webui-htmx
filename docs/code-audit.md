@@ -8,7 +8,7 @@
 
 ## 范围与基线
 
-审查对象：`pi-bridge-go`、`pi-webui-htmx`；以 `/srv/projects/pi/pi-web` 的当前源码作对照。覆盖两个仓库的生产 Go 模块、HTMX/TypeScript 入口与模块、模板、协议和主要资源生命周期；对会话、凭据、命令与事件传输、工作区、Git、终端、relay、压缩和前端异步切换做了重点源码核对与定向反例。本文是源码审查记录，不是形式化证明；运行时不能安全或稳定触发的条目会明确标为源码确认。
+审查对象：`pi-bridge-go`、`pi-webui-htmx`；以 `/srv/projects/src-read-only/pi-web` 的当前源码作对照。覆盖两个仓库的生产 Go 模块、HTMX/TypeScript 入口与模块、模板、协议和主要资源生命周期；对会话、凭据、命令与事件传输、工作区、Git、终端、relay、压缩和前端异步切换做了重点源码核对与定向反例。本文是源码审查记录，不是形式化证明；运行时不能安全或稳定触发的条目会明确标为源码确认。
 
 审查基线：本轮开始时桥 `go test -race ./...`、`go vet ./...` 通过；前端 72 项 Vitest、TypeScript、生产构建及 `pnpm check` 通过。另有 16 个桥侧和 5 个前端初始审查反例未通过，后续定向探针继续新增发现；这些是审查探针结果，不是基线测试回归。探针存放在 `/srv/projects/agentTmp/pi-audit-vxcvho/`，未留在产品仓库。Pi Web checkout 未安装完整依赖；`npm test` 的 530 项中 115 项因缺少 `jiti`、`react`、Pi SDK 等依赖及平台相关路径用例失败，因此不将其测试结果当作产品代码质量结论。
 

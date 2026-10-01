@@ -2,7 +2,7 @@
 
 本地 Go 桥连接浏览器与独立 `pi --mode rpc` 子进程。目标是适配 HTMX 工作台、直接读取 Pi 数据，并使 agent 内存随进程退出释放。桥不嵌入 Pi SDK，不另建一份会话正文数据库。
 
-**仓库边界：** 本仓只含 Go 桥。相邻的 `../pi-webui-htmx`（HTMX 前端与 UI 包）与 `../pi-web`（上游 Pi Web 参考）各自是独立 git 仓库；三者没有共同父仓库，也不要为它们建一个总仓库。跨仓改动分两边提交，配套关系写在 [UI 包契约](../pi-webui-htmx/docs/contract.md)。
+**仓库边界：** 本仓只含 Go 桥。相邻的 `../pi-webui-htmx`（HTMX 前端与 UI 包）是独立 git 仓库；二者没有共同父仓库，也不要为它们建一个总仓库。上游 `pi-web` 的只读参考检出在 `../../src-read-only/pi-web`（不在 `pi/` 下）。跨仓改动分两边提交，配套关系写在 [UI 包契约](../pi-webui-htmx/docs/contract.md)。
 
 **状态：** 本地工作台与 relay/tunnel 后端均已实现，云端形态的整链路（relay 设备前缀 → 隧道 HTTP 帧 / WS 别名 → 桥）已端到端跑通并实测。台账 B01–B81、U01–U21、T01、D01–D02 在此前多轮修复中逐项关闭；剩余的**部署约束**与**未经真实环境验收的部分**见 [剩余问题联合分析](docs/remaining-issues-plan.md)，逐项证据见 [code-audit.md](docs/code-audit.md)。
 
