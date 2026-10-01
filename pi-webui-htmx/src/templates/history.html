@@ -1,0 +1,39 @@
+{{/* 分页控件独立交换；历史正文只含回合，旧内容始终插到顶部。 */}}
+<div id="older-slot" hx-swap-oob="innerHTML">
+{{if .HasMore}}<div class="older"><button class="btn" id="older-sentinel"
+ hx-get="ui/sessions/{{.SessionID}}/history?before={{.OldestEntryID}}&amp;leafId={{.LeafID}}"
+ hx-target="#turns" hx-swap="afterbegin" hx-sync="this:drop" hx-disabled-elt="this">↑ 加载更早的消息</button></div>{{end}}
+</div>
+<span hidden data-history-model-provider="{{if .HistoricalModel}}{{.HistoricalModel.Provider}}{{end}}" data-history-model-id="{{if .HistoricalModel}}{{.HistoricalModel.ID}}{{end}}"></span>
+{{/* 用显式变量而不是 $：$ 在 Go 模板里始终指向最外层数据（HistoryData），
+     range 内层取不到 Turn 的字段，会直接渲染失败。 */}}
+{{range $turn := .Turns}}
+<article class="turn" data-turn-id="{{$turn.ID}}">
+  {{range $turn.EntryIDs}}<span hidden data-search-entry-id="{{.}}"></span>{{end}}
+  {{if or $turn.UserText $turn.UserImages}}<div class="turn-user"><div class="bubble">{{$turn.UserText}}{{range $turn.UserImages}}<div class="user-image-entry"><button class="lazy-block" data-lazy="user-image" data-entry-id="{{.EntryID}}" data-block-index="{{.BlockIndex}}">查看附带图片</button></div>{{end}}</div>{{if $turn.UserText}}<div class="turn-actions"><button class="icon-btn" data-action="fork" data-entry-id="{{$turn.ID}}" title="以这条消息为终点新建会话，并把原文放进输入框以便改写；当前会话不受影响">编辑并重发</button></div>{{end}}</div>{{end}}
+  {{if $turn.HasProcess}}<div class="turn-process">
+    {{range $step := $turn.Steps}}<details class="tool-call" data-ok="{{if $step.OK}}true{{else}}false{{end}}" data-entry-id="{{$step.EntryID}}">
+      <summary>
+        <span class="tool-name">{{if $step.Name}}{{$step.Name}}{{else}}{{$step.Kind}}{{end}}</span>
+        <span class="tool-preview">{{$step.Detail}}</span>
+        {{if $step.Duration}}<span class="tool-duration">{{$step.Duration}}s</span>{{end}}
+        <svg class="tool-chevron" width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="2 3.5 5 6.5 8 3.5" /></svg>
+      </summary>
+      <pre class="tool-detail">{{$step.Detail}}</pre>
+      {{if and $step.EntryID $step.Images}}{{range $step.Images}}<button class="lazy-block" data-lazy="tool-image" data-entry-id="{{$step.EntryID}}" data-block-index="{{.}}">查看工具图片</button>{{end}}{{end}}
+    </details>{{end}}
+  </div>{{end}}
+  {{if $turn.Thinking}}{{range $turn.Thinking}}<details class="thinking-block">
+    <summary>
+      <svg class="thinking-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9.5 2A5.5 5.5 0 0 0 4 7.5c0 1.7.78 3.21 2 4.21V14a1 1 0 0 0 1 1h5a1 1 0 0 0 1-1v-2.29c1.22-1 2-2.51 2-4.21A5.5 5.5 0 0 0 9.5 2z" /><line x1="7" y1="18" x2="12" y2="18" /><line x1="8" y1="21" x2="11" y2="21" /></svg>
+      <span class="thinking-preview">查看思考过程</span>
+      {{if .Duration}}<span class="thinking-duration">{{.Duration}}s</span>{{end}}
+    </summary>
+    <div class="thinking-body"><button class="lazy-block" data-lazy="thinking" data-entry-id="{{.EntryID}}" data-block-index="{{.BlockIndex}}" hx-get="ui/sessions/{{$.SessionID}}/lazy?kind=thinking&amp;format=html&amp;entryId={{.EntryID}}&amp;blockIndex={{.BlockIndex}}" hx-target="this" hx-swap="outerHTML" hx-sync="this:drop" hx-disabled-elt="this">载入思考内容</button></div>
+  </details>{{end}}{{end}}
+  {{if $turn.AssistantText}}<div class="turn-assistant"><span class="role" role="img" aria-label="Pi 助手">π</span><div class="bubble markdown">{{$turn.AssistantText}}</div></div>{{end}}
+  {{if $turn.Error}}<div class="turn-error">{{$turn.Error}}</div>{{end}}
+  {{if $turn.Usage}}<div class="turn-usage">{{$turn.Usage.Summary}}</div>{{end}}
+  <div class="turn-actions"><button class="icon-btn" data-action="copy-turn" aria-label="复制此回合内容">复制</button></div>
+</article>
+{{end}}

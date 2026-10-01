@@ -1,0 +1,18 @@
+<dialog class="ext-dialog" data-dialog-id="{{.ID}}" data-method="{{.Method}}" aria-label="{{.Title}}">
+  <form data-extension-form data-session-id="{{.SessionID}}">
+    <h3>{{.Title}}</h3>
+    {{if .Message}}<p>{{.Message}}</p>{{end}}
+    {{if eq .Method "select"}}
+    <label>选择一项<select name="value" required>{{range .Options}}<option value="{{.}}">{{.}}</option>{{end}}</select></label>
+    {{else if eq .Method "input"}}
+    <label>输入内容<input name="value" type="text" placeholder="{{.Placeholder}}" value="{{.Prefill}}" maxlength="200000"></label>
+    {{else if eq .Method "editor"}}
+    <label>编辑内容<textarea name="value" rows="10" maxlength="200000">{{.Prefill}}</textarea></label>
+    {{end}}
+    <div class="ext-dialog-actions">
+      <button class="btn" type="submit" name="cancelled" value="true" formnovalidate>取消</button>
+      {{if eq .Method "confirm"}}<button class="btn" type="submit" name="confirmed" value="false">否</button><button class="btn btn-primary" type="submit" name="confirmed" value="true">确定</button>
+      {{else}}<button class="btn btn-primary" type="submit" name="answer" value="true">提交</button>{{end}}
+    </div>
+  </form>
+</dialog>

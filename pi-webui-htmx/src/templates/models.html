@@ -1,0 +1,2 @@
+<option value="">Pi 默认模型</option>
+{{range .Models}}<option value="{{.Provider}}/{{.ID}}" data-provider="{{.Provider}}" data-model-id="{{.ID}}"{{if eq (printf "%s/%s" .Provider .ID) $.Current}} selected{{end}} title="{{.Provider}}/{{.ID}}">{{.Name}}</option>{{end}}

@@ -1,0 +1,4 @@
+{{range .Entries}}
+<button class="file-item" data-file-path="{{.Path}}" data-directory="{{.IsDir}}"><span aria-hidden="true">{{if .IsDir}}▸{{else}}·{{end}}</span><span>{{.Name}}</span>{{if not .IsDir}}<span class="muted">{{.Size}}</span>{{end}}</button>
+{{else}}<p class="empty-note">目录为空。</p>{{end}}
+{{if .Truncated}}<p class="empty-note">目录项已达到显示上限。</p>{{end}}

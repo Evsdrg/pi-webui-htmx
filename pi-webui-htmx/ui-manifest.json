@@ -1,0 +1,136 @@
+{
+  "$comment": "UI 包契约。桥在启动时读取本文件；字段缺失或版本不兼容时拒绝加载该 UI 包，而不是带着不确定的模板跑。",
+  "uiVersion": "0.2.0",
+  "protocolVersion": 1,
+  "piBaseline": "0.85.1",
+  "templates": {
+    "shell": "templates/shell.html",
+    "sessions": "templates/sessions.html",
+    "history": "templates/history.html",
+    "models": "templates/models.html",
+    "packages": "templates/packages.html",
+    "files": "templates/files.html",
+    "extStatus": "templates/extensions/status.html",
+    "extWidgets": "templates/extensions/widgets.html",
+    "extDialog": "templates/extensions/dialog.html",
+    "diff": "templates/diff.html",
+    "gitStatus": "templates/git-status.html",
+    "search": "templates/search.html",
+    "branch": "templates/branch.html",
+    "system": "templates/system.html",
+    "tools": "templates/tools.html",
+    "stats": "templates/stats.html",
+    "export": "templates/export.html",
+    "catalog": "templates/catalog.html",
+    "note": "templates/note.html",
+    "_comment": "相对路径以 src/ 为基准；下划线开头的键是说明，不是模板"
+  },
+  "routes": {
+    "shell": "/",
+    "assets": "/assets/",
+    "sessions": "/ui/sessions",
+    "history": "/ui/sessions/{id}/history",
+    "models": "/ui/models",
+    "packages": "/ui/packages",
+    "files": "/ui/files",
+    "extStatus": "/ui/extensions/status",
+    "extWidgets": "/ui/extensions/widgets",
+    "extDialog": "/ui/extensions/dialogs?sessionId={id}",
+    "diff": "/ui/diff",
+    "gitStatus": "/ui/git-status",
+    "search": "/ui/search",
+    "branch": "/ui/branch",
+    "system": "/ui/system",
+    "tools": "/ui/tools",
+    "stats": "/ui/stats",
+    "exports": "/ui/exports/{name}"
+  },
+  "requiredMethods": [
+    "config.models",
+    "config.models.discover",
+    "config.models.raw",
+    "config.models.test",
+    "config.packages",
+    "files.image",
+    "files.index",
+    "files.roots",
+    "session.abort",
+    "session.abort_retry",
+    "session.export_html",
+    "session.fork_messages",
+    "session.pending_dialogs",
+    "session.prompt",
+    "session.set_auto_compaction",
+    "session.set_auto_retry",
+    "session.set_queue_mode",
+    "session.start",
+    "session.state",
+    "session.subscribe",
+    "session.tree",
+    "session.ui_response",
+    "session.unsubscribe",
+    "sessions.search",
+    "worker.list"
+  ],
+  "extensionChannel": {
+    "fireAndForget": [
+      "setStatus",
+      "setWidget",
+      "notify",
+      "setTitle",
+      "set_editor_text"
+    ],
+    "needsResponse": [
+      "select",
+      "confirm",
+      "input",
+      "editor"
+    ],
+    "unsupportedByRpc": [
+      "setFooter",
+      "setHeader",
+      "setWorkingMessage",
+      "setWorkingVisible",
+      "setWorkingIndicator",
+      "setHiddenThinkingLabel",
+      "custom",
+      "onTerminalInput",
+      "addAutocompleteProvider",
+      "setEditorComponent",
+      "getEditorComponent",
+      "pasteToEditor"
+    ]
+  },
+  "build": {
+    "_comment": "构建产物布局。桥只消费 dist/，不再读 src/assets。",
+    "toolchain": "pnpm + Vite 8 + TypeScript 7 + Tailwind v4",
+    "outputDir": "dist",
+    "viteManifest": "dist/.vite/manifest.json",
+    "entry": "src/entry/app.ts",
+    "firstLoadBudgetGzipKB": 50,
+    "firstLoadOwnBudgetGzipKB": 30,
+    "vendorChunks": [
+      "htmx"
+    ],
+    "_budgetComment": [
+      "首屏总预算把供应商代码与自有代码分开度量，两个数字都强制。",
+      "htmx 官方 dist/htmx.min.js 为 52,182 B / gzip 16,861 B（已核对 2.0.11）；",
+      "npm 包的 main 指向未压缩的 dist/htmx.esm.js（171,382 B），所以打包后是 gzip 17.59 KiB，",
+      "比官方压缩版多约 0.73 KiB（Vite 的压缩略弱于官方 terser 产物），属于可接受开销。",
+      "这一块是换不掉的固定成本，因此单独列出；firstLoadOwnBudgetGzipKB 才是每次改 UI 该盯的数字。"
+    ],
+    "budgetNote": "htmx 是换不掉的供应商成本（约 17.6 KiB gzip），因此单独列出；firstLoadOwnBudgetGzipKB 才是每次改 UI 该盯的数字。自有预算上限 30 KiB、总预算 50 KiB：顶栏面板按需加载、服务端片段、界面过渡动效、消息流的思考/工具块样式各自贡献了几百字节，均经死代码清查确认无冗余（171 个类名逐一核对在用）。预算的作用是拦住无意识的膨胀，不是拦住功能增长。"
+  },
+  "assets": {
+    "_comment": "构建后由 dist/.vite/manifest.json 解析真实文件名；这里只声明逻辑入口。",
+    "entry": "app",
+    "lazy": {
+      "markdown": "marked",
+      "highlight": "highlight.js",
+      "math": "katex",
+      "mermaid": "mermaid",
+      "ansi": "ansi_up",
+      "terminal": "@xterm/xterm"
+    }
+  }
+}
