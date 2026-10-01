@@ -5,7 +5,9 @@ import (
 	"fmt"
 	"math/rand"
 	"runtime"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/andybalholm/brotli"
 )
@@ -102,5 +104,50 @@ func TestBrotliPoolWriterFootprint(t *testing.T) {
 	}
 	if testing.Verbose() {
 		fmt.Printf("单写入器常驻：lgwin=%d → %.2f MiB，lgwin=22 → %.2f MiB\n", brotliLGWin, small, def)
+	}
+}
+
+// 静态资源压缩必须串行：并发的压缩峰值会叠加（实测三个大 chunk 并发把
+// RSS 从 19 MB 推到 121 MB），而静态资源压缩结果永久缓存，串行的代价只是
+// 首次加载多等一会儿。
+//
+// 用相对时序判定：串行时 N 个任务的总耗时接近 N 倍单次，并发时接近 1 倍。
+// 阈值取 2 倍以容忍调度噪声；单核机器上并行也接近串行，属于可接受的假阴性。
+func TestStaticAssetCompressionIsSerialized(t *testing.T) {
+	sample := sampleFragment(256<<10, 23)
+	start := time.Now()
+	if _, err := compressBytes(sample, EncBrotli); err != nil {
+		t.Fatal(err)
+	}
+	single := time.Since(start)
+
+	const workers = 4
+	var wg sync.WaitGroup
+	start = time.Now()
+	for i := 0; i < workers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			var out bytes.Buffer
+			if _, err := compressBytes(sample, EncBrotli); err != nil {
+				t.Errorf("并发压缩失败：%v", err)
+			}
+			_ = out
+		}()
+	}
+	wg.Wait()
+	total := time.Since(start)
+
+	if testing.Verbose() {
+		fmt.Printf("单次 %v，%d 个并发总耗时 %v（比值 %.2f）\n",
+			single, workers, total, float64(total)/float64(single))
+	}
+	if total < single*2 {
+		t.Errorf("%d 个并发压缩总耗时 %v 仅为单次 %v 的 %.2f 倍，未串行化；"+
+			"并发时压缩峰值会叠加，需要恢复 staticCompressGate 的容量 1",
+			workers, total, single, float64(total)/float64(single))
+	}
+	if cap(staticCompressGate) != 1 {
+		t.Errorf("staticCompressGate 容量为 %d，串行化设计应为 1", cap(staticCompressGate))
 	}
 }

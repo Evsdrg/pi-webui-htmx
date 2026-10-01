@@ -12,6 +12,17 @@ import (
 // compressBytes 一次性压缩整块内容，用于静态资源。
 // 静态资源文件名带内容哈希，压缩结果可永久缓存，因此用最高压缩比。
 func compressBytes(raw []byte, encoding Encoding) ([]byte, error) {
+	// 静态资源压缩串行化。
+	//
+	// 为什么：BestCompression 压按需加载的大 chunk（实测 1.4 MB）时堆峰值约
+	// 38 MiB，而浏览器会并发请求多个 chunk。实测三个并发把 RSS 推到 121 MB，
+	// 串行后峰值就是确定的单次上限。压缩结果永久缓存，所以串行只让首次加载
+	// 多等一会儿；后续访问直接命中缓存，不再压缩。
+	//
+	// 只挡静态资源：动态响应走小窗口与池（单份约 2.9 MiB），不能被它拖住。
+	staticCompressGate <- struct{}{}
+	defer func() { <-staticCompressGate }()
+
 	var out bytes.Buffer
 	switch encoding {
 	case EncGzip:
@@ -54,6 +65,11 @@ func compressBytes(raw []byte, encoding Encoding) ([]byte, error) {
 // 33 KB 外壳）：lgwin=19 与 22 的压缩输出**逐字节相同**；按需加载的大 chunk
 // （1.4 MB）只多 0.9%，而单次压缩峰值从 96 MiB 降到 38 MiB。
 const brotliLGWin = 19
+
+// staticCompressGate 是静态资源压缩的串行化信号量（容量 1）。
+// 容量是可测试的设计决定：见 compressBytes 的注释与
+// TestStaticAssetCompressionIsSerialized。
+var staticCompressGate = make(chan struct{}, 1)
 
 // newBrotliWriter 按统一窗口创建写入器：静态资源与动态响应共用同一个窗口，
 // 两边都不会因为库默认的 8 MiB 环缓而把内存留在池里。
