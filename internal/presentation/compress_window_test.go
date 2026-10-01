@@ -1,0 +1,106 @@
+package presentation
+
+import (
+	"bytes"
+	"fmt"
+	"math/rand"
+	"runtime"
+	"testing"
+
+	"github.com/andybalholm/brotli"
+)
+
+// sampleFragment 生成确定性的、接近真实响应特征的样本：模板文本与 JSONL
+// 内容混合的形态（部分重复结构 + 部分高熵载荷）。
+func sampleFragment(n int, seed int64) []byte {
+	r := rand.New(rand.NewSource(seed))
+	out := make([]byte, 0, n+64)
+	fragments := [][]byte{
+		[]byte(`<div class="tool-call" data-ok="true"><summary>bash</summary><pre>`),
+		[]byte(`{"type":"message","role":"assistant","content":[{"type":"text","text":"`),
+		[]byte(`· 1s</span></div></details>`),
+		[]byte(`\u4e2d\u6587\u6b63\u6587\u4e0e\u6807\u70b9\uff0c\u4ee5\u53ca 12345 `),
+	}
+	for len(out) < n {
+		if r.Intn(5) == 0 {
+			b := make([]byte, 1+r.Intn(40))
+			for i := range b {
+				b[i] = byte(32 + r.Intn(95))
+			}
+			out = append(out, b...)
+		} else {
+			out = append(out, fragments[r.Intn(len(fragments))]...)
+		}
+	}
+	return out[:n]
+}
+
+// 桥的实际响应尺寸内（外壳 32 KB、历史片段 200–250 KB、记忆面板 37 KB），
+// 统一窗口的压缩输出不得比库默认窗口差。这条锁住「为省内存而牺牲流量」的回退。
+func TestBrotliWindowMatchesDefaultOnResponseSizes(t *testing.T) {
+	for _, size := range []int{32 << 10, 200 << 10, 480 << 10} {
+		raw := sampleFragment(size, int64(size))
+		var got bytes.Buffer
+		if _, err := Compress(&got, raw, EncBrotli); err != nil {
+			t.Fatal(err)
+		}
+		var want bytes.Buffer
+		ref := brotli.NewWriterOptions(&want, brotli.WriterOptions{Quality: 4, LGWin: 22})
+		if _, err := ref.Write(raw); err != nil {
+			t.Fatal(err)
+		}
+		if err := ref.Close(); err != nil {
+			t.Fatal(err)
+		}
+		if got.Len() > want.Len() {
+			t.Errorf("样本 %d KB：统一窗口输出 %d 字节，大于默认窗口的 %d 字节",
+				size>>10, got.Len(), want.Len())
+		}
+	}
+}
+
+// 池化写入器的常驻内存必须显著小于库默认窗口。
+//
+// 为什么测「一个活着的 writer」而不是直接测池：sync.Pool 在两次 GC 后就会
+// 清空，池里留存的量测不稳；而池保留的正是这个对象，它的常驻即峰值 RSS 的
+// 单位成本（并发几个请求就留几份）。默认窗口（22）实测约 9.8 MiB，
+// 统一窗口（19）约 2.8 MiB，阈值取 0.6 倍足以分辨，也不受测量噪声影响。
+func TestBrotliPoolWriterFootprint(t *testing.T) {
+	footprint := func(lg int) float64 {
+		best := 1e9
+		for i := 0; i < 3; i++ {
+			runtime.GC()
+			runtime.GC()
+			var ms runtime.MemStats
+			runtime.ReadMemStats(&ms)
+			base := ms.HeapAlloc
+			w := brotli.NewWriterOptions(&bytes.Buffer{}, brotli.WriterOptions{Quality: 4, LGWin: lg})
+			if _, err := w.Write(sampleFragment(300<<10, 11)); err != nil {
+				t.Fatal(err)
+			}
+			if err := w.Close(); err != nil {
+				t.Fatal(err)
+			}
+			runtime.GC()
+			runtime.GC()
+			runtime.ReadMemStats(&ms)
+			runtime.KeepAlive(w)
+			if v := float64(ms.HeapAlloc-base) / (1 << 20); v < best {
+				best = v
+			}
+		}
+		return best
+	}
+	small := footprint(brotliLGWin)
+	def := footprint(22)
+	if small > def*0.6 {
+		t.Errorf("统一窗口（lgwin=%d）单写入器常驻 %.1f MiB，默认窗口（22）为 %.1f MiB；"+
+			"前者应显著更小，否则池会按并发倍数放大常驻内存", brotliLGWin, small, def)
+	}
+	if small < 0.2 {
+		t.Errorf("单写入器常驻仅 %.1f MiB，测量可能失效（预期约 2–3 MiB）", small)
+	}
+	if testing.Verbose() {
+		fmt.Printf("单写入器常驻：lgwin=%d → %.2f MiB，lgwin=22 → %.2f MiB\n", brotliLGWin, small, def)
+	}
+}

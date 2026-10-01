@@ -29,7 +29,7 @@ func compressBytes(raw []byte, encoding Encoding) ([]byte, error) {
 		}
 		return out.Bytes(), nil
 	case EncBrotli:
-		w := brotli.NewWriterLevel(&out, brotli.BestCompression)
+		w := newBrotliWriter(&out, brotli.BestCompression)
 		if _, err := w.Write(raw); err != nil {
 			return nil, err
 		}
@@ -42,12 +42,36 @@ func compressBytes(raw []byte, encoding Encoding) ([]byte, error) {
 	}
 }
 
+// brotliLGWin 是桥里所有 brotli 写入器共用的窗口（log2，单位字节）。
+//
+// 必须显式指定，不能依赖库默认值：andybalholm/brotli 的 defaultWindow 是 22，
+// 而环形缓冲按 1<<(lgwin+1) 分配，即 **8 MiB**——那是一个写入器的常驻内存，
+// 不是峰值。它跟随 Writer 对象存活：Reset 会把 lgwin 重置回默认值 22，
+// 所以只给“首次创建”设窗口没用，必须在 options 里定死。
+//
+// 为什么 19（窗口 512 KiB）：实测桥的响应与资源都在窗口之内，而内存是
+// 1<<(19+1) = 1 MiB 环缓。用真实样本对照（227 KB 历史片段、38 KB 记忆面板、
+// 33 KB 外壳）：lgwin=19 与 22 的压缩输出**逐字节相同**；按需加载的大 chunk
+// （1.4 MB）只多 0.9%，而单次压缩峰值从 96 MiB 降到 38 MiB。
+const brotliLGWin = 19
+
+// newBrotliWriter 按统一窗口创建写入器：静态资源与动态响应共用同一个窗口，
+// 两边都不会因为库默认的 8 MiB 环缓而把内存留在池里。
+func newBrotliWriter(dst io.Writer, quality int) *brotli.Writer {
+	return brotli.NewWriterOptions(dst, brotli.WriterOptions{Quality: quality, LGWin: brotliLGWin})
+}
+
 // compressThreshold 以下的响应不压缩：压缩收益抵不上一次分配的代价，
 // 而小响应恰好是错误与确认回执的大多数。
 const compressThreshold = 1024
 
 // 两套写入器池，按协商到的编码选用。
 // 动态 HTML/JSON 每个请求都要压缩，不复用会给 GC 添一笔稳定负担。
+//
+// 池会按“GC 间隔内的并发峰值”保留写入器（sync.Pool 在 GC 时清空），
+// 所以单个写入器的常驻内存直接决定峰值 RSS：brotli 默认窗口会让一份就到
+// 8 MiB（见 brotliLGWin），六个并发请求就是 48 MiB 常驻。gzip BestSpeed
+// 的写入器只有 0.8 MiB，无需特别处理。
 var (
 	gzipPool = sync.Pool{New: func() any {
 		w, err := gzip.NewWriterLevel(io.Discard, gzip.BestSpeed)
@@ -59,7 +83,7 @@ var (
 	brotliPool = sync.Pool{New: func() any {
 		// 动态内容用较低档位：brotli 高档位的 CPU 成本在每请求场景不划算，
 		// 而 gzip 兜底始终可用。
-		return brotli.NewWriterLevel(io.Discard, 4)
+		return newBrotliWriter(io.Discard, 4)
 	}}
 )
 
