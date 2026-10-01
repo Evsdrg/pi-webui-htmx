@@ -62,6 +62,10 @@ func main() {
 	if path := os.Getenv("FAKE_PI_ARGS_FILE"); path != "" {
 		_ = os.WriteFile(path, []byte(strings.Join(os.Args, "\n")+"\n"), 0600)
 	}
+	// 可选地把收到的每条命令原样追加写盘（JSONL）。
+	// 没有这个出口时，「某个字段到底有没有传给 Pi」只能靠推断——
+	// 而此前恰好有一处参数从未到达过：桥侧以为它在传，实际被上层过滤掉了。
+	cmdsFile := os.Getenv("FAKE_PI_CMDS_FILE")
 	delay, _ := strconv.Atoi(envOr("FAKE_PI_DELAY_MS", "0"))
 	// 按方法拖延：逗号分隔的 Pi 方法名。夹具原本只能拖慢 prompt，
 	// 而验证「桥没有用统一的短超时砍断长命令」需要拖慢 compact/bash 之类。
@@ -109,6 +113,13 @@ func main() {
 		if json.Unmarshal([]byte(line), &cmd) != nil {
 			emit(frame{Type: "response", ID: "", Success: false, Error: "无法解析命令"})
 			continue
+		}
+		if cmdsFile != "" {
+			// O_APPEND 单次写入是原子的，多个 worker 共用同一文件也不会互相截断。
+			if f, err := os.OpenFile(cmdsFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0600); err == nil {
+				_, _ = f.WriteString(line + "\n")
+				_ = f.Close()
+			}
 		}
 		if delay > 0 && delayMethods[cmd.Type] {
 			time.Sleep(time.Duration(delay) * time.Millisecond)

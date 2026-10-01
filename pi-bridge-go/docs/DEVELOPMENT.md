@@ -202,6 +202,43 @@ PI_WEBUI_DIR=../pi-webui-htmx go test -race ./internal/transport/
 | testdata/fake-pi | 可控夹具源码，不提交编译产物 |
 | tools/smoke-client | 手工真实 Pi 冒烟，不属于自动付费模型测试 |
 
+### 假 Pi 的观测出口
+
+断言「桥实际发出去了什么」需要夹具把收到的命令记录下来，靠推断写测试
+出过错：`runtime/bash.go` 曾把请求标识塞进 `fields["id"]`，想让它出现在
+bash 事件流上，而 `pi.Client.Call` 出于配对需要会过滤掉这个键——参数从未
+到达过 Pi，注释却写着一路在传，直到给夹具加了记录出口才看见。
+
+- `FAKE_PI_CMDS_FILE`：把收到的每条命令原样追加写盘（JSONL）。
+  配套读取用 `testutil.WaitForCommand`。断言真实载荷时优先用它，
+  不要从桥侧代码「推」出载荷形状。
+- `FAKE_PI_ARGS_FILE`：写启动参数，用于验证工具预设翻译成 CLI 参数。
+- `FAKE_PI_SCRIPT` / `FAKE_PI_DELAY_METHOD` / `FAKE_PI_FORBID_ENV`：
+  控制行为与启动环境断言。
+
+### 变更覆盖度怎么核（mutation 复核）
+
+「测试有没有用」用突变复核过一次：对 6 类语义改动（`==`/`!=`、`&&`/`||`、
+`return true/false`）随机取样，逐个注入源码后跑全量测试，看有没有测试报红。
+首轮 140 个突变里 12 个无人发现——其中 8 个是真缺口（已补测试，见下），
+另 2 个是等价突变（`jsonl.Reusable` 的缓冲复用只影响分配量）或平台文件
+（`process_other.go` 带 `!linux` 构建约束，本机不编译）。
+
+| 曾经的缺口 | 现在由谁抓住 |
+|---|---|
+| `jsonl.SkipLine` 越过超长行 | `TestSkipLine吞掉超长行` |
+| `packages` 非法类型不报错 | `TestPackages非法类型必须报错` |
+| 队列预算等待失败仍报成功 | `Test预算等待失败时不报告入队成功` |
+| 模型目录缓存永不失效 | `Test模型目录缓存过期后会重新拉取` |
+| `session.set_queue_mode` 零覆盖 | `Test排队方式命令端到端` |
+| 目录搜索词不回显 | `Test模型目录片段按查询过滤` |
+| 402 一律判为余额不足 | `TestAssistantError按类别投影` |
+| `fields` 里的 id 覆盖顶层 id | `TestCall忽略fields里的id与type` |
+
+复检口令：改动测试策略（比如要重新引入 `t.Parallel`）后，挑几个
+「只有一处分支」的位置做同样动作——注入反转后没有测试报红，
+就说明那段行为没有测试在管。
+
 FakePi 已按测试进程使用独占构建目录，TestMain 在测试结束后清理。真实 Pi 冒烟使用隔离配置，只做握手/状态/退出，不加载生产秘密或发送付费请求。
 
 跨目录验证需显式设置 `PI_WEBUI_DIR`（缺 UI 直接失败），或运行 `scripts/verify-pair.sh`；[方法清单](method-inventory.md) 由 `ui_contract_test.go` 与 Go 注册表、UI 类型、模板交叉核对，此外还有 Go/TS/模板静态契约。

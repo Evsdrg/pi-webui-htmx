@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 )
 
 // postFragment 以已认证的 POST 取片段。
@@ -88,6 +89,12 @@ func Test模型目录片段按查询过滤(t *testing.T) {
 	if !strings.Contains(body, "匹配 1") {
 		t.Fatalf("应显示匹配条数: %s", body)
 	}
+	// 搜索词要回显在标题上：列表已被过滤，用户得看得出是按什么筛的。
+	// 只断言「结果对」不够——过滤在服务端完成，标题是唯一能看出
+	// 「这已经是筛选后的视图」的地方。
+	if !strings.Contains(body, "按 “reasoner” 过滤") {
+		t.Fatalf("标题应回显搜索词: %s", body)
+	}
 	// 查不到时给出可读空态，而不是空白。
 	empty := postFragment(t, s, "/ui/models/catalog", url.Values{"q": {"nothing-matches"}})
 	if !strings.Contains(empty, "没有匹配的模型") {
@@ -136,5 +143,33 @@ func Test模型目录片段限制单次候选数(t *testing.T) {
 	}
 	if !strings.Contains(body, "目录：80 条") {
 		t.Fatalf("仍应报告目录总条数: %s", body)
+	}
+}
+
+// Test模型目录缓存过期后会重新拉取：缓存条件必须是「有内容 **且** 未过期」。
+// 写成「或」的话，第一次拉取成功后 items 非空，缓存就永远不会失效——
+// 上游目录更新（比如新模型上线）在这个进程里再也看不到。
+// TTL 是 10 分钟，测试不能等，直接把时间戳拨回过去。
+func Test模型目录缓存过期后会重新拉取(t *testing.T) {
+	s := newTestServerWithUI(t)
+	var hits int32
+	s.piConfig.SetCatalogURL(fakeCatalog(t, &hits).URL)
+
+	postFragment(t, s, "/ui/models/catalog", url.Values{"q": {"deepseek"}})
+	if got := atomic.LoadInt32(&hits); got != 1 {
+		t.Fatalf("首次请求应拉取一次，实际 %d 次", got)
+	}
+
+	s.catalog.mu.Lock()
+	s.catalog.at = time.Now().Add(-2 * catalogTTL)
+	s.catalog.mu.Unlock()
+
+	body := postFragment(t, s, "/ui/models/catalog", url.Values{"q": {"deepseek"}})
+	if got := atomic.LoadInt32(&hits); got != 2 {
+		t.Fatalf("缓存过期后应重新拉取，实际 %d 次（缓存永不失效会让目录更新看不到）", got)
+	}
+	// 重新拉取的仍是真实目录，不是空壳。
+	if !strings.Contains(body, "DeepSeek Chat") {
+		t.Fatalf("过期后的响应应包含目录内容: %s", body)
 	}
 }

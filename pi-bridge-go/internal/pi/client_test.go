@@ -455,3 +455,47 @@ func Test超限帧不杀死连接(t *testing.T) {
 	default:
 	}
 }
+
+// TestCall忽略fields里的id与type：顶层 id 由 Call 生成（rpc-N）并用于响应配对，
+// type 是命令名——调用方都不能覆盖。
+//
+// 这不是纯防御性断言：runtime/bash.go 曾经用 fields["id"] 传请求标识，想让它
+// 出现在 bash_execution_update 事件上做关联。正因为这里过滤，那个参数从未
+// 到达过 Pi，而没有任何测试能发现（当时没有地方观察真实载荷）。
+//
+// 过滤本身是必须的：桥要靠顶层 id 把响应配回来，被调用方覆盖就会串线。
+// 这条测试把「调用方无法影响顶层 id」钉死，免得有人「顺手」放开过滤。
+func TestCall忽略fields里的id与type(t *testing.T) {
+	c, in, out := newPair(t, nil)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	go func() {
+		testutil.WaitFor(t, "命令写入 stdin", func() bool { return c.pendingCount() == 1 })
+		out.push(`{"type":"response","id":"rpc-1","success":true,"data":null}` + "\n")
+	}()
+	if _, err := c.Call(ctx, "bash", map[string]any{
+		"id":                 "客户端想覆盖的 id",
+		"type":               "客户端想覆盖的 type",
+		"command":            "echo hi",
+		"excludeFromContext": false,
+	}); err != nil {
+		t.Fatalf("Call 失败: %v", err)
+	}
+	cmds := in.commands()
+	if len(cmds) != 1 {
+		t.Fatalf("应写出一条命令，得到 %d 条", len(cmds))
+	}
+	var sent map[string]any
+	if err := json.Unmarshal([]byte(cmds[0]), &sent); err != nil {
+		t.Fatalf("命令不是合法 JSON: %s", cmds[0])
+	}
+	if sent["id"] != "rpc-1" {
+		t.Fatalf("顶层 id 必须是桥生成的配对 id，得到 %v", sent["id"])
+	}
+	if sent["type"] != "bash" {
+		t.Fatalf("方法名不能被 fields 覆盖，得到 %v", sent["type"])
+	}
+	if sent["command"] != "echo hi" {
+		t.Fatalf("普通字段必须原样传递，得到 %v", sent["command"])
+	}
+}

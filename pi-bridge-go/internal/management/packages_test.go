@@ -259,3 +259,26 @@ func TestPackageDisplayName(t *testing.T) {
 		}
 	}
 }
+
+// TestPackages非法类型必须报错：packages 存在但不是数组时不能静默当空列表。
+// 静默会让「配置写错了」表现成「一个包都没装」，用户按界面提示去查 registry
+// 是在追一个不存在的问题。
+func TestPackages非法类型必须报错(t *testing.T) {
+	dir := t.TempDir()
+	for _, bad := range []string{`{"packages":"不是数组"}`, `{"packages":123}`, `{"packages":{}}`, `{"packages":true}`} {
+		writeSettings(t, dir, bad)
+		c := NewConfig(dir, DefaultLimits())
+		if _, err := c.Packages(context.Background(), DiscoveryLimits{}); err == nil {
+			t.Fatalf("packages 为 %s 时应报错", bad)
+		}
+	}
+	// 对照：字段缺失、显式 null、空数组都是合法的「没有配置」。
+	for _, ok := range []string{`{}`, `{"packages":null}`, `{"packages":[]}`} {
+		writeSettings(t, dir, ok)
+		c := NewConfig(dir, DefaultLimits())
+		list, err := c.Packages(context.Background(), DiscoveryLimits{})
+		if err != nil || len(list) != 0 {
+			t.Fatalf("packages 为 %s 时应返回空列表: %+v %v", ok, list, err)
+		}
+	}
+}

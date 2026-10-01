@@ -211,7 +211,7 @@ func TestBash输出文件仅限Pi临时文件(t *testing.T) {
 	if _, _, err := w.ReadBashOutput(ctx, "/tmp/pi-bash-x.log", 0); err == nil {
 		t.Fatal("非法 maxBytes 必须被拒绝")
 	}
-	result, err := w.Bash(ctx, "req-bash", "echo hi", false)
+	result, err := w.Bash(ctx, "echo hi", false)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -111,3 +111,48 @@ func TestReusable超限返回头部(t *testing.T) {
 		t.Fatalf("跳过后应能继续读: %q %v", next, err)
 	}
 }
+
+// TestSkipLine吞掉超长行 覆盖超限记录被跳过时的帧边界。
+//
+// 场景：记录本身大于 bufio 的缓冲（默认 4KB）。Read 报 ErrTooLarge 后，
+// 行内还剩好几 KB 没消费，SkipLine 会先读到 bufio.ErrBufferFull——
+// 那不是「读完了」，必须继续读到真的换行。
+//
+// 这条测试的输入必须让剩余部分也超过缓冲（12KB 记录、limit 给 1000），
+// 否则 Read 已经把整行吃进缓冲，SkipLine 一次就走到换行，
+// ErrBufferFull 分支根本不执行（此前的用例正是如此，所以从未覆盖到这里）。
+func TestSkipLine吞掉超长行(t *testing.T) {
+	// 12KB 的记录：Read 消费 4KB 后报超限，SkipLine 面对的是剩下 8KB。
+	content := strings.Repeat("x", 12<<10)
+	r := bufio.NewReader(strings.NewReader(content + "\n" + "tail\n"))
+
+	var u Reusable
+	_, n, err := u.Read(r, 1000)
+	if !errors.Is(err, ErrTooLarge) {
+		t.Fatalf("应报 ErrTooLarge，得到 %v", err)
+	}
+	if n <= 1000 {
+		t.Fatalf("超限时应返回已读字节数，得到 %d", n)
+	}
+	if err := SkipLine(r); err != nil {
+		t.Fatalf("跳过超长行失败: %v", err)
+	}
+	// 关键断言：下一条记录必须完整。行尾没被吞干净时，这里读到的是
+	// 残留下来的 x，而不是 tail——帧边界错位正是这个 bug 的后果。
+	next, _, err := u.Read(r, 1000)
+	if err != nil || string(next) != "tail" {
+		t.Fatalf("跳过超长行后记录错位: %q %v", next, err)
+	}
+}
+
+// TestSkipLine到末尾报不完整：跳过的记录没有 LF 结尾时，必须报 ErrIncomplete
+// 而不是把「读到文件尾」当成「跳过成功」。
+func TestSkipLine到末尾报不完整(t *testing.T) {
+	r := bufio.NewReader(strings.NewReader("x\n半条没有换行"))
+	if _, _, err := Read(r, 100); err != nil {
+		t.Fatalf("第一条应正常读出: %v", err)
+	}
+	if err := SkipLine(r); !errors.Is(err, ErrIncomplete) {
+		t.Fatalf("末尾不完整的记录应报 ErrIncomplete，得到 %v", err)
+	}
+}

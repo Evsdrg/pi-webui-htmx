@@ -135,3 +135,31 @@ func Test超出单帧上限直接拒绝(t *testing.T) {
 		t.Fatalf("被拒绝的帧不应占用预算：%d", got)
 	}
 }
+
+// Test预算等待失败时不报告入队成功：reserve 因超时或取消拿不到预算时，
+// enqueue 必须返回 false。返回 true 而帧没进队列，调用方会当作投递成功，
+// 那一帧（可能是回执或事件推送）就凭空消失了。
+func Test预算等待失败时不报告入队成功(t *testing.T) {
+	q := newOutboundQueue(8)
+	for i := 0; i < 2; i++ {
+		if !q.enqueue(context.Background(), make([]byte, outboundFrameLimit)) {
+			t.Fatal("填满预算失败")
+		}
+	}
+	// 预算已被占满，这次投递只能等到超时。
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
+	defer cancel()
+	if q.enqueue(ctx, make([]byte, 1<<10)) {
+		t.Fatal("预算等待超时后不得报告入队成功")
+	}
+	if got := q.bytes(); got != outboundQueueLimit {
+		t.Fatalf("被拒绝的帧不应改变占用：%d", got)
+	}
+
+	// 取消与超时走同一条路径，结果必须一致。
+	ctx2, cancel2 := context.WithCancel(context.Background())
+	cancel2()
+	if q.enqueue(ctx2, make([]byte, 1<<10)) {
+		t.Fatal("预算等待被取消后不得报告入队成功")
+	}
+}

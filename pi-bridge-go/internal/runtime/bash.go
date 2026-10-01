@@ -20,9 +20,15 @@ type BashResult struct {
 }
 
 // Bash 执行一条 shell 命令并把输出并入会话上下文。
-// requestID 用于把 bash_execution_update 事件关联回调用方。
 // 注意：Pi 只在「下一次 prompt」时才把输出送进上下文，不是立即生效。
-func (w *Worker) Bash(ctx context.Context, requestID, command string, excludeFromContext bool) (BashResult, error) {
+//
+// 关于 bash_execution_update 的事件关联：Pi 用命令的**顶层 id** 给流式输出事件
+// 打标，而顶层 id 由 pi.Client 生成（rpc-N）并用于响应配对——两者共用同一个字段。
+// 桥侧因此无法把自己的请求标识送过去：pi.Client.Call 会过滤掉 fields 里的 id
+// （不这样做会直接破坏响应配对）。要把事件流关联回客户端的 requestId，
+// 得在桥侧维护 rpc-N ↔ 请求标识 的映射；这项目前没有实现（前端也不消费
+// 该事件流），所以本函数不接受 requestID 参数——留着它只会让人误以为已经关联上了。
+func (w *Worker) Bash(ctx context.Context, command string, excludeFromContext bool) (BashResult, error) {
 	if command == "" {
 		return BashResult{}, protocol.E("invalid_params", "command 不能为空")
 	}
@@ -30,9 +36,6 @@ func (w *Worker) Bash(ctx context.Context, requestID, command string, excludeFro
 		return BashResult{}, protocol.E("invalid_params", "command 过长")
 	}
 	fields := map[string]any{"command": command, "excludeFromContext": excludeFromContext}
-	if requestID != "" {
-		fields["id"] = requestID
-	}
 	raw, err := w.call(ctx, "bash", fields, true)
 	if err != nil {
 		return BashResult{}, err

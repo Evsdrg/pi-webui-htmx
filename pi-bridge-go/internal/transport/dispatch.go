@@ -752,7 +752,9 @@ func (s *Server) dispatchBash(ctx context.Context, r protocol.Request, w *run.Wo
 		if err := protocol.Decode(r.Params, &p); err != nil {
 			return nil, err
 		}
-		result, err := w.Bash(ctx, r.RequestID, p.Command, p.ExcludeFromContext)
+		// 调用方不再传请求标识：它到不了 Pi（见 Bash 的注释），
+		// 客户端 requestId 在 claims 层已用于幂等去重。
+		result, err := w.Bash(ctx, p.Command, p.ExcludeFromContext)
 		if err != nil {
 			return nil, err
 		}
