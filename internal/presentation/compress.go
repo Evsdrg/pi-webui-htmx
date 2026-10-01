@@ -40,7 +40,7 @@ func compressBytes(raw []byte, encoding Encoding) ([]byte, error) {
 		}
 		return out.Bytes(), nil
 	case EncBrotli:
-		w := newBrotliWriter(&out, brotli.BestCompression)
+		w := newBrotliWriter(&out, staticQuality(len(raw)))
 		if _, err := w.Write(raw); err != nil {
 			return nil, err
 		}
@@ -70,6 +70,27 @@ const brotliLGWin = 19
 // 容量是可测试的设计决定：见 compressBytes 的注释与
 // TestStaticAssetCompressionIsSerialized。
 var staticCompressGate = make(chan struct{}, 1)
+
+// largeAssetBytes 是「大资源」的分界（256 KiB）。
+// 首屏入口文件（实测 58 KB JS / 53 KB CSS）在它以下，走最高压缩比；
+// 按需加载的 chunk（终端 332 KB、图表 1.4 MB）在它以上，改用较低档位。
+const largeAssetBytes = 256 << 10
+
+// staticQuality 按资源大小选压缩档位。
+//
+// 为什么分档：brotli 的 HQ 模式（quality ≥ 10）压 1.4 MB 的 chunk 时堆峰值
+// 实测 38 MiB，而 quality 7 只有 18 MiB——代价是输出 +13%（344 KB → 389 KB）。
+// 这些 chunk 是**一次性下载 + 文件名带哈希的永久缓存**，多出的几十 KB 只在
+// 冷缓存时付一次，而内存峰值在每次冷启动后首次加载时都会出现。
+func staticQuality(size int) int {
+	if size >= largeAssetBytes {
+		return brotliLowQuality
+	}
+	return brotli.BestCompression
+}
+
+// brotliLowQuality 是大资源的压缩档位：在 HQ 与默认档之间取偏保守的一档。
+const brotliLowQuality = 7
 
 // newBrotliWriter 按统一窗口创建写入器：静态资源与动态响应共用同一个窗口，
 // 两边都不会因为库默认的 8 MiB 环缓而把内存留在池里。

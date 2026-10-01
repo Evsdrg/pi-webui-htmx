@@ -151,3 +151,55 @@ func TestStaticAssetCompressionIsSerialized(t *testing.T) {
 		t.Errorf("staticCompressGate 容量为 %d，串行化设计应为 1", cap(staticCompressGate))
 	}
 }
+
+// 大资源的压缩档位必须比 HQ 显著省内存，而小资源不受影响。
+//
+// 阈值分档的理由见 staticQuality 的注释：大 chunk 是一次性下载 + 永久缓存，
+// 多出的流量只付一次，而内存峰值在每次冷启动后首次加载时都会出现。
+func TestStaticQualityTradesMemoryForOneTimeTraffic(t *testing.T) {
+	if got := staticQuality(58 << 10); got != brotli.BestCompression {
+		t.Errorf("首屏入口（58 KB）档位为 %d，应保持最高压缩比", got)
+	}
+	if got := staticQuality(1 << 20); got != brotliLowQuality {
+		t.Errorf("大 chunk（1 MB）档位为 %d，应为 %d", got, brotliLowQuality)
+	}
+
+	// 同一份大样本：低档位的堆峰值应显著更低（实测约 18 与 38 MiB）。
+	raw := sampleFragment(1400<<10, 31)
+	peak := func(quality int) float64 {
+		runtime.GC()
+		runtime.GC()
+		var ms runtime.MemStats
+		runtime.ReadMemStats(&ms)
+		base := ms.HeapAlloc
+		observed := uint64(0)
+		var out bytes.Buffer
+		w := newBrotliWriter(&out, quality)
+		chunk := 64 << 10
+		for i := 0; i < len(raw); i += chunk {
+			end := i + chunk
+			if end > len(raw) {
+				end = len(raw)
+			}
+			if _, err := w.Write(raw[i:end]); err != nil {
+				t.Fatal(err)
+			}
+			runtime.ReadMemStats(&ms)
+			if ms.HeapAlloc > observed {
+				observed = ms.HeapAlloc
+			}
+		}
+		if err := w.Close(); err != nil {
+			t.Fatal(err)
+		}
+		return float64(observed-base) / (1 << 20)
+	}
+	low := peak(brotliLowQuality)
+	hq := peak(brotli.BestCompression)
+	if testing.Verbose() {
+		fmt.Printf("1.4 MB 样本峰值：quality=%d → %.1f MiB，HQ → %.1f MiB\n", brotliLowQuality, low, hq)
+	}
+	if low > hq*0.75 {
+		t.Errorf("低档位峰值 %.1f MiB 未明显低于 HQ 的 %.1f MiB，分档失去意义", low, hq)
+	}
+}
