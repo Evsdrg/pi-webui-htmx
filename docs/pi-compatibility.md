@@ -6,7 +6,7 @@
 
 ## 源码依据
 
-Pi 包内 `docs/rpc.md`、`docs/session-format.md`、`dist/modes/rpc/rpc-mode.js`、`rpc-types.d.ts` 和 `dist/core/session-manager.js`；桥以 `internal/transport/server.go` 的 `SupportedMethods`、`internal/runtime/` 与 `internal/pi/` 为准；UI 以 `src/modules/` 与 `ui-manifest.json` 为准。Pi Web 对照目录为 `../../src-read-only/pi-web`（只读检出，不在 `pi/` 下），它的 SDK 能力不等于标准 RPC 能力。运行程序只通过 `--pi` 选可执行文件，不硬编码本机包安装路径。
+Pi 包内 `docs/rpc.md`、`docs/session-format.md`、`dist/modes/rpc/rpc-mode.js`、`rpc-types.d.ts` 和 `dist/core/session-manager.js`；桥以 `internal/transport/server.go` 的 `SupportedMethods`、`internal/runtime/` 与 `internal/pi/` 为准；UI 以 `src/modules/` 与 `ui-manifest.json` 为准。Pi Web（另一个实现）仅作行为对照，它的 SDK 能力不等于标准 RPC 能力。运行程序只通过 `--pi` 选可执行文件，不硬编码本机包安装路径。
 
 ## 命令与功能现状
 

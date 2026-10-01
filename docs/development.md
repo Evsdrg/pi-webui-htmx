@@ -41,7 +41,7 @@
 ```bash
 export PI_BRIDGE_TOKEN="$(openssl rand -hex 32)"
 go run ./cmd/pi-bridge \
-  --workspace /srv/projects/pi \
+  --workspace "$HOME/projects" \
   --listen 127.0.0.1:30142 \
   --pi "$(command -v pi)" \
   --state-dir "$HOME/.local/state/pi-bridge" \
