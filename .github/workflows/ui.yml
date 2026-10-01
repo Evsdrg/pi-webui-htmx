@@ -21,11 +21,43 @@ jobs:
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version: '26'
+      # 首次运行时「安装锁定的包管理器与依赖」以退出码 254 失败，而同一条命令
+      # 在 Go 检查里 8 秒就成功了。Actions 日志需要登录才能读，所以这里做两件事：
+      # 先打印环境，失败时再用 error 注解公开日志尾部（注解无需登录即可查看）。
+      - name: 环境诊断
+        working-directory: pi-webui-htmx
+        run: |
+          node -v
+          npm -v
+          echo "npm 全局前缀: $(npm prefix -g)"
+          echo "声明的包管理器: $(node -p 'require("./package.json").packageManager')"
+          echo "registry: $(npm config get registry)"
+          df -h / | tail -1
       - name: 安装锁定的包管理器与依赖
         working-directory: pi-webui-htmx
         run: |
-          npm install --global "$(node -p 'require("./package.json').packageManager')"
-          pnpm install --frozen-lockfile
+          set -o pipefail
+          npm install --global "$(node -p 'require("./package.json").packageManager')" 2>&1 | tee /tmp/pm-install.log
+          pnpm --version
+          pnpm install --frozen-lockfile 2>&1 | tee /tmp/deps-install.log
+      - name: 失败诊断
+        if: failure()
+        run: |
+          : > /tmp/diag.txt
+          for f in /tmp/pm-install.log /tmp/deps-install.log; do
+            [ -f "$f" ] || continue
+            echo "=== $f" >> /tmp/diag.txt
+            tail -c 1500 "$f" >> /tmp/diag.txt
+          done
+          latest_npm_log=$(ls -t "$HOME"/.npm/_logs/*.log 2>/dev/null | head -1 || true)
+          if [ -n "$latest_npm_log" ]; then
+            echo "=== $latest_npm_log" >> /tmp/diag.txt
+            tail -c 1200 "$latest_npm_log" >> /tmp/diag.txt
+          fi
+          # 先把全部行聚合再转义：分开写时 % 替换只会作用在首行，
+          # 后续行里的 % 会漏掉，注入到注解里会把消息截断。
+          sed ':a;N;$!ba;s/%/%25/g;s/\n/%0A/g' /tmp/diag.txt > /tmp/ann.txt
+          echo "::error title=UI 安装失败详情::$(cat /tmp/ann.txt)"
       - name: 单测、类型、构建与契约
         working-directory: pi-webui-htmx
         run: |
