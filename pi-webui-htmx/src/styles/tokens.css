@@ -3,8 +3,8 @@
    （曾经在 prefers-color-scheme 块里重复过一份深色值，改一处忘一处
    就会让「跟随系统」与「显式选深色」不一致）。
 
-   不使用 Tailwind 的 @theme 映射：模板里没有工具类，整条链路只用到
-   preflight 复位，我们自己的样式一律用 var(--bg) 这类原始令牌。
+   不使用 Tailwind 的 @theme 映射：模板里没有工具类，基础复位与组件样式均由仓库自己的 CSS 提供，
+   主题值统一通过 var(--bg) 这类原始令牌引用。
 
    改动色值后请跑 `pnpm check`：scripts/check-contrast.mjs 会把
    每个文字色与两种底色逐对核算对比度。 */

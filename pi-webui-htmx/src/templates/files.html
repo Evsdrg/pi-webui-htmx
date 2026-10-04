@@ -1,4 +1,6 @@
 {{range .Entries}}
-<button class="file-item" data-file-path="{{.Path}}" data-directory="{{.IsDir}}"><span aria-hidden="true">{{if .IsDir}}▸{{else}}·{{end}}</span><span>{{.Name}}</span>{{if not .IsDir}}<span class="muted">{{.Size}}</span>{{end}}</button>
+{{if .IsDir}}<div class="file-node"><button class="file-item" data-file-path="{{.Path}}" data-directory="true" aria-expanded="false" title="{{.Path}}"><span class="file-caret" aria-hidden="true">▸</span><span class="file-name">{{.Name}}</span></button><div class="file-children" hidden></div></div>
+{{else}}<button class="file-item" data-file-path="{{.Path}}" data-directory="false" title="{{.Path}}"><span class="file-caret" aria-hidden="true">·</span><span class="file-name">{{.Name}}</span><span class="muted">{{.Size}}</span></button>
+{{end}}
 {{else}}<p class="empty-note">目录为空。</p>{{end}}
 {{if .Truncated}}<p class="empty-note">目录项已达到显示上限。</p>{{end}}

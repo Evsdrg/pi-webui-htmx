@@ -28,16 +28,49 @@ export function mountLayout(): () => void {
   const conv = document.getElementById('main')!;
   const font = document.getElementById('chat-font-size') as HTMLInputElement | null;
   const width = document.getElementById('chat-width') as HTMLInputElement | null;
+  const widthFull = document.getElementById('chat-width-full') as HTMLInputElement | null;
   const syncChat = () => {
     if (font) { const offset = Number(font.value) || 0; conv.style.setProperty('--chat-font-offset', `${offset}px`); const label = document.getElementById('chat-font-size-value'); if (label) label.textContent = offset === 0 ? '（默认）' : `${offset > 0 ? '+' : ''}${offset}px`; }
-    if (width) { const w = Number(width.value) || 820; conv.style.setProperty('--chat-width', `${w}px`); const label = document.getElementById('chat-width-value'); if (label) label.textContent = `${w}px`; }
+    if (width) {
+      // 顶满不是另一档像素值，而是解除行宽限制：变量给 100%，
+      // 消息区/输入区的居中内边距（max(20px, …)）自动退到最小呼吸边距。
+      const full = widthFull?.checked === true;
+      const w = Number(width.value) || 820;
+      conv.style.setProperty('--chat-width', full ? '100%' : `${w}px`);
+      width.disabled = full;
+      const label = document.getElementById('chat-width-value'); if (label) label.textContent = full ? '顶满' : `${w}px`;
+    }
   };
   // 用 || 而不是 ??：readPreference 在没有存过时返回空串，不是 null。
   // 空串赋给 range 会让浏览器自己挑一个默认值（规格上是 min 与 max 的中点），
   // 于是「从未设置过」的用户一进来就看到 +1px 这类莫名其妙的偏移。
   if (font) { font.value = readPreference('chat-font-offset') || '0'; font.addEventListener('input', () => { syncChat(); savePreference('chat-font-offset', font.value); }, { signal: abort.signal }); }
-  if (width) { width.value = readPreference('chat-width') || '820'; width.addEventListener('input', () => { syncChat(); savePreference('chat-width', width.value); }, { signal: abort.signal }); }
+  if (width) { width.value = readPreference('chat-width') || '820'; width.addEventListener('input', () => { if (widthFull?.checked) return; syncChat(); savePreference('chat-width', width.value); }, { signal: abort.signal }); }
+  if (widthFull) {
+    widthFull.checked = readPreference('chat-width-full') === '1';
+    widthFull.addEventListener('change', () => { savePreference('chat-width-full', widthFull.checked ? '1' : '0'); syncChat(); }, { signal: abort.signal });
+  }
   syncChat();
+  const collapsed = document.getElementById('process-collapsed') as HTMLInputElement | null;
+  let processCollapsed = readPreference('process-collapsed') !== '0';
+  const initialized = new WeakSet<HTMLDetailsElement>();
+  const syncProcess = (force = false) => {
+    for (const group of document.querySelectorAll<HTMLDetailsElement>('#turns details.turn-process')) {
+      if (!force && initialized.has(group)) continue;
+      group.open = !processCollapsed;
+      initialized.add(group);
+    }
+  };
+  if (collapsed) {
+    collapsed.checked = processCollapsed;
+    collapsed.addEventListener('change', () => {
+      processCollapsed = collapsed.checked;
+      savePreference('process-collapsed', processCollapsed ? '1' : '0');
+      syncProcess(true);
+    }, { signal: abort.signal });
+  }
+  syncProcess();
+  document.body.addEventListener('htmx:afterSwap', () => syncProcess(), { signal: abort.signal });
   // 会话列表视图（时间线 / 按工作区）记忆。
   //
   // 选中态与携带的 view 值都由这里从偏好推导，控件本身不保存状态：

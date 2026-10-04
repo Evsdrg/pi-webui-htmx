@@ -37,11 +37,12 @@ function mountWorkspace(): { bridge: BridgeClient; triggers: string[]; onError: 
   return { bridge: bridge as unknown as BridgeClient, triggers, onError };
 }
 
-test('进入目录时写隐藏输入并触发片段刷新，而不是自己拼 URL 写 DOM', async () => {
+test('「上一级」写隐藏输入并触发片段刷新，而不是自己拼 URL 写 DOM', async () => {
   const { triggers } = mountWorkspace();
-  document.getElementById('sidebar-files-body')!.insertAdjacentHTML('beforeend', '<button data-file-path="/repo/src" data-directory="true">src</button>');
-  document.querySelector<HTMLButtonElement>('[data-file-path]')!.click();
-  expect(document.getElementById('files-path')!.getAttribute('value')).toBe('/repo/src');
+  workspace!.setCwd('/repo/src');
+  document.getElementById('sidebar-files-body')!.insertAdjacentHTML('beforeend', '<button data-action="files-up">↑</button>');
+  document.querySelector<HTMLButtonElement>('[data-action="files-up"]')!.click();
+  await vi.waitFor(() => expect((document.getElementById('files-path') as HTMLInputElement).value).toBe('/repo'));
   expect(triggers).toContain('files-refresh');
 });
 
@@ -56,13 +57,12 @@ test('切换「变更」标签把路径交给两个声明式片段请求', async
   expect((document.getElementById('git-path') as HTMLInputElement).value).toBe('/repo');
 });
 
-test('迟到的文件列表响应被拒绝交换（按当前目录判定）', async () => {
+test('迟到的文件列表响应被拒绝交换（按当前根目录判定）', async () => {
   mountWorkspace();
-  const panel = document.getElementById('workspace-panel')!;
-  document.getElementById('sidebar-files-body')!.insertAdjacentHTML('beforeend', '<button data-file-path="/repo/a" data-directory="true">a</button><button data-file-path="/repo/b" data-directory="true">b</button>');
-  const [a, b] = Array.from(document.querySelectorAll<HTMLButtonElement>('[data-file-path]'));
-  a!.click();
-  b!.click();
+  // 根目录的切换发生在「上一级 / 刷新 / 会话切换」路径上；这里用会话切换构造
+  // 「a 的响应在切到 b 之后才回来」的场景。
+  workspace!.setCwd('/repo/a');
+  workspace!.setCwd('/repo/b');
   // 请求 a 的响应在切换到 b 之后才回来：必须不交换。
   const swap = (path: string) => {
     const detail = { target: document.getElementById('file-list'), shouldSwap: true, xhr: { responseURL: `http://localhost/ui/files?path=${encodeURIComponent(path)}` } };

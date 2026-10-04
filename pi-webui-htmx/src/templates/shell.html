@@ -138,13 +138,14 @@
     </section>
     <div id="connection-notice" class="notice" role="status" hidden></div>
     <div id="history-scope" class="history-scope" hidden><span>仅显示所选位置以前的历史；发送仍沿会话当前分支继续。</span><button class="btn-quiet" type="button" data-action="branch-current">返回最新</button></div>
+    <div id="edit-scope" class="history-scope" hidden><span><strong>正在编辑较早的消息</strong>：发送后将从此处分叉，原分支完整保留。</span></div>
     <div id="unsaved-branch" class="notice" role="status" hidden>会话尚未写盘；首条回复前关闭工作进程会丢失这个临时分支。</div>
     <div id="chat-scroll" class="chat-scroll" tabindex="0" role="region" aria-label="对话历史">
       <div id="welcome" class="welcome"><div class="welcome-mark" aria-hidden="true">π</div><h2>从一个想法开始</h2><p>你的代码、会话和工具，都在本地。</p><div class="welcome-hints"><span>选定工作目录</span><span>选择模型</span><span>开始协作</span></div></div>
       <div id="older-slot"></div>
       <h2 class="sr-only">对话内容</h2>
       <div id="turns" hx-swap="innerHTML"></div>
-      <div id="live" class="live" hidden><div id="live-user" class="bubble live-user"></div><details id="live-process" class="turn-process"><summary>正在处理…</summary><pre id="live-thinking"></pre><div id="live-tools"></div></details><div id="live-text" class="bubble streaming-text"></div></div>
+      <div id="live" class="live" hidden><div id="live-user" class="bubble live-user"></div><div id="live-flow"></div><p id="live-pending" class="live-pending" hidden></p></div>
     </div>
     <button id="jump-latest" class="btn jump-latest" data-action="latest" hidden>↓ 回到最新</button>
     <div class="composer-wrap">
@@ -238,6 +239,8 @@
               <input id="chat-width" type="range" min="640" max="1400" step="20" value="820">
               <span class="hint">限制对话正文的行宽，宽屏下更容易阅读。</span>
             </div>
+            <div class="config-field"><label class="switch"><input id="chat-width-full" type="checkbox"><span>顶满可用宽度</span></label><span class="hint">忽略上面的行宽限制，正文与输入框铺满对话区的可用空间。仅保存在本机浏览器。</span></div>
+            <div class="config-field"><label class="switch"><input id="process-collapsed" type="checkbox" checked><span>完成后默认折叠过程</span></label><span class="hint">控制已完成回合的工具与思考过程；运行中始终显示当前动作。仅保存在本机浏览器。</span></div>
           </section>
           {{/* 扩展 */}}
           <section class="config-detail-stack" data-settings-panel="extensions" hidden>

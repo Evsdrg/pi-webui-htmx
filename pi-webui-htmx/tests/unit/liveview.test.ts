@@ -1,12 +1,33 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { LiveView } from '@/modules/stream';
 
+// 实时正文的 markdown 渲染：真实模块会加载 marked+dompurify，测试里替换成
+// 一个可预测的极简变换（只处理 **粗体**），断言的是「流式文本经过渲染器」
+// 这条链路与节流语义，而不是 marked 的行为。
+vi.mock('@/modules/markdown', () => ({
+  safeMarkdown: async (source: string) => `<p>${source.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')}</p>`,
+}));
+
+// 实时时间线的 DOM：用户气泡 + 时间线容器 + 等待提示。
+// 工作段（details.live-group）与正文段（.streaming-text）由 LiveView 交替创建。
 function mount(): HTMLElement {
   const root = document.createElement('div');
-  root.innerHTML = '<div id=live-thinking></div><div id=live-text></div><div id=live-tools></div><div id=live-user></div>';
+  root.innerHTML = '<div id=live hidden><div id=live-user></div><div id=live-flow></div><p id=live-pending hidden></p></div>';
   document.body.append(root);
   return root;
 }
+
+// stubSyncRaf 让每帧同步执行，正文段立即可断言。
+function stubSyncRaf(): void {
+  vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => { callback(0); return 1; });
+  vi.stubGlobal('cancelAnimationFrame', () => {});
+}
+
+afterEach(() => {
+  vi.useRealTimers();
+  vi.unstubAllGlobals();
+  document.body.replaceChildren();
+});
 
 describe('实时思考增量', () => {
   // U21：旧实现每个 delta 都「读整段 textContent + 拼 + 写回」，
@@ -15,14 +36,14 @@ describe('实时思考增量', () => {
     const root = mount();
     const view = new LiveView(root);
     view.begin();
-    const el = root.querySelector('#live-thinking')!;
+    view.event({ type: 'message_update', assistantMessageEvent: { type: 'thinking_delta', delta: '甲' } });
+    const el = root.querySelector('.live-think')!;
     const appendSpy = vi.spyOn(el, 'append');
     const setter = vi.spyOn(el, 'textContent', 'set');
 
-    view.event({ type: 'message_update', assistantMessageEvent: { type: 'thinking_delta', delta: '甲' } });
     view.event({ type: 'message_update', assistantMessageEvent: { type: 'thinking_delta', delta: '乙' } });
 
-    expect(appendSpy).toHaveBeenCalledTimes(2);
+    expect(appendSpy).toHaveBeenCalledTimes(1);
     // 关键：不得再整段写回 textContent。
     expect(setter).not.toHaveBeenCalled();
     expect(el.textContent).toBe('甲乙');
@@ -35,7 +56,7 @@ describe('实时思考增量', () => {
     view.begin();
     const big = 'x'.repeat(1000);
     for (let i = 0; i < 60; i++) view.event({ type: 'message_update', assistantMessageEvent: { type: 'thinking_delta', delta: big } });
-    const el = root.querySelector('#live-thinking')!;
+    const el = root.querySelector('.live-think')!;
     expect((el.textContent ?? '').length).toBe(40_000);
     root.remove();
   });
@@ -46,10 +67,169 @@ describe('实时思考增量', () => {
     view.begin();
     view.event({ type: 'message_update', assistantMessageEvent: { type: 'thinking_delta', delta: 'y'.repeat(1000) } });
     view.begin();
-    const el = root.querySelector('#live-thinking')!;
-    expect(el.textContent).toBe('');
     view.event({ type: 'message_update', assistantMessageEvent: { type: 'thinking_delta', delta: 'z' } });
+    const el = root.querySelector('.live-think')!;
     expect(el.textContent).toBe('z');
+    root.remove();
+  });
+});
+
+describe('实时过程摘要与时间线', () => {
+  it('工作段折叠时仍显示当前动作，思考预览每 1500ms 尾沿更新', () => {
+    vi.useFakeTimers();
+    const root = mount();
+    const view = new LiveView(root);
+    view.begin('调查项目');
+    view.event({ type: 'message_start' });
+    view.event({ type: 'message_update', assistantMessageEvent: { type: 'thinking_delta', delta: '先检查目录' } });
+    const group = root.querySelector<HTMLDetailsElement>('.live-group')!;
+    const status = group.querySelector('.live-status')!;
+    const preview = group.querySelector('.live-preview')!;
+    expect(group.open).toBe(false);
+    expect(status.textContent).toContain('思考中');
+    expect(preview.textContent).toContain('先检查目录');
+    view.event({ type: 'message_update', assistantMessageEvent: { type: 'thinking_delta', delta: '，再读取配置' } });
+    expect(preview.textContent).not.toContain('再读取配置');
+    vi.advanceTimersByTime(1499);
+    expect(preview.textContent).not.toContain('再读取配置');
+    vi.advanceTimersByTime(1);
+    expect(preview.textContent).toContain('再读取配置');
+    view.event({ type: 'tool_execution_start', toolName: 'read' });
+    expect(status.textContent).toContain('read');
+    expect(root.querySelector('.live-tool')?.textContent).toContain('read');
+    root.remove();
+  });
+
+  it('实时工具只显示安全的文件路径，不显示命令正文', () => {
+    const root = mount();
+    const view = new LiveView(root);
+    view.begin();
+    view.event({ type: 'tool_execution_start', toolName: 'bash', args: { command: 'curl -H "Authorization: Bearer secret" https://example.test' } });
+    expect(root.querySelector('.live-tool')?.textContent).toContain('bash');
+    expect(root.querySelector('.live-tool')?.textContent).not.toContain('secret');
+    expect(root.querySelector('.live-tool')?.textContent).not.toContain('example.test');
+    view.event({ type: 'tool_execution_start', toolName: 'read', args: { path: '/workspace/src/main.go' } });
+    const rows = root.querySelectorAll('.live-tool');
+    expect(rows[1]?.textContent).toContain('/workspace/src/main.go');
+    root.remove();
+  });
+
+  it('正文段落在工作段之间，而不是堆到末尾', () => {
+    stubSyncRaf();
+    const root = mount();
+    const view = new LiveView(root);
+    view.begin('任务');
+    view.event({ type: 'message_update', assistantMessageEvent: { type: 'thinking_delta', delta: '先想' } });
+    view.event({ type: 'tool_execution_start', toolName: 'read' });
+    view.event({ type: 'message_start' });
+    view.event({ type: 'message_update', assistantMessageEvent: { type: 'text_delta', delta: '正文A' } });
+    view.event({ type: 'message_update', assistantMessageEvent: { type: 'text_delta', delta: '，继续' } });
+    view.event({ type: 'tool_execution_start', toolName: 'edit' });
+    const flow = root.querySelector('#live-flow')!;
+    const groups = flow.querySelectorAll<HTMLElement>('.live-group');
+    // 工作段进行中：活动信号只挂在最新一段，旧段不再扫光。
+    expect(groups[0]!.hasAttribute('data-active')).toBe(false);
+    expect(groups[1]!.hasAttribute('data-active')).toBe(true);
+    view.event({ type: 'message_start' });
+    view.event({ type: 'message_update', assistantMessageEvent: { type: 'text_delta', delta: '正文B' } });
+
+    const kinds = [...flow.children].map((node) => (node.tagName === 'DETAILS' ? 'work' : 'text'));
+    expect(kinds).toEqual(['work', 'text', 'work', 'text']);
+    const texts = [...flow.querySelectorAll('.streaming-text')].map((node) => node.textContent);
+    expect(texts).toEqual(['正文A，继续', '正文B']);
+    // 各工作段只含自己的工具：read 在第一段、edit 在第二段。
+    expect(groups[0]!.textContent).toContain('read');
+    expect(groups[0]!.textContent).not.toContain('edit');
+    expect(groups[1]!.textContent).toContain('edit');
+    // 正文开始流式后活动信号交给光标：最新的工作段也停止扫光。
+    expect(groups[1]!.hasAttribute('data-active')).toBe(false);
+    root.remove();
+  });
+
+  // 用户实报：流式期间正文显示为原始 markdown（`**粗体**`、表格语法），
+  // 要等结算重读历史才正常。实时段必须也走 markdown 渲染（节流）。
+  it('流式正文按节流渲染 markdown，未达节流间隔前保持纯文本', async () => {
+    vi.useFakeTimers();
+    stubSyncRaf();
+    const root = mount();
+    const view = new LiveView(root);
+    view.begin('问题');
+    view.event({ type: 'message_update', assistantMessageEvent: { type: 'text_delta', delta: '**重点**' } });
+    const seg = root.querySelector<HTMLElement>('.streaming-text')!;
+    // 节流窗口内：纯文本撑着（还没到渲染时刻）。
+    expect(seg.textContent).toBe('**重点**');
+    await vi.advanceTimersByTimeAsync(349);
+    expect(seg.querySelector('strong')).toBeNull();
+    await vi.advanceTimersByTimeAsync(1);
+    // 渲染后：markdown 生效，且不再含原始标记。
+    expect(seg.querySelector('strong')?.textContent).toBe('重点');
+    expect(seg.textContent).not.toContain('**');
+    root.remove();
+  });
+
+  it('超长正文段不做实时渲染，保持纯文本', async () => {
+    vi.useFakeTimers();
+    stubSyncRaf();
+    const root = mount();
+    const view = new LiveView(root);
+    view.begin('问题');
+    const big = 'x'.repeat(61_000);
+    view.event({ type: 'message_update', assistantMessageEvent: { type: 'text_delta', delta: big } });
+    await vi.advanceTimersByTimeAsync(500);
+    const seg = root.querySelector<HTMLElement>('.streaming-text')!;
+    expect(seg.querySelector('p')).toBeNull();
+    expect(seg.textContent?.length).toBe(big.length);
+    root.remove();
+  });
+
+  it('开始处理前显示等待提示，第一段内容出现后隐藏', () => {
+    const root = mount();
+    const view = new LiveView(root);
+    view.begin('问题');
+    const pending = root.querySelector<HTMLElement>('#live-pending')!;
+    expect(pending.hidden).toBe(false);
+    expect(pending.textContent).toContain('正在处理');
+    view.event({ type: 'message_update', assistantMessageEvent: { type: 'text_delta', delta: '回复' } });
+    expect(pending.hidden).toBe(true);
+    root.remove();
+  });
+
+  it('纯空白与丢弃标记的正文段保持隐藏，出现真内容才显示', () => {
+    stubSyncRaf();
+    const root = mount();
+    const view = new LiveView(root);
+    view.begin('问题');
+    view.event({ type: 'message_update', assistantMessageEvent: { type: 'text_delta', delta: '\n\n' } });
+    const seg = root.querySelector<HTMLElement>('.streaming-text')!;
+    expect(seg.hidden).toBe(true);
+    // 提供商把文本丢弃后的占位标记也不该显示成气泡。
+    view.event({ type: 'message_update', assistantMessageEvent: { type: 'text_delta', delta: '[dropped ]' } });
+    expect(seg.hidden).toBe(true);
+    expect(seg.textContent).not.toContain('[dropped');
+    view.event({ type: 'message_update', assistantMessageEvent: { type: 'text_delta', delta: '真内容' } });
+    expect(seg.hidden).toBe(false);
+    expect(seg.textContent).toBe('真内容');
+    root.remove();
+  });
+
+  // 用户实报：AI 阶段小结并继续任务时，时间线上多出一条「空白用户消息」。
+  // 路径是 settled 的 clear() 之后又来了一帧增量（排队消息续跑 / 重连补发）：
+  // clear() 只清用户气泡的文字、没复位 hidden，增量把实时层重新显示时，
+  // 一个空的用户气泡就露出来了。
+  it('clear 之后新的增量不会露出空白用户气泡', () => {
+    stubSyncRaf();
+    const root = mount();
+    const view = new LiveView(root);
+    view.begin('消息');
+    const user = root.querySelector<HTMLElement>('#live-user')!;
+    expect(user.hidden).toBe(false);
+    view.clear();
+    // settled 清理后，新一轮的增量到来（没有经过 begin）。
+    view.event({ type: 'message_update', assistantMessageEvent: { type: 'text_delta', delta: '续跑' } });
+    expect(user.hidden).toBe(true);
+    expect(user.textContent).toBe('');
+    // 新一轮的真实内容仍在。
+    expect(root.querySelector('.streaming-text')?.textContent).toContain('续跑');
     root.remove();
   });
 });

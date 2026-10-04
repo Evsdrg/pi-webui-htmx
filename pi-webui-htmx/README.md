@@ -28,7 +28,7 @@ pnpm build
 pnpm check
 ```
 
-当前工具链：pnpm 11.22、Vite 8、TypeScript 7、Tailwind 4、Vitest 5；精确安装版本以锁文件为准。Vite 构建 JS/CSS，Go 在运行时渲染模板；Tailwind 只用于 preflight 复位（模板里没有工具类，因此不写 `@source`），组件样式是手写 CSS。
+当前工具链：pnpm 11.22、Vite 8、TypeScript 7、自有 CSS、Vitest 5；精确安装版本以锁文件为准。Vite 构建 JS/CSS，Go 在运行时渲染模板；组件样式由仓库自己的 reset 与手写 CSS 提供。
 
 在相邻桥目录启动时指定 `--ui-dir ../pi-webui-htmx`。模板、ui-manifest 和 dist 必须是同一构建；桥在启动时快照资源，重新 build 后重启桥。没有内嵌模板/CDN 缺库回退。
 
@@ -38,7 +38,7 @@ pnpm check
 src/entry/app.ts   入口
 src/modules/      工作台、WS、异步状态与惰性模块
 src/templates/    Go 模板；extensions/ 为通用扩展通道
-src/styles/       CSS 设计令牌与 Tailwind
+src/styles/       CSS 设计令牌、reset 与组件样式
 src/types/        v1 协议与 htmx 类型
 src/lib/          加载/打包边界辅助
 tests/unit/       Vitest 行为测试

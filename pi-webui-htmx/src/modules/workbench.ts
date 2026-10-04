@@ -1,5 +1,5 @@
 import { BridgeClient, BridgeError } from './bridge';
-import { LiveView, EventCursor, record, text, runStateAfter, type RunState } from './stream';
+import { LiveView, EventCursor, record, text, runStateAfter, hasVisibleText, type RunState } from './stream';
 import { closeMobileSidebar, readDraft, saveDraft } from './layout';
 import { addFiles, toWire, formatSize, WIRE_BUDGET } from './attachments';
 import type { Attachment } from './attachments';
@@ -84,6 +84,7 @@ export class Workbench {
   private poll: ReturnType<typeof setInterval> | undefined;
   private searchTimer: ReturnType<typeof setTimeout> | undefined;
   private historyLoading = '';
+  private historyRefreshPending = false;
   private subscribed = '';
   private dialogsLoading = false;
   private dialogsDirty = false;
@@ -491,13 +492,54 @@ export class Workbench {
   // 三条路径共用它：桥明确要求重同步（resync_required）、订阅被关闭且
   // 带 resyncRequired、事件因体积被省略（bridge.event_omitted，U15）。
   // 只做只读重建：重读历史、重订、刷新扩展对话；绝不重发副作用命令。
+  //
+  // 全部重绘副作用（清实时层、换历史、重订）受合并窗口约束，见 runResync：
+  // 没有它时有一条真实的恶性循环——订阅被桥摘除（慢消费者，大会话 / 长任务
+  // 高频事件下浏览器主线程正在忙）→ 立即重读历史并重订 → 主线程又被渲染
+  // 压住 → 再次被摘除。每一次循环都会把 #turns 整体换入一次，用户看到的
+  // 是两段对话在旧页与新页之间快速来回切换；刷新页面之所以「没事」，只是
+  // 打破了当时那个循环。
   private resyncFromStream(reason: string): void {
     if (!this.sessionId) return;
-    this.subscribed = ''; this.cursor.reset(); this.live.clear();
+    // 退订与游标复位是幂等的安全动作，始终执行：窗口合并的是重绘，
+    // 不是「流已断」这个事实。
+    this.subscribed = ''; this.cursor.reset();
+    if (this.resyncDeferred()) return;
+    this.live.clear();
     this.notice(reason);
-    void this.refreshHistory().catch((err) => this.fail(err));
+    this.runResync();
     void this.refreshDialogs().catch((err) => this.fail(err));
-    if (this.bridge.connected) void this.reconcile().catch((err) => this.fail(err));
+  }
+
+  // 合并窗口：首个请求立即执行，随后进入冷却窗；窗口内的重复请求只记
+  // 一次「待补」，窗口结束时若仍有积压就再执行一轮。效果是重订节奏被
+  // 压到冷却窗一级，给主线程留出消费事件的时间，循环自行消散。
+  private resyncAt = 0;
+  private resyncTimer: ReturnType<typeof setTimeout> | undefined;
+  private resyncPending = false;
+  private static readonly RESYNC_COOLDOWN_MS = 1200;
+  // resyncDeferred 在冷却窗口内时记下积压并返回 true。
+  private resyncDeferred(): boolean {
+    const now = Date.now();
+    if (this.resyncTimer === undefined && now - this.resyncAt >= Workbench.RESYNC_COOLDOWN_MS) return false;
+    this.resyncPending = true;
+    return true;
+  }
+  // runResync 执行一轮「重读历史 + 重订阅」并开启新窗口。
+  private runResync(): void {
+    if (!this.bridge.connected) return;
+    this.resyncAt = Date.now();
+    void this.refreshHistory().catch((err) => this.fail(err));
+    void this.reconcile().catch((err) => this.fail(err));
+    clearTimeout(this.resyncTimer);
+    this.resyncTimer = setTimeout(() => {
+      this.resyncTimer = undefined;
+      if (!this.resyncPending) return;
+      this.resyncPending = false;
+      // 窗口内积压的请求：补一轮（实时层同样可能已不可信）。
+      this.live.clear();
+      this.runResync();
+    }, Workbench.RESYNC_COOLDOWN_MS);
   }
   private async reconcile(): Promise<void> {
     const scope = this.scope.current$();
@@ -543,6 +585,8 @@ export class Workbench {
     this.statuses.clear(); this.widgets.clear(); this.renderExtensions(); this.commands = [];
     el('turns').replaceChildren(); el('older-slot').replaceChildren(); el('ext-dialog-slot').replaceChildren();
     el('history-scope').hidden = true; el('unsaved-branch').hidden = !id || persisted;
+    // 编辑横幅属于上一个会话的叶子位置，切换后必须清掉。
+    el('edit-scope').hidden = true;
     el('welcome').hidden = !!id; this.sessionTitle = title; this.cwd = cwd;
     // 发送进行中不覆盖输入框：那条消息还没发出去，切换会话后
     // 用户要能在这里继续重发（U13）。其余情况照常载入目标会话草稿。
@@ -668,6 +712,9 @@ export class Workbench {
   private async send(): Promise<void> {
     const input = el<HTMLTextAreaElement>('prompt'); const message = input.value.trim();
     if (!message) return;
+    // trim 不会去掉零宽/格式字符：整条只有它们时消息会渲染成一个空白气泡，
+    // 这里明确拒绝（而不是静默——按钮是亮的，用户需要知道为什么没发出去）。
+    if (!hasVisibleText(message)) { this.notify('内容只有不可见字符，未发送。', 'warning'); return; }
     if (this.sending) {
       // 发送进行中再次提交：不能静默吞掉——用户无法区分「上一条仍在发」与
       // 「点击没反应」。注意可达路径是**回车提交**：disabled 的按钮不会派发
@@ -719,6 +766,8 @@ export class Workbench {
       // 目标会话固定为发起时那一个：等待期间切换也不改投（U13）。
       if (busy && queuedKind) await this.sendQueued(message, queuedKind, images, activeScope);
       else await this.request('session.prompt', { text: message, ...(images.length ? { images: toWire(images) } : {}) }, activeScope.sessionId);
+      // 消息已从跳转后的位置发出：分叉落定，编辑横幅可以收了。
+      el('edit-scope').hidden = true;
       if (!activeScope.alive()) return;
       if (input.value.trim() === message) input.value = '';
       saveDraft(draftKey, ''); this.saveCurrentDraft();
@@ -734,12 +783,12 @@ export class Workbench {
     if (message.sessionId !== this.sessionId) return;
     if (message.kind === 'control') {
       if (message.event === 'bridge.subscription_closed') {
-        // 提示仍保留到状态核对结束（既有语义）；resyncRequired 表示
-        // 订阅期间的事件可能已丢，另补一次持久历史重读（U15）。
+        // 提示仍保留到状态核对结束（既有语义）；重订与重读走同一合并窗口，
+        // 订阅被反复摘除时不得形成高频循环（见 runResync）。
         this.subscribed = '';
         if (this.run !== 'idle') this.notice(SUBSCRIPTION_CHECK_NOTICE);
-        if (record(message.data).resyncRequired === true) void this.refreshHistory().catch((err) => this.fail(err));
-        if (this.bridge.connected) void this.reconcile().catch((err) => this.fail(err));
+        if (this.resyncDeferred()) return;
+        this.runResync();
       }
       return;
     }
@@ -765,7 +814,10 @@ export class Workbench {
     const id = this.sessionId;
     await this.refreshHistory();
     if (id !== this.sessionId) return;
-    if (el('turns').querySelector('[data-turn-id]')) this.live.clear();
+    // 刷新期间排队消息可能已经启动了下一轮（settled → 队列续跑之间没有
+    // 用户操作）：此时清实时层会把新一轮刚画上的内容抹掉，是双重显示与
+    // 「空白用户消息」的来源之一。只有仍空闲时才清。
+    if (this.run === 'idle' && el('turns').querySelector('[data-turn-id]')) this.live.clear();
     this.refreshSessions();
     await this.refreshUsage(this.scope.current$());
   }
@@ -773,16 +825,16 @@ export class Workbench {
   // 这只是查看，不改 Pi 的状态；要真正确认一个分支仍然走「从此处分支」。
   private gotoLeaf(leafId: string): void {
     if (!this.sessionId || !this.diskSession) return;
-    const query = leafId ? `?leafId=${encodeURIComponent(leafId)}` : '';
-    // 归属在发起时登记：切换会话后代次变化，迟到的分支视图不会换进对话区。
-    this.pendingHistory = { sessionId: this.sessionId, epoch: this.scope.epoch };
-    void window.htmx.ajax('get', `/ui/sessions/${encodeURIComponent(this.sessionId)}/history${query}`, { target: '#turns', swap: 'innerHTML' })
+    // 与 refreshHistory 同一条通道：归属登记、in-flight 合流与冷却窗口
+    // 都复用，分支视图不会与主历史并发交换（两个响应都会覆盖 #turns）。
+    void this.refreshHistory(leafId)
       .then(() => { if (leafId) this.notify(`已切换到分支 ${leafId.slice(0, 8)} 的视图`); })
       .catch((error) => this.fail(error));
   }
-  // forkFrom 是「从此处分支」的唯一实现：回合上的按钮与分支导航面板
-  // 都走这里。曾经两处各写一遍，后写的那份还少了对话框关闭，
-  // 于是从面板 fork 成功后弹窗不消失。
+  // forkFrom 是「新建会话」的唯一实现：回合上的按钮与分支导航面板都走
+  // 这里。曾经两处各写一遍，后写的那份还少了对话框关闭，于是从面板
+  // fork 成功后弹窗不消失。它让 Pi 把所选位置之前的历史复制进一个新
+  // 会话文件，当前会话不受影响；要留在原会话继续编辑请用 editHere。
   private async forkFrom(entryId: string): Promise<void> {
     if (!entryId) { this.notify('缺少要分支的条目 ID', 'warning'); return; }
     try {
@@ -797,14 +849,40 @@ export class Workbench {
       closeDialog('branch-dialog');
     } catch (error) { this.fail(error); }
   }
+  // 低频会话结构操作（「从此处编辑」的会话内跳转、删除会话）在独立
+  // 分块里按需加载（与 branch/models 同一策略），不占首屏预算。
+  private async sessionAction(kind: string, button: HTMLElement): Promise<void> {
+    const { run } = await import('./session-actions');
+    await run(kind, {
+      command: this.command.bind(this),
+      request: (m, p) => this.request(m, p, ''),
+      refreshHistory: this.refreshHistory.bind(this),
+      selectSession: this.selectSession.bind(this),
+      refreshSessions: this.refreshSessions.bind(this),
+      fail: this.fail.bind(this),
+      sessionId: this.sessionId, cwd: this.cwd,
+    }, button);
+  }
   private async refreshHistory(leafId = ''): Promise<void> {
-    if (!this.sessionId || !this.diskSession || this.historyLoading === this.sessionId) return;
+    if (!this.sessionId || !this.diskSession) return;
+    if (this.historyLoading === this.sessionId) {
+      // 同会话已有请求在飞：不并发（多个响应都会交换，视图会来回跳）。
+      // 记下待补，完成后按最新状态再读一次，保证最后一次意图落地。
+      this.historyRefreshPending = true;
+      return;
+    }
     const id = this.sessionId; this.historyLoading = id;
     // 归属随请求一起登记，beforeSwap 才能拒绝旧代次的响应（U17/U18）。
     this.pendingHistory = { sessionId: id, epoch: this.scope.epoch };
     const query = leafId ? `?leafId=${encodeURIComponent(leafId)}` : '';
     try { await window.htmx.ajax('get', `/ui/sessions/${encodeURIComponent(id)}/history${query}`, { target: '#turns', swap: 'innerHTML' }); }
-    finally { if (this.historyLoading === id) this.historyLoading = ''; }
+    finally {
+      if (this.historyLoading === id) this.historyLoading = '';
+      if (this.historyRefreshPending && this.sessionId === id) {
+        this.historyRefreshPending = false;
+        void this.refreshHistory().catch((err) => this.fail(err));
+      }
+    }
   }
   private refreshSessions(): void {
     // 搜索结果与普通列表共用 #session-list；刷新列表说明已经退出搜索。
@@ -1090,9 +1168,16 @@ export class Workbench {
       case 'compact': this.setRun('compacting'); try { await this.command('session.compact'); await this.refreshHistory(); } finally { await this.reconcile(); } break;
       case 'clone': { const result = await this.command<{sessionId:string}>('session.clone'); this.selectSession(result.sessionId, this.cwd, '克隆会话'); this.refreshSessions(); break; }
       case 'fork': await this.forkFrom(button.dataset.entryId ?? ''); break;
+      case 'edit-here': await this.sessionAction('edit', button); break;
       case 'stop': await this.request('session.stop', { force: false }); this.setRun('idle'); this.notice('工作进程已释放，历史保留在磁盘。'); break;
-      case 'delete': if (this.sessionId && confirm('删除此会话的磁盘记录？此操作无法撤销。')) { await this.request('sessions.delete', { sessionId: this.sessionId }, ''); this.selectSession('', this.cwd, '新会话'); this.refreshSessions(); closeDialog('session-dialog'); } break;
-      case 'copy-turn': await navigator.clipboard.writeText(button.closest('.turn')?.querySelector('.turn-assistant .bubble')?.textContent ?? ''); this.notify('已复制'); break;
+      case 'delete': await this.sessionAction('delete', button); break;
+      case 'copy-turn': {
+        // 一个回合可能有多段正文（工具之间穿插说明）；全部按顺序复制，
+        // 只取第一段会把中间的解释丢掉。
+        const turn = button.closest('.turn');
+        const parts = [...(turn?.querySelectorAll('.turn-assistant .bubble') ?? [])].map((node) => node.textContent ?? '').filter(Boolean);
+        await navigator.clipboard.writeText(parts.join('\n\n')); this.notify('已复制'); break;
+      }
       case 'commands': this.commands = (await this.command<Record<string,unknown>[]>('session.commands')).map((c) => ({name: text(c.name), description: text(c.description)})); el<HTMLTextAreaElement>('prompt').value = '/'; this.showCommands(); el('prompt').focus(); break;
       case 'export': {
         // 用完整会话 ID，截断只会得到 "history-" 这种没有辨识度的名字。
@@ -1245,5 +1330,5 @@ export class Workbench {
   private notice(message: string): void { el('connection-notice').textContent = message; el('connection-notice').hidden = !message; }
   private notify(message: string, kind = 'info'): void { void import('./toast').then(({showToast}) => showToast(message, kind === 'error' ? 'error' : kind === 'warning' ? 'warning' : 'info')); }
   private fail(error: unknown): void { const message = error instanceof Error ? error.message : '操作失败'; this.notify(message, 'error'); this.notice(message); }
-  dispose(): void { this.saveCurrentDraft(); this.abort.abort(); clearInterval(this.poll); clearTimeout(this.searchTimer); this.live.dispose(); this.models?.dispose(); this.workspace?.dispose(); this.bridge.dispose(); }
+  dispose(): void { this.saveCurrentDraft(); this.abort.abort(); clearInterval(this.poll); clearTimeout(this.searchTimer); clearTimeout(this.resyncTimer); this.live.dispose(); this.models?.dispose(); this.workspace?.dispose(); this.bridge.dispose(); }
 }

@@ -19,7 +19,7 @@ let workbench: Workbench;
 let pending: string[];
 let busy: boolean;
 let sequence: number;
-const methods = ['session.start','session.prompt','session.abort','session.fork','session.subscribe','session.set_model','sessions.search','worker.list','session.state','session.thinking_levels','session.pending_dialogs','session.ext_status','session.ui_response','session.stats','session.set_queue_mode','session.set_thinking','session.stop','session.set_auto_compaction','session.set_auto_retry','session.abort_retry','session.export_html','session.compact','session.bash','config.models.raw','config.models.write','config.models.discover','config.models.test'];
+const methods = ['session.start','session.prompt','session.abort','session.fork','session.navigate','sessions.delete','session.subscribe','session.set_model','sessions.search','worker.list','session.state','session.thinking_levels','session.pending_dialogs','session.ext_status','session.ui_response','session.stats','session.set_queue_mode','session.set_thinking','session.stop','session.set_auto_compaction','session.set_auto_retry','session.abort_retry','session.export_html','session.compact','session.bash','config.models.raw','config.models.write','config.models.discover','config.models.test'];
 function emit(type: string, extra: Record<string, unknown> = {}) {
  fake.instance!.dispatchEvent(new CustomEvent('message', { detail: { version:1,kind:'event',event:'pi.event',sessionId:'s1',epoch:'test',seq:++sequence,data:{type,...extra} } }));
 }
@@ -34,7 +34,7 @@ function emitNamed(event: string, data: Record<string, unknown>) {
 function mount() {
  document.body.innerHTML = `<form id=auth-form><input id=bridge-token><button>连接</button></form><dialog id=auth-dialog></dialog><div id=auth-error></div>
  <form id=composer><textarea id=prompt></textarea><div id=attachments hidden></div><p id=composer-drop hidden></p><input id=attach-input type=file><button id=send-button></button><button id=abort-button></button><select id=model-select><option value="">Pi 默认模型</option></select><select id=thinking-select></select><select id=tool-preset-quick><option value=chat-only>仅聊天</option><option value=read-only>只读</option><option value=default selected>默认</option><option value=full>完整</option></select></form>
- <div id=history-scope hidden><button type=button data-action=branch-current>返回最新</button></div><div id=unsaved-branch hidden>会话尚未写盘；首条回复前关闭工作进程会丢失这个临时分支。</div>
+ <div id=history-scope hidden><button type=button data-action=branch-current>返回最新</button></div><div id=edit-scope hidden><span>正在编辑较早的消息</span></div><div id=unsaved-branch hidden>会话尚未写盘；首条回复前关闭工作进程会丢失这个临时分支。</div>
  <form id=new-form><input id=cwd-input></form><dialog id=new-dialog></dialog><datalist id=workspace-roots></datalist><input id=session-search>
  <button class=icon-btn data-action=session-menu aria-label=会话操作>···</button><dialog id=session-dialog><input id=session-name><div class=session-action-grid><button data-action=rename>保存名称</button><button data-action=compact>压缩</button><button data-action=clone>克隆</button><button data-action=export>导出</button><button data-action=stop>释放</button><button data-action=delete>删除</button></div>
  <label class=switch><input type=checkbox id=auto-compaction><span>自动压缩</span></label><label class=switch><input type=checkbox id=auto-retry><span>自动重试</span></label>
@@ -586,6 +586,94 @@ describe('从用户消息创建未落盘分支', () => {
     expect((document.getElementById('prompt') as HTMLTextAreaElement).value).toBe('修改后的原消息');
     expect(document.getElementById('unsaved-branch')?.hidden).toBe(true);
     expect(vi.mocked(window.htmx.ajax).mock.calls.some((call) => String(call[1]).includes('/ui/sessions/s-fork/history'))).toBe(true);
+  });
+});
+
+describe('从此处编辑（会话内跳转）与删除会话', () => {
+  // 用户回合的完整结构：图片入口与两个按钮都在，回填原文必须只取正文。
+  const turnHTML = `<article class=turn data-turn-id=u1>
+   <div class=turn-user><div class=bubble>原消息正文<div class=user-image-entry><button class=lazy-block>查看附带图片</button></div></div>
+   <div class=turn-actions><button class=icon-btn data-action=edit-here data-entry-id=u1>从此处编辑</button><button class=icon-btn data-action=fork data-entry-id=u1>新建会话</button></div></div></article>`;
+
+  const navigateMock = (leafId: string, previousLeafId: string) => {
+    fake.request.mockImplementation(async (method: string) => {
+      // 忙会话的拒绝在桥侧（与生产一致）：夹具同样报错而不是成功。
+      if (method === 'session.navigate') {
+        if (busy) throw new Error('会话正在运行，请先等待当前回合结束');
+        return { leafId, previousLeafId };
+      }
+      if (method === 'worker.list') return [{ sessionId: 's1', cwd: '/fixture', busy: false }];
+      if (method === 'session.state') return { sessionId: 's1', isStreaming: false };
+      if (method === 'session.thinking_levels') return ['off'];
+      if (method === 'session.pending_dialogs') return { ids: [] };
+      if (method === 'session.start') return { sessionId: 's1', cwd: '/fixture' };
+      return {};
+    });
+  };
+
+  it('跳转成功后回填原文（不含图片按钮文案）、进入编辑态并显示新叶子视图', async () => {
+    navigateMock('a1', 'a9');
+    document.getElementById('turns')!.innerHTML = turnHTML;
+    document.querySelector<HTMLButtonElement>('[data-action=edit-here]')!.click();
+    await waitFor(() => expect(fake.request.mock.calls.some((call) => call[0] === 'session.navigate')).toBe(true));
+    expect(fake.request).toHaveBeenCalledWith('session.navigate', 's1', { entryId: 'u1' }, 30_000);
+    const input = document.getElementById('prompt') as HTMLTextAreaElement;
+    expect(input.value).toBe('原消息正文');
+    expect(document.getElementById('edit-scope')?.hidden).toBe(false);
+    expect(document.getElementById('history-scope')?.hidden).toBe(true);
+    // 跳转后按新叶子重读历史：视图截断到编辑点。
+    await waitFor(() => expect(vi.mocked(window.htmx.ajax).mock.calls.some((call) => String(call[1]).includes('/ui/sessions/s1/history?leafId=a1'))).toBe(true));
+  });
+
+  it('发送后退出编辑态：分叉已落定，横幅收起', async () => {
+    navigateMock('a1', 'a9');
+    document.getElementById('turns')!.innerHTML = turnHTML;
+    document.querySelector<HTMLButtonElement>('[data-action=edit-here]')!.click();
+    await waitFor(() => expect(document.getElementById('edit-scope')?.hidden).toBe(false));
+    const input = document.getElementById('prompt') as HTMLTextAreaElement;
+    input.value = '改写后的消息';
+    document.getElementById('composer')!.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+    await waitFor(() => expect(fake.request.mock.calls.some((call) => call[0] === 'session.prompt')).toBe(true));
+    expect(document.getElementById('edit-scope')?.hidden).toBe(true);
+  });
+
+  it('编辑第一条消息（根叶子）时清空视图且不发历史请求', async () => {
+    navigateMock('', 'a1');
+    document.getElementById('turns')!.innerHTML = turnHTML;
+    document.querySelector<HTMLButtonElement>('[data-action=edit-here]')!.click();
+    await waitFor(() => expect(fake.request.mock.calls.some((call) => call[0] === 'session.navigate')).toBe(true));
+    expect(document.getElementById('turns')!.children.length).toBe(0);
+    expect(vi.mocked(window.htmx.ajax).mock.calls.some((call) => String(call[1]).includes('leafId='))).toBe(false);
+    expect(document.getElementById('edit-scope')?.hidden).toBe(false);
+  });
+
+  it('会话运行中由桥拒绝编辑且不覆盖输入框', async () => {
+    navigateMock('a1', 'a9');
+    document.getElementById('turns')!.innerHTML = turnHTML;
+    const input = document.getElementById('prompt') as HTMLTextAreaElement;
+    input.value = '用户正在写的内容';
+    busy = true; emit('agent_start');
+    document.querySelector<HTMLButtonElement>('[data-action=edit-here]')!.click();
+    // 拒绝以桥的错误为准：等它出现在提示里，确认走的是「回填之前失败」的路径。
+    await waitFor(() => expect(document.getElementById('toast-root')?.textContent).toContain('当前回合'));
+    expect(fake.request).toHaveBeenCalledWith('session.navigate', 's1', { entryId: 'u1' }, 30_000);
+    expect(input.value).toBe('用户正在写的内容');
+  });
+
+  it('删除会话总是带 force，运行中也删得掉', async () => {
+    vi.stubGlobal('confirm', vi.fn(() => true));
+    document.querySelector<HTMLElement>('[data-action=delete]')!.click();
+    await waitFor(() => expect(fake.request.mock.calls.some((call) => call[0] === 'sessions.delete')).toBe(true));
+    expect(fake.request).toHaveBeenCalledWith('sessions.delete', '', { sessionId: 's1', force: true }, 30_000);
+  });
+
+  it('删除前的确认文案说明会强制停止工作进程', async () => {
+    const confirmSpy = vi.fn(() => false);
+    vi.stubGlobal('confirm', confirmSpy);
+    document.querySelector<HTMLElement>('[data-action=delete]')!.click();
+    await waitFor(() => expect(confirmSpy).toHaveBeenCalled());
+    expect(String(confirmSpy.mock.calls[0]?.[0])).toContain('会被强制停止');
+    expect(fake.request.mock.calls.some((call) => call[0] === 'sessions.delete')).toBe(false);
   });
 });
 
@@ -1330,6 +1418,29 @@ describe('实时流重同步与迟到回执的会话归属', () => {
     emitNamed('bridge.event_omitted', { type: 'pi.event', reason: '事件体积超过上限', resyncRequired: true });
     await waitFor(() => expect(ajax).toHaveBeenCalledWith('get', expect.stringContaining('/ui/sessions/s1/history'), expect.anything()));
     expect(document.getElementById('connection-notice')!.textContent).toContain('体积');
+  });
+
+  // 用户实报：点进会话后两段内容快速来回切换、刷新即好。根因之一是
+  // 「订阅被反复摘除（慢消费者）→ 立即重读+重订 → 渲染忙 → 又被摘除」
+  // 的高频循环，每一次循环都会整体换入一次 #turns。重读必须合并到
+  // 冷却窗口：窗口内重复的请求只记积压，窗口结束补一轮。
+  it('订阅反复被摘除时的重读合并到冷却窗口', async () => {
+    const internal = workbench as unknown as { diskSession: boolean };
+    internal.diskSession = true;
+    const ajax = window.htmx.ajax as unknown as ReturnType<typeof vi.fn>;
+    ajax.mockClear();
+    const historyCalls = () => ajax.mock.calls.filter((call) => String(call[1]).includes('/history')).length;
+    // 首次：立即重读。
+    emitNamed('bridge.event_omitted', { type: 'pi.event', reason: '事件体积超过上限', resyncRequired: true });
+    await waitFor(() => expect(historyCalls()).toBe(1));
+    // 冷却窗内的两次重复摘除：合并为一次积压，不马上再换历史。
+    emitNamed('bridge.event_omitted', { type: 'pi.event', reason: '事件体积超过上限', resyncRequired: true });
+    emitNamed('bridge.event_omitted', { type: 'pi.event', reason: '事件体积超过上限', resyncRequired: true });
+    await vi.advanceTimersByTimeAsync(500);
+    expect(historyCalls()).toBe(1);
+    // 窗口结束：积压补一轮（仍然是每窗口至多一次）。
+    await vi.advanceTimersByTimeAsync(1200);
+    expect(historyCalls()).toBe(2);
   });
 
   // U18：回执等待期间切会话，迟到的错误不得写进新会话。

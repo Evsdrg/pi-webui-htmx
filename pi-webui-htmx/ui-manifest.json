@@ -104,7 +104,7 @@
   },
   "build": {
     "_comment": "构建产物布局。桥只消费 dist/，不再读 src/assets。",
-    "toolchain": "pnpm + Vite 8 + TypeScript 7 + Tailwind v4",
+    "toolchain": "pnpm + Vite 8 + TypeScript 7 + 自有 CSS",
     "outputDir": "dist",
     "viteManifest": "dist/.vite/manifest.json",
     "entry": "src/entry/app.ts",

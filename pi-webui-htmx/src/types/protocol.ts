@@ -101,6 +101,7 @@ export type Method =
   | "session.switch"
   | "session.fork"
   | "session.clone"
+  | "session.navigate"
   | "session.tree"
   | "session.fork_messages"
   | "session.entries"

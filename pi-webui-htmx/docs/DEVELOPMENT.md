@@ -46,7 +46,7 @@ dist/                Vite 产物，不提交
 | mermaid | 图表，动态 import（传递依赖 `elkjs` 是 EPL-2.0，见根 README 的许可证节） |
 | xterm + FitAddon | 有状态 PTY 字节流；动态加载，关闭/断线/dispose 语义分开 |
 | ansi_up | ANSI 输出；ANSI 内容不再交给 hljs 二次处理 |
-| Tailwind 4 | **只用于 preflight 复位**——模板里没有工具类，样式是手写 CSS，因此不写 `@source` |
+| 自有 CSS reset | **替代通用 CSS 框架的基础复位**——模板里没有 utility class，组件样式全部由仓库手写 CSS 提供 |
 | Vite 8 / TypeScript 7 | 代码分割、哈希与严格类型检查；不编译 Go 模板 |
 | Vitest + jsdom | 模块行为测试，补充 Go 侧模板测试 |
 

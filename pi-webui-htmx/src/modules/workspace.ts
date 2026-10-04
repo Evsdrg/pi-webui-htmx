@@ -4,6 +4,7 @@ import type { Message } from '@/types/protocol';
 import { mountHighlight, languageFor } from './highlight';
 import { record } from './stream';
 import { el, elOrNull } from './dom';
+import { readPreference, savePreference } from './layout';
 
 /** 从事件目标向上找文件项。 */
 function target_closest_file(target: Element): HTMLElement | null {
@@ -26,7 +27,9 @@ export class Workspace {
     // 互不干扰，合成一个监听不会误判。
     el('sidebar').addEventListener('click', (event) => {
       const file = target_closest_file(event.target as Element);
-      if (file) { event.preventDefault(); void (file.dataset.directory === 'true' ? this.list(file.dataset.filePath ?? '') : this.read(file.dataset.filePath ?? '')).catch(onError); return; }
+      // 目录点击是「就地展开」不是「进入」：根目录只由上一级/刷新/会话切换改变，
+      // 子层展开见 toggleDirectory（与刷新共用同一条片段端点）。
+      if (file) { event.preventDefault(); void (file.dataset.directory === 'true' ? this.toggleDirectory(file) : this.read(file.dataset.filePath ?? '')).catch(onError); return; }
       // 侧栏文件区的「上一级 / 刷新」也是 data-action：它们不在右面板里，
       // 只听 #workspace-panel 的话这两个按钮会是死的。
       const button = (event.target as Element).closest<HTMLElement>('[data-action]');
@@ -100,52 +103,102 @@ export class Workspace {
     const toggle = document.getElementById('files-collapse');
     const splitter = document.querySelector<HTMLElement>('.sidebar-splitter');
     if (!body || !section || !toggle) return;
-    const readPref = (key: string) => { try { return localStorage.getItem(key); } catch { return null; } };
-    const writePref = (key: string, value: string) => { try { localStorage.setItem(key, value); } catch { /* 隐私模式下忽略 */ } };
-    const collapsed = readPref('sidebar-files-collapsed') === '1';
+    // 偏好走 layout.ts 的 pi-ui: 命名空间；这两个键早期以无前缀的裸键存在过，
+    // 读不到新键时回退旧键并顺手迁移，已存过折叠状态/比例的浏览器不至于丢。
+    const readFilesPref = (key: string) => {
+      const value = readPreference(key);
+      if (value) return value;
+      let legacy: string | null = null;
+      try { legacy = localStorage.getItem(key); } catch { /* 隐私模式下按未设置处理 */ }
+      if (legacy) savePreference(key, legacy);
+      return legacy ?? '';
+    };
+    const collapsed = readFilesPref('sidebar-files-collapsed') === '1';
     this.applyFilesCollapsed(collapsed);
     toggle.addEventListener('click', () => {
       const next = body.hidden !== true;
       this.applyFilesCollapsed(next);
-      writePref('sidebar-files-collapsed', next ? '1' : '0');
+      savePreference('sidebar-files-collapsed', next ? '1' : '0');
     }, { signal: this.abort.signal });
-    // 分隔条拖动的是两区高度比例，写进 CSS 变量；
-    // 与侧栏宽度同一手法——拖动期间由 layout.ts 加 data-resizing 抑制过渡。
+    // 分隔条拖动的是两区高度比例，写进 CSS 变量，由 .sidebar-files 的
+    // height:calc(var(--files-ratio) * 100%) 消费；拖动期间一帧只写一次样式。
     if (splitter) {
-      let drag: { y: number; start: number; total: number } | null = null;
+      // 文件区最小高度：分隔条 + 标题栏 + 至少一行文件。
+      const MIN_FILES_H = 64;
+      // 会话区的最小高度必须与 CSS 里 #session-list 的 min-height 一致：
+      // 拖到极限时边界停住，是因为布局真的到极限了。
+      const MIN_SESSIONS_H = 60;
+      let drag: { y: number; h0: number; total: number; maxH: number } | null = null;
+      let pendingY: number | null = null;
+      let frame = 0;
+
       const setRatio = (value: number) => {
-        value = Number.isFinite(value) ? Math.min(0.8, Math.max(0.15, value)) : 0.45;
-        section.style.setProperty('--files-ratio', String(value));
-        splitter.setAttribute('aria-valuenow', String(Math.round(value * 100)));
+        const ratio = Number.isFinite(value) ? Math.min(1, Math.max(0, value)) : 0.45;
+        section.style.setProperty('--files-ratio', String(ratio));
+        splitter.setAttribute('aria-valuenow', String(Math.round(ratio * 100)));
       };
-      // 比例写在 section 上而不是分隔条上：CSS 的 height 用的是
-      // .sidebar-files { height: calc(var(--files-ratio) * 100%) }。
-      // 读取与持久化都必须认准这一个元素，认错了会存进空串（第一版就是这样）。
       const currentRatio = () => Number(section.style.getPropertyValue('--files-ratio')) || 0.45;
-      setRatio(Number(readPref('sidebar-files-ratio')) || 0.45);
-      splitter.setAttribute('aria-valuemin', '15');
-      splitter.setAttribute('aria-valuemax', '80');
-      splitter.addEventListener('pointerdown', (event) => {
-        const parent = section.parentElement!;
+      // 可达范围按实测几何算：文件区最多长到「会话区只剩 MIN_SESSIONS_H」为止。
+      // 旧版钳在固定比例 [0.15, 0.8]，落在到不了的位置时会被 flex 压缩，
+      // 边界就不再跟鼠标走。
+      const limits = () => {
+        const parent = section.parentElement;
+        if (!parent) return null;
         const style = getComputedStyle(parent);
-        const total = parent.clientHeight - parseFloat(style.paddingTop) - parseFloat(style.paddingBottom);
-        drag = { y: event.clientY, start: currentRatio(), total };
+        const total = parent.getBoundingClientRect().height
+          - (parseFloat(style.paddingTop) || 0) - (parseFloat(style.paddingBottom) || 0);
+        if (!(total > 0)) return null;
+        const h0 = section.getBoundingClientRect().height;
+        const sessions = document.getElementById('session-list')?.getBoundingClientRect().height ?? 0;
+        const maxH = Math.min(total, Math.max(MIN_FILES_H, h0 + Math.max(0, sessions - MIN_SESSIONS_H)));
+        return { total, h0, maxH };
+      };
+
+      setRatio(Number(readFilesPref('sidebar-files-ratio')) || 0.45);
+      splitter.setAttribute('aria-valuemin', '0');
+      splitter.setAttribute('aria-valuemax', '100');
+
+      const apply = () => {
+        frame = 0;
+        const y = pendingY; pendingY = null;
+        if (y === null || !drag) return;
+        const height = Math.min(drag.maxH, Math.max(MIN_FILES_H, drag.h0 - (y - drag.y)));
+        setRatio(height / drag.total);
+      };
+      splitter.addEventListener('pointerdown', (event) => {
+        if (drag) return;
+        // 折叠态由 height:auto 接管，拖动没有意义。
+        if (section.classList.contains('is-collapsed')) return;
+        const bounds = limits();
+        if (!bounds) return;
+        drag = { y: event.clientY, h0: bounds.h0, total: bounds.total, maxH: bounds.maxH };
         splitter.setPointerCapture(event.pointerId);
       }, { signal: this.abort.signal });
+      // 每个 pointermove 都写样式会连环触发重排，一帧只应用最后一次（与 scroll.ts 同一手法）。
       splitter.addEventListener('pointermove', (event) => {
         if (!drag) return;
-        if (drag.total <= 0) return;
-        setRatio(drag.start - (event.clientY - drag.y) / drag.total);
+        pendingY = event.clientY;
+        if (!frame) frame = requestAnimationFrame(apply);
       }, { signal: this.abort.signal });
-      const end = () => { if (!drag) return; drag = null; writePref('sidebar-files-ratio', String(currentRatio())); };
+      const end = () => {
+        if (!drag) return;
+        if (frame) { cancelAnimationFrame(frame); frame = 0; }
+        apply(); // 收尾一帧要应用完，边界不落在半路
+        drag = null;
+        savePreference('sidebar-files-ratio', String(currentRatio()));
+      };
       splitter.addEventListener('pointerup', end, { signal: this.abort.signal });
       splitter.addEventListener('pointercancel', end, { signal: this.abort.signal });
       splitter.addEventListener('lostpointercapture', end, { signal: this.abort.signal });
       splitter.addEventListener('keydown', (event) => {
         if (event.key !== 'ArrowUp' && event.key !== 'ArrowDown') return;
         event.preventDefault();
-        const next = Math.min(0.8, Math.max(0.15, currentRatio() + (event.key === 'ArrowUp' ? 0.05 : -0.05)));
-        setRatio(next); writePref('sidebar-files-ratio', String(next));
+        const bounds = limits();
+        if (!bounds) return;
+        const step = 0.05 * bounds.total;
+        const height = Math.min(bounds.maxH, Math.max(MIN_FILES_H, bounds.h0 + (event.key === 'ArrowUp' ? step : -step)));
+        setRatio(height / bounds.total);
+        savePreference('sidebar-files-ratio', String(currentRatio()));
       }, { signal: this.abort.signal });
     }
   }
@@ -168,6 +221,32 @@ export class Workspace {
     el('file-list').dataset.requestScope = String(this.generation);
     el<HTMLInputElement>('files-path').value = path;
     window.htmx.trigger(document.body, 'files-refresh');
+  }
+
+  // 目录就地展开：子层挂在该节点的 .file-children 里，根目录不变。
+  // 只有首次展开才拉片段，之后只是显隐——反复开合不该反复打服务端；
+  // 与根列表共用同一条渲染路径（/ui/files），前端不掌握列表结构。
+  private async toggleDirectory(button: HTMLElement): Promise<void> {
+    const children = button.closest('.file-node')?.querySelector<HTMLElement>('.file-children');
+    if (!children) return;
+    if (button.getAttribute('aria-expanded') === 'true') {
+      button.setAttribute('aria-expanded', 'false');
+      children.hidden = true;
+      return;
+    }
+    button.setAttribute('aria-expanded', 'true');
+    children.hidden = false;
+    // loading 期间连点不重复请求；失败时清掉状态，收起再展开可重试。
+    if (children.dataset.state) return;
+    children.dataset.state = 'loading';
+    children.replaceChildren(this.note('载入中…'));
+    try {
+      await window.htmx.ajax('get', `ui/files?path=${encodeURIComponent(button.dataset.filePath ?? '')}`, { target: children, swap: 'innerHTML' });
+      children.dataset.state = 'loaded';
+    } catch {
+      delete children.dataset.state;
+      children.replaceChildren(this.note('目录读取失败，收起后重试。'));
+    }
   }
   // read 按文件类型分流：图片走 <img>，其余走文本。
   //

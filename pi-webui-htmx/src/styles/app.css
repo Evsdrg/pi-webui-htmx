@@ -1,8 +1,5 @@
-@import "tailwindcss";
 @import "./tokens.css";
-/* 不写 @source：本项目的样式全部是自定义类名，没有使用任何 Tailwind
-   工具类。@source 只是告诉 Tailwind 去扫哪些文件找候选类，
-   扫出来的候选一个都不会被用到，纯粹是构建期与产物里的开销。 */
+/* 样式全部使用仓库自己的组件类，不扫描或生成 Tailwind utility。 */
 /* 桌面三栏与移动抽屉共用一套主题，页面本身不滚动。
    主题色值全部在 tokens.css 里定义，这里只声明 color-scheme
    （它决定表单控件、滚动条等 UA 内建部件的明暗）。 */
@@ -14,6 +11,9 @@
 html,body { margin:0; height:100%; overflow:hidden; }
 body { background:var(--bg); color:var(--text); font:14px/1.6 system-ui,"Noto Sans CJK SC",sans-serif; -webkit-font-smoothing:antialiased; }
 [hidden] { display:none !important; }
+h1,h2,h3,h4,p,ul,ol { margin:0; }
+ul,ol { padding:0; }
+img,svg,video,canvas { max-width:100%; }
 button,input,select,textarea { font:inherit; color:inherit; }
 button { cursor:pointer; }
 button:disabled,select:disabled { opacity:.5; cursor:not-allowed; }
@@ -35,9 +35,9 @@ a { color:var(--accent); }
 .sidebar-column { display:grid; grid-template-columns:minmax(0,1fr) 4px; min-width:0; overflow:hidden; }
 .app-shell[data-sidebar=closed] .sidebar-column { grid-template-columns:0 0; }
 .sidebar { min-width:0; display:flex; flex-direction:column; background:var(--bg-panel); padding:18px 12px 10px; overflow:hidden; }
-/* 会话列表吃掉剩余高度，文件区按比例占一份；
-   两者都在同一个 flex 列里，分隔条只是视觉上的抓手。 */
-#session-list { flex:1 1 auto; min-height:60px; overflow-y:auto; }
+/* 会话列表吃掉剩余高度，文件区按比例占一份（--files-ratio 由 workspace.ts 拖动写入，
+   这里定义默认值并消费它）；可拖范围由 JS 按实测几何钳制，CSS 只管落地。 */
+#session-list { flex:1 1 0; min-height:60px; overflow-y:auto; }
 .sidebar-files { --files-ratio:0.45; flex:0 1 auto; height:calc(var(--files-ratio) * 100%); min-height:0; display:flex; flex-direction:column; overflow:hidden; }
 .sidebar-files.is-collapsed { height:auto; }
 .sidebar-files-head { display:flex; align-items:center; gap:4px; flex:0 0 auto; padding:6px 2px 4px; border-top:1px solid var(--border); }
@@ -51,9 +51,12 @@ a { color:var(--accent); }
 /* 文件项：比右面板版更紧凑，侧栏宽度只有 260px 上下。 */
 .file-item { display:flex; align-items:center; gap:6px; width:100%; min-width:0; padding:3px 6px; border:0; border-radius:5px; background:none; color:var(--text-muted); cursor:pointer; text-align:left; font-size:11px; transition:background .12s,color .12s; }
 .file-item:hover,.file-item:focus-visible { background:var(--bg-hover); color:var(--text); }
-.file-item > span:nth-child(2) { flex:1 1 auto; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.file-item .file-name { flex:1 1 auto; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+/* 目录可就地展开：▸ 旋转成 ▾；子层逐级缩进。 */
+.file-caret { flex:0 0 auto; width:11px; text-align:center; transition:transform .12s; }
+.file-item[aria-expanded="true"] .file-caret { transform:rotate(90deg); }
+.file-children { padding-left:10px; }
 .file-item .muted { flex:0 0 auto; font-size:10px; }
-.file-image { max-width:100%; height:auto; }
 .sidebar-brand { display:flex; align-items:center; gap:9px; padding:0 10px 20px; }
 .brand-name { font:inherit; font-size:19px; font-weight:700; letter-spacing:-.7px; margin:0; }
 .brand-mark { font:28px/1 Georgia,serif; color:var(--accent); }
@@ -74,12 +77,12 @@ kbd { font-size:10px; color:var(--text-dim); margin-left:auto; }
 .cwd-group-name:hover { color:var(--accent); }
 .cwd-group-count { flex:0 0 auto; color:var(--text-dim); font-size:11px; }
 .cwd-group-more { width:calc(100% - 16px); margin:2px 8px 6px; padding:5px 8px; font-size:11px; }
-.cwd-filter { display:block; width:100%; margin:-10px 0 14px; padding:6px 9px; font-size:12px; color:var(--text-muted); background:var(--bg); border:1px solid var(--border); border-radius:8px; text-overflow:ellipsis; }
+.cwd-filter { display:block; width:100%; margin:0 0 10px; padding:6px 9px; font-size:12px; color:var(--text-muted); background:var(--bg); border:1px solid var(--border); border-radius:8px; text-overflow:ellipsis; }
 .cwd-filter:hover { background:var(--bg-hover); }
 /* 视图切换：两个按钮共用一条边框，像分段控件。
    用按钮而不是 select 是为了避开浏览器对表单控件的 reload 恢复——
    恢复出来的值可能与偏好不一致，控件显示与列表内容就会对不上。 */
-.view-switch { display:flex; margin:-10px 0 8px; }
+.view-switch { display:flex; margin:0 0 10px; }
 .view-btn { flex:1 1 0; min-width:0; padding:5px 8px; font-size:12px; color:var(--text-muted); background:var(--bg); border:1px solid var(--border); }
 .view-btn:first-child { border-radius:8px 0 0 8px; }
 .view-btn:last-child { border-radius:0 8px 8px 0; border-left:0; }
@@ -96,7 +99,7 @@ kbd { font-size:10px; color:var(--text-dim); margin-left:auto; }
 .search-snippet { font-size:11px; color:var(--text-muted); overflow:hidden; overflow-wrap:anywhere; display:-webkit-box; -webkit-box-orient:vertical; -webkit-line-clamp:2; }
 .sidebar-footer { display:flex; align-items:center; justify-content:space-between; border-top:1px solid var(--border); padding-top:12px; margin-top:8px; gap:4px; }
 /* ==== 对话区：顶栏与状态 ============================================================== */
-.conversation { display:flex; flex-direction:column; min-height:0; min-width:0; position:relative; overflow:hidden; --topbar-h:40px; }
+.conversation { display:flex; flex-direction:column; min-height:0; min-width:0; position:relative; overflow:hidden; --topbar-h:40px; --chat-width:820px; --chat-font-offset:0px; }
 .topbar { display:flex; align-items:stretch; min-height:40px; padding:0 8px 0 0; border-bottom:1px solid var(--border); background:var(--bg-panel); }
 .topbar .icon-btn { align-self:center; margin:0 2px; }
 /* 右侧成组后由容器承担右对齐：不要把 align 锤挂在可能 hidden 的元素上
@@ -116,6 +119,7 @@ kbd { font-size:10px; color:var(--text-dim); margin-left:auto; }
    JS 用 ResizeObserver 按真实高度校正。 */
 /* ==== 顶栏功能面板（下拉浮层） =========================================================== */
 .top-panel { position:absolute; top:var(--topbar-h); left:0; right:0; z-index:6; max-height:calc(100dvh - var(--topbar-h)); overflow:auto; padding:12px 16px; border-bottom:1px solid var(--border); background:var(--bg-panel); box-shadow:0 12px 28px #0002; font-size:12px; line-height:1.6; }
+.command-menu { z-index:7; }
 .top-panel:not([hidden]) { animation:panel-fade-in .16s ease; }
 .top-panel p { margin:4px 0; }
 .top-panel code { font-size:11px; padding:1px 4px; border-radius:4px; background:var(--bg); }
@@ -128,11 +132,9 @@ kbd { font-size:10px; color:var(--text-dim); margin-left:auto; }
 .state-online::before { content:"●"; color:var(--success); margin-right:4px; }
 .state-offline::before { content:"○"; margin-right:4px; }
 /* ==== 消息流 ==================================================================== */
-/* 对话正文的行宽与字号由设置面板驱动（默认值与 Pi Web 的 820px 一致）。
-   两个变量都写在 .conversation 上，窄屏断点里再把 padding 收掉。 */
-.conversation { --chat-width:820px; --chat-font-offset:0px; }
+/* 对话正文与输入栏共用同一条宽度基准，调整内容宽度时保持左右边界对齐。 */
 .chat-scroll { flex:1; min-height:0; overflow:auto; padding:24px max(20px,calc((100% - var(--chat-width))/2)); overflow-anchor:none; font-size:calc(13px + var(--chat-font-offset)); }
-.welcome { display:flex; flex-direction:column; align-items:center; justify-content:center; min-height:calc(100dvh - 330px); text-align:center; }
+.welcome { display:flex; flex-direction:column; align-items:center; justify-content:center; min-height:100%; padding:48px 0; text-align:center; }
 .welcome-mark { font:68px Georgia,serif; color:var(--accent); opacity:.85; }
 .welcome h2 { margin:12px 0 8px; font-size:25px; font-weight:550; letter-spacing:-.5px; }
 .welcome p { margin:0; color:var(--text-muted); font-size:13px; }
@@ -148,56 +150,91 @@ kbd { font-size:10px; color:var(--text-dim); margin-left:auto; }
 .role { color:var(--accent); font-weight:650; padding-top:2px; font-size:12px; }
 .bubble { min-width:0; white-space:pre-wrap; overflow-wrap:anywhere; }
 .turn-assistant .bubble { flex:1; }
-/* ── 过程区：每个工具调用一块，成功/失败用颜色区分（对齐 Pi Web）──
-   Pi Web 用 rgba(34,197,94,.25/.04) 表示成功、rgba(248,113,113,.45/.05) 表示失败。
-   这里换成主题令牌：绿色与红色分别取 --success/--danger 的色相，
-   用 color-mix 得到同等观感的半透明边框与底色，同时能跟随五个主题。 */
-.turn-process { margin:12px 0 14px 26px; display:flex; flex-direction:column; gap:6px; }
-/* 成功/失败的配色一次切干净：三个自定义属性在 data-ok=false 时整体换掉，
-   避免 border/background/文字色各写一条覆盖规则。 */
-/* 工具块与思考块共用同一副外形：7px 圆角、细边框、等宽小字。 */
-.tool-call,.thinking-block { border-radius:7px; font-family:var(--font-mono); font-size:11px; line-height:1.5; }
-/* 只设配色与边框：字号继承上一条的 11px。
-   这里曾重复声明 font-size:12px，同特异性下压过上一条，
-   工具块因此比 Pi Web 大一号（B 批对齐的是 11px）。 */
-.tool-call { --tc-line:var(--success-border); --tc-fill:var(--success-bg); --tc-ink:var(--success); overflow:hidden; border:1px solid var(--tc-line); background:var(--tc-fill); }
-.tool-call[data-ok=false] { --tc-line:var(--danger-border); --tc-fill:var(--danger-bg); --tc-ink:var(--danger); }
-.tool-call > summary { display:flex; align-items:center; gap:7px; min-width:0; padding:6px 10px; cursor:pointer; list-style:none; }
-.tool-call .tool-name { flex:0 0 auto; color:var(--tc-ink); font-family:var(--font-mono); font-size:11px; font-weight:600; }
+/* ── 过程区：对齐 ZCode 的回合工作标题——无外框盒子 ──
+   回合级只有一行标题（下边框）收纳全部工具与思考；行本身不带边框、
+   不带底色，颜色只服务状态（失败落红）。早期版本是「外框 + 每行小框」
+   的盒中盒，两层容器在视觉上互相挤压，已废除。 */
+.turn-process { margin:12px 0 14px 26px; }
+/* 工具行与思考行共用等宽小字；两者都不再有自己的盒子。
+   字号保持 11px（B 批对齐 Pi Web 时定的基准，见契约脚本的独占声明）。 */
+.tool-call,.thinking-block { font-family:var(--font-mono); font-size:11px; line-height:1.5; }
+/* 工具名的常态色与正文同档（ZCode 的类别词是最浅灰）；失败才落红，
+   不再用绿/红把每一行的名字都染上颜色。 */
+.tool-call > summary { display:flex; align-items:center; gap:7px; min-width:0; padding:4px 0; cursor:pointer; list-style:none; }
+.tool-call .tool-name { flex:0 0 auto; color:var(--text-muted); font-family:var(--font-mono); font-size:11px; font-weight:600; }
+.tool-call[data-ok=false] .tool-name { color:var(--danger); }
 .tool-call .tool-preview { flex:1 1 auto; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--text-dim); font-family:var(--font-mono); font-size:11px; }
-.tool-call .tool-chevron { flex:0 0 auto; color:var(--text-dim); transition:transform .15s ease; }
-.tool-call[open] .tool-chevron { transform:rotate(180deg); }
-.tool-call .tool-detail { margin:0; padding:0 10px 8px; max-height:320px; overflow:auto; font-size:11px; color:var(--text-muted); }
+/* 箭头同 ZCode：▸ 悬停/键盘聚焦才露面，展开后旋转成 ▾ 并常显；
+   无悬停设备（触屏）上退化为半透明常显，保证可发现性。 */
+.tool-call .tool-chevron { flex:0 0 auto; color:var(--text-dim); opacity:0; transition:transform .15s ease, opacity .15s ease; }
+.tool-call > summary:hover .tool-chevron,
+.tool-call > summary:focus-visible .tool-chevron,
+.tool-call[open] .tool-chevron { opacity:1; }
+.tool-call[open] .tool-chevron { transform:rotate(90deg); }
+@media (hover:none) { .tool-call .tool-chevron { opacity:.6; } }
+/* 展开内容与下一行的间距交给组内 gap，这里只留贴住本行的 2px。 */
+.tool-call .tool-detail { margin:0; padding:2px 0 0; max-height:320px; overflow:auto; font-size:11px; color:var(--text-muted); }
 /* 两处时长显示同一形态：不抢占宽度、等宽数字，避免秒数变化时文字抖动。 */
 .tool-duration,.thinking-duration { flex:0 0 auto; color:var(--text-dim); font-size:11px; font-variant-numeric:tabular-nums; }
 /* 工具详情与思考正文都要原样保留换行；长行（路径、单行 JSON）必须就地折断，
    否则窄屏下会把整个消息流撑宽。 */
 .tool-call .tool-detail,.thinking-block .thinking-body { white-space:pre-wrap; overflow-wrap:anywhere; }
 
-/* ── 思考块：单行等宽预览，展开后正文占满（对齐 Pi Web）── */
-.thinking-block { margin:12px 0 14px 26px; display:flex; align-items:flex-start; gap:6px; min-width:0; padding:6px 10px; border:1px solid var(--border); background:var(--bg); }
+/* ── 思考行：单行预览「思考 · 持续了 N 秒」，展开后正文占满 ── */
+.thinking-block { margin:0; display:flex; align-items:flex-start; gap:6px; min-width:0; padding:4px 0; }
 .thinking-block > summary { display:flex; align-items:center; gap:6px; flex:0 1 auto; min-width:0; min-height:1.5em; padding:0; cursor:pointer; list-style:none; color:var(--text-muted); }
 /* 原生 marker 会挤占 summary 的行内空间，两个折叠块统一去掉。 */
 .tool-call > summary::-webkit-details-marker,
 .thinking-block > summary::-webkit-details-marker { display:none; }
 .thinking-block[open] > summary { flex:0 0 auto; }
-.thinking-block .thinking-icon { flex:0 0 auto; }
-.thinking-block[open] .thinking-icon { color:var(--thinking-active); }
+/* 图标保持最浅一档常色：ZCode 的思考图标不随展开变色，层级交给文本。 */
+.thinking-block .thinking-icon { flex:0 0 auto; color:var(--text-dim); }
 .thinking-block .thinking-preview { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .thinking-block[open] .thinking-preview { display:none; }
 .thinking-block .thinking-body { flex:1 1 auto; min-width:0; color:var(--text-muted); }
 /* ==== 回合操作 =================================================================== */
-.turn-actions { display:flex; justify-content:flex-end; gap:6px; margin-top:5px; }
-.turn-actions .icon-btn { font-size:11px; }
+.turn-actions { display:flex; justify-content:flex-end; gap:6px; margin-top:5px; opacity:.35; transition:opacity .12s; }.turn-actions .icon-btn { font-size:11px; }
 .older { display:flex; justify-content:center; margin:0 0 20px; }
 .live { margin-bottom:20px; }
 .live-user { background:var(--user-bg); padding:12px 16px; border-radius:12px; margin:0 0 20px auto; max-width:90%; width:fit-content; }
 .streaming-text { min-height:24px; }
-.live[data-running=true] .streaming-text::after { content:"▍"; color:var(--accent); animation:blink 1s steps(2) infinite; }
+/* 光标只挂在最后一段流式正文上：正文之后又开新工作段（工具/思考）时，
+   活动信号交回那段工作组的标题行。 */
+.live[data-running=true] #live-flow > .streaming-text:last-child::after { content:"▍"; color:var(--accent); animation:blink 1s steps(2) infinite; }
+.live-pending { margin:0; color:var(--text-dim); font:11px var(--font-mono); }
+/* 过程组不再是带边框的盒子：只有标题行的下边框 + 展开内容。
+   ZCode 的「已工作 X」标题同样是整宽下边框、展开区无框。 */
+.turn-process > summary { display:flex; align-items:center; gap:8px; min-width:0; padding:6px 10px 7px; cursor:pointer; list-style:none; color:var(--text-muted); font:11px var(--font-mono); border-bottom:1px solid color-mix(in srgb, var(--border) 50%, transparent); }
+.turn-process > summary::-webkit-details-marker { display:none; }
+/* 折叠箭头在行尾：▸ 旋转成 ▾（与文件树的目录箭头同一种语言）。 */
+.turn-process > summary::after { content:"▸"; color:var(--text-dim); opacity:.7; transition:transform .15s ease; }
+.turn-process[open] > summary::after { transform:rotate(90deg); }
+.process-summary > span:first-child { flex:0 0 auto; }
+.process-preview { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--text-dim); }
+.process-body { min-width:0; padding:8px 10px 6px; display:flex; flex-direction:column; gap:8px; }
+/* 实时工作段的项容器：工具行与思考 pre 按时间顺序排在一列。 */
+.live .live-items { display:flex; flex-direction:column; gap:8px; min-width:0; }
+/* 空思考（模型直接调工具）与空容器都不占位：flex 的 gap 会给空元素留缝。 */
+.live .live-think:empty, .live .live-items:empty { display:none; }
+/* 思考正文（流式全量）：左导线 + 缩进，正文字体而非等宽——长段自然语言
+   在等宽下不可读；结构与 ZCode 的 reasoning 内容一致（无底色、细导线）。 */
+.live .live-think { max-height:160px; overflow:auto; margin:0 0 0 8px; padding:2px 0 2px 14px; border-left:1px solid var(--border); white-space:pre-wrap; overflow-wrap:anywhere; color:var(--text-muted); font:12px/1.6 system-ui,"Noto Sans CJK SC",sans-serif; }
 @keyframes blink { 50% { opacity:0; } }
+/* 运行中最新一段工作的标题做扫光（ZCode 用渐变文字表达「还在进行」）：
+   它是有含义的活动信号，不是装饰。只在用户未要求减少动效时启用。 */
+@media (prefers-reduced-motion: no-preference) {
+  .live .live-group[data-active] .live-status {
+    background:linear-gradient(90deg, var(--text-dim) 0%, var(--text-muted) 50%, var(--text-dim) 100%);
+    background-size:200% 100%;
+    -webkit-background-clip:text; background-clip:text;
+    color:transparent; -webkit-text-fill-color:transparent;
+    animation:work-shimmer 2.4s linear infinite;
+  }
+  @keyframes work-shimmer { from { background-position:100% 0; } to { background-position:-100% 0; } }
+}
 /* ==== 输入栏 ==================================================================== */
-.composer-wrap { flex:none; padding:8px max(20px,calc((100% - 860px)/2)) 8px; }
-#composer { max-width:820px; position:relative; }
+.composer-wrap { flex:none; padding:8px max(20px,calc((100% - var(--chat-width))/2)) 8px; }
+#composer { width:100%; max-width:var(--chat-width); margin:0 auto; position:relative; }
 .composer-input { display:flex; align-items:center; gap:8px; min-height:56px; padding:10px 10px 10px 14px; background:var(--bg); border:1px solid color-mix(in srgb,var(--border) 70%,transparent); border-radius:14px; box-shadow:0 1px 2px var(--shadow-color),0 8px 24px -12px var(--shadow-color); transition:border-color .15s,box-shadow .15s; }
 .composer-input:focus-within { border-color:color-mix(in srgb,var(--accent) 50%,var(--border)); }
 #prompt { display:block; flex:1; min-width:0; width:100%; min-height:24px; max-height:200px; field-sizing:content; resize:none; overflow:auto; border:0; outline:0; background:transparent; padding:0; font-size:14px; line-height:1.6; }
@@ -206,14 +243,14 @@ kbd { font-size:10px; color:var(--text-dim); margin-left:auto; }
 #send-button { flex:none; align-self:flex-end; min-width:74px; min-height:34px; padding:7px 12px; border:0; border-radius:8px; font-size:13px; font-weight:600; line-height:20px; box-shadow:0 1px 3px color-mix(in srgb,var(--accent) 25%,transparent); }
 #send-button span { font-size:16px; line-height:1; }
 #send-button:disabled { opacity:1; color:var(--text-dim); background:var(--bg-panel); box-shadow:none; }
-.composer-actions { display:flex; align-items:center; gap:4px; min-height:32px; margin-top:8px; }
+.composer-actions { display:flex; align-items:center; gap:4px; min-height:32px; margin-top:8px; flex-wrap:wrap; }
 .composer-actions .icon-btn { width:32px; height:32px; padding:0; border-radius:9px; }
 #abort-button { margin-left:auto; }
 .composer-actions .select-label { min-width:0; }
 .composer-actions .select-label select { field-sizing:content; max-width:280px; height:32px; border:0; border-radius:9px; background:transparent; padding:4px 8px; font-size:12px; cursor:pointer; }
 .composer-actions .select-label select:hover { background:var(--bg-hover); }
 .composer-actions .select-label select:disabled { cursor:not-allowed; }
-.composer-footnote { display:flex; align-items:center; justify-content:space-between; max-width:820px; gap:10px; color:var(--text-dim); font-size:10px; padding:4px 5px 0; }
+.composer-footnote { display:flex; align-items:center; justify-content:space-between; width:100%; max-width:var(--chat-width); margin:0 auto; gap:10px; color:var(--text-dim); font-size:10px; padding:4px 5px 0; }
 .composer-footnote:has(#ext-status-slot:empty):has(#usage:empty) { display:none; }
 #ext-status-slot { flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .ext-widgets { font-size:12px; max-height:160px; overflow:auto; }
@@ -278,12 +315,13 @@ input,select,textarea { background:var(--bg); border:1px solid var(--border); bo
 .workspace-panel section[role=tabpanel]:not([hidden]) { animation:panel-fade-in .16s ease; }
 @keyframes panel-fade-in { from { opacity:0; } to { opacity:1; } }
 [role=tabpanel] { flex:1; min-height:0; overflow:auto; padding:12px; }
+.workspace-panel section[role=tabpanel][aria-labelledby="tab-terminal"] { display:flex; flex-direction:column; }
+#terminal-mount { flex:1; min-height:240px; background:var(--terminal-bg); border-radius:6px; padding:5px; }
 .path-bar { display:flex; align-items:center; gap:6px; font-size:11px; margin-bottom:8px; }
 #file-path { flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 #file-preview pre,#git-diff pre { margin:0; font:11px/1.7 ui-monospace,monospace; overflow:auto; tab-size:2; }
 #file-name { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .terminal-actions { display:flex; gap:8px; margin-bottom:12px; }
-#terminal-mount { height:calc(100% - 55px); min-height:240px; background:var(--terminal-bg); border-radius:6px; padding:5px; }
 .notice { padding:7px 20px; font-size:12px; border-bottom:1px solid var(--border); color:var(--text-muted); background:var(--bg-subtle); }
 /* ==== 提示条与浮动控件 =============================================================== */
 .history-scope { display:flex; align-items:center; justify-content:space-between; gap:10px; padding:6px 20px; font-size:11px; color:var(--text-muted); border-bottom:1px solid var(--border); background:var(--bg-subtle); }
@@ -296,7 +334,7 @@ input,select,textarea { background:var(--bg); border:1px solid var(--border); bo
 .toast { padding:10px 16px; background:var(--bg-panel); border:1px solid var(--border); border-radius:8px; box-shadow:0 6px 24px #0002; font-size:12px; overflow-wrap:anywhere; }
 .toast-error { border-left:3px solid var(--danger); }
 .toast-success { border-left:3px solid var(--success); }
-.command-menu { position:absolute; left:8px; right:8px; bottom:100%; background:var(--bg-panel); border:1px solid var(--border); border-radius:8px; max-height:230px; overflow:auto; z-index:5; box-shadow:0 -4px 20px #0001; }
+.command-menu { position:absolute; left:8px; right:8px; bottom:100%; background:var(--bg-panel); border:1px solid var(--border); border-radius:8px; max-height:230px; overflow:auto; z-index:7; box-shadow:0 -4px 20px #0001; }
 .command-menu button { display:block; width:100%; text-align:left; border:0; padding:8px 12px; background:transparent; font-size:12px; }
 .command-menu button:hover { background:var(--bg-hover); }
 .markdown { white-space:normal; }
@@ -397,7 +435,9 @@ input,select,textarea { background:var(--bg); border:1px solid var(--border); bo
 .lazy-block { display:inline-block; margin:2px 0; padding:1px 8px; font-size:11px; color:var(--text-muted); background:var(--bg-subtle); border:1px dashed var(--border); border-radius:6px; cursor:pointer; }
 .lazy-block:hover { color:var(--accent); border-color:var(--accent); }
 .lazy-block[data-loaded="1"] { display:none; }
-.lazy-thinking { margin:0 0 6px; padding:6px 10px; font-size:12px; color:var(--text-muted); background:var(--bg-subtle); border-left:2px solid var(--border); border-radius:0 6px 6px 0; white-space:pre-wrap; }
+/* 思考正文：左导线 + 缩进、正文字体（ZCode 的 reasoning 内容同款结构），
+   不再带底色盒子——展开的是一段可读的文本，不是一块卡片。 */
+.lazy-thinking { margin:2px 0 2px 8px; padding:2px 0 2px 14px; font-size:12px; color:var(--text-muted); border-left:1px solid var(--border); white-space:pre-wrap; overflow-wrap:anywhere; font-family:system-ui,"Noto Sans CJK SC",sans-serif; }
 .lazy-image { max-width:100%; border:1px solid var(--border); border-radius:8px; display:block; margin:4px 0; }
 
 /* 文件查看器：图片居中显示，不超出面板宽度。 */
@@ -416,7 +456,7 @@ input,select,textarea { background:var(--bg); border:1px solid var(--border); bo
 .tool-item:hover { background:var(--bg-hover); color:var(--text); }
 .tool-item.selected { background:var(--bg-selected); box-shadow:inset 2px 0 var(--accent); color:var(--text); }
 .tool-item code { font-size:11px; font-weight:600; overflow-wrap:anywhere; }
-.tool-detail { display:flex; flex-direction:column; min-width:0; min-height:0; }
+.tool-panel .tool-detail { display:flex; flex-direction:column; min-width:0; min-height:0; }
 .tool-scroll { flex:1; min-height:0; overflow:auto; padding:14px 16px 20px; }
 .tool-section + .tool-section { margin-top:18px; }
 .tool-section-label { display:flex; align-items:center; justify-content:space-between; gap:8px; margin-bottom:7px; color:var(--text-dim); font-size:11px; font-weight:600; }
@@ -476,8 +516,10 @@ input,select,textarea { background:var(--bg); border:1px solid var(--border); bo
 .top-panel > .panel-close { position:absolute; top:6px; right:8px; z-index:2; background:var(--bg-panel); border-color:var(--border); }
 .top-panel > .panel-close:hover { background:var(--bg-hover); }
 /* 给浮动的 × 让出宽度，正文不会钻到它下面。 */
-#system-body, #tools-body { padding-right:20px; }
+#stats-body,#system-body,#tools-body,#mc-body { padding-right:24px; }
 
+/* 回合用量与过程内容保持同一左边界，弱化显示但不丢失信息。 */
+.turn-usage { margin:8px 0 0 26px; color:var(--text-dim); font-size:10px; font-variant-numeric:tabular-nums; }
 /* 回合操作：默认弱化，鼠标悬停或键盘聚焦到该回合时显形。
    与 Pi Web 一致地「悬停才出现」，但用 :focus-within 保住键盘可达性——
    只靠 :hover 的菜单键盘用户永远够不到。 */
@@ -623,6 +665,7 @@ input,select,textarea { background:var(--bg); border:1px solid var(--border); bo
 .mc-more:hover,.mc-more:focus-visible { background:var(--bg-hover); color:var(--text); }
 
 /* ==== 响应式：组件基础规则之后统一覆盖 ==== */
+@media (max-width:1280px) { .app-shell[data-right-panel=open],.app-shell[data-sidebar=closed][data-right-panel=open] { grid-template-columns:var(--sidebar-width) minmax(0,1fr) minmax(280px,34vw); } }
 @media (max-width:1100px) { .app-shell[data-right-panel=open],.app-shell[data-sidebar=closed][data-right-panel=open] { grid-template-columns:0 minmax(0,1fr) minmax(280px,38vw); } .app-shell[data-right-panel=open] .sidebar-column { visibility:hidden; } }
 @media (max-width:760px) {
   .new-session-cwd { max-width:90px; }

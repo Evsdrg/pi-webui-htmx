@@ -111,3 +111,105 @@ describe('会话列表视图切换', () => {
     expect(localStorage.getItem('pi-ui:session-view')).toBe('timeline');
   });
 });
+
+describe('对话过程默认折叠偏好', () => {
+  const mountProcessFixture = () => {
+    document.body.insertAdjacentHTML('beforeend', `<label><input id="process-collapsed" type="checkbox"></label>
+      <div id="turns"><details class="turn-process"><summary>过程</summary></details></div>`);
+  };
+
+  it('没有偏好时默认勾选且历史过程保持折叠', () => {
+    mountProcessFixture();
+    unmount(); unmount = mountLayout();
+    const setting = document.querySelector<HTMLInputElement>('#process-collapsed')!;
+    expect(setting.checked).toBe(true);
+    expect(document.querySelector<HTMLDetailsElement>('.turn-process')!.open).toBe(false);
+  });
+
+  it('取消偏好后展开当前及新换入的历史过程，并保存选择', () => {
+    localStorage.setItem('pi-ui:process-collapsed', '1');
+    mountProcessFixture();
+    unmount(); unmount = mountLayout();
+    const setting = document.querySelector<HTMLInputElement>('#process-collapsed')!;
+    setting.checked = false;
+    setting.dispatchEvent(new Event('change', { bubbles: true }));
+    expect(localStorage.getItem('pi-ui:process-collapsed')).toBe('0');
+    expect(document.querySelector<HTMLDetailsElement>('.turn-process')!.open).toBe(true);
+    const target = document.getElementById('turns')!;
+    target.insertAdjacentHTML('beforeend', '<details class="turn-process"><summary>新过程</summary></details>');
+    document.body.dispatchEvent(new CustomEvent('htmx:afterSwap', { detail: { target } }));
+    expect([...target.querySelectorAll<HTMLDetailsElement>('.turn-process')].every((node) => node.open)).toBe(true);
+  });
+
+  it('无关片段换入不覆盖用户手动展开状态', () => {
+    mountProcessFixture();
+    unmount(); unmount = mountLayout();
+    const process = document.querySelector<HTMLDetailsElement>('.turn-process')!;
+    process.open = true;
+    document.body.dispatchEvent(new CustomEvent('htmx:afterSwap', { detail: { target: document.body } }));
+    expect(process.open).toBe(true);
+  });
+});
+
+describe('对话内容宽度：顶满可用宽度开关', () => {
+  const mountWidthFixture = () => {
+    document.body.insertAdjacentHTML('beforeend', `<div id="main"></div>
+      <input id="chat-width" type="range" min="640" max="1400" step="20" value="820">
+      <span id="chat-width-value"></span>
+      <label class="switch"><input id="chat-width-full" type="checkbox"><span>顶满可用宽度</span></label>`);
+  };
+  const widthVar = () => (document.getElementById('main') as HTMLElement).style.getPropertyValue('--chat-width');
+  const slider = () => document.getElementById('chat-width') as HTMLInputElement;
+  const toggle = () => document.getElementById('chat-width-full') as HTMLInputElement;
+
+  it('没有偏好时开关未勾选，宽度取滑块值', () => {
+    mountWidthFixture();
+    unmount(); unmount = mountLayout();
+    expect(toggle().checked).toBe(false);
+    expect(slider().disabled).toBe(false);
+    expect(widthVar()).toBe('820px');
+  });
+
+  it('勾选后宽度顶满、滑块禁用、偏好保存', () => {
+    mountWidthFixture();
+    unmount(); unmount = mountLayout();
+    toggle().checked = true;
+    toggle().dispatchEvent(new Event('change', { bubbles: true }));
+    expect(widthVar()).toBe('100%');
+    expect(slider().disabled).toBe(true);
+    expect(document.getElementById('chat-width-value')!.textContent).toBe('顶满');
+    expect(localStorage.getItem('pi-ui:chat-width-full')).toBe('1');
+  });
+
+  it('有顶满偏好时按偏好加载', () => {
+    localStorage.setItem('pi-ui:chat-width-full', '1');
+    mountWidthFixture();
+    unmount(); unmount = mountLayout();
+    expect(toggle().checked).toBe(true);
+    expect(widthVar()).toBe('100%');
+    expect(slider().disabled).toBe(true);
+  });
+
+  it('取消勾选后恢复滑块宽度并允许再调', () => {
+    localStorage.setItem('pi-ui:chat-width-full', '1');
+    localStorage.setItem('pi-ui:chat-width', '1100');
+    mountWidthFixture();
+    unmount(); unmount = mountLayout();
+    expect(widthVar()).toBe('100%');
+    toggle().checked = false;
+    toggle().dispatchEvent(new Event('change', { bubbles: true }));
+    expect(widthVar()).toBe('1100px');
+    expect(slider().disabled).toBe(false);
+    expect(localStorage.getItem('pi-ui:chat-width-full')).toBe('0');
+  });
+
+  it('顶满状态下滑块事件不会把宽度拉回像素值', () => {
+    mountWidthFixture();
+    unmount(); unmount = mountLayout();
+    toggle().checked = true;
+    toggle().dispatchEvent(new Event('change', { bubbles: true }));
+    slider().value = '1400';
+    slider().dispatchEvent(new Event('input', { bubbles: true }));
+    expect(widthVar()).toBe('100%');
+  });
+});

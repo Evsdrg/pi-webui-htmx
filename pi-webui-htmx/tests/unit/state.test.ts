@@ -1,8 +1,19 @@
 import { afterEach, expect, it, vi } from 'vitest';
-import { EventCursor, LiveView, messageText, runStateAfter } from '../../src/modules/stream';
+import { EventCursor, LiveView, messageText, runStateAfter, hasVisibleText, stripDroppedMarker } from '../../src/modules/stream';
 import { clampSidebar, readDraft, saveDraft, applyTheme } from '../../src/modules/layout';
 
 afterEach(() => { localStorage.clear(); document.body.replaceChildren(); vi.unstubAllGlobals(); });
+it('不可见字符-only 的消息被视为空', () => {
+  expect(hasVisibleText('继续')).toBe(true);
+  expect(hasVisibleText(' \n\t ')).toBe(false);
+  // trim() 不会去掉零宽/格式字符；只用它们的消息必须被拦掉（否则是空白气泡）。
+  expect(hasVisibleText('\u200b\ufeff\u2060')).toBe(false);
+});
+it('丢弃标记只在结尾剥离', () => {
+  expect(stripDroppedMarker('好的，继续。\n[dropped ]')).toBe('好的，继续。');
+  expect(stripDroppedMarker('[dropped ]')).toBe('');
+  expect(stripDroppedMarker('讨论 [dropped ] 这个词')).toBe('讨论 [dropped ] 这个词');
+});
 it('agent_end 不提前结束运行，settled 才结束', () => { expect(runStateAfter('running',{type:'agent_end'})).toBe('running'); expect(runStateAfter('running',{type:'agent_settled'})).toBe('idle'); expect(runStateAfter('running',{type:'auto_retry_start'})).toBe('retrying'); });
 it('只有需要回答的扩展事件进入等待状态', () => { for (const method of ['notify','setStatus','setWidget']) expect(runStateAfter('running',{type:'extension_ui_request',method})).toBe('running'); for (const method of ['select','confirm','input','editor']) expect(runStateAfter('running',{type:'extension_ui_request',method})).toBe('waiting_input'); });
 it('补发事件去重，且事件流不能自己切换 epoch', () => {
@@ -42,9 +53,9 @@ it('损坏草稿与无效主题安全回退', () => { localStorage.setItem('pi-u
 it('侧栏宽度钳制且拒绝非数值', () => { expect(clampSidebar(999)).toBe(380); expect(clampSidebar(1)).toBe(200); expect(clampSidebar(NaN)).toBe(260); });
 it('大量增量仅使用一个文本节点，正文按文本处理', () => {
   vi.stubGlobal('requestAnimationFrame',vi.fn(() => 1)); vi.stubGlobal('cancelAnimationFrame',vi.fn());
-  document.body.innerHTML = '<div id=live><div id=live-text></div><div id=live-user></div></div>';
+  document.body.innerHTML = '<div id=live hidden><div id=live-flow></div><div id=live-user></div></div>';
   const live = new LiveView(document.getElementById('live')!); live.begin('用户');
   for (let i=0;i<1000;i++) live.event({type:'message_update',assistantMessageEvent:{type:'text_delta',delta:'<b>x</b>'}});
-  live.finish(); const text = document.getElementById('live-text')!; expect(text.childNodes).toHaveLength(1); expect(text.querySelector('b')).toBeNull();
-  live.clear(); expect(text.textContent).toBe(''); expect(document.getElementById('live')!.hidden).toBe(true);
+  live.finish(); const text = document.querySelector('.streaming-text')!; expect(text.childNodes).toHaveLength(1); expect(text.querySelector('b')).toBeNull();
+  live.clear(); expect(document.querySelector('.streaming-text')).toBeNull(); expect(document.getElementById('live')!.hidden).toBe(true);
 });
