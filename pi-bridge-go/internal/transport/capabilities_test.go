@@ -17,7 +17,7 @@ import (
 // 于是「报给客户端的限额」和「真正执行的限额」是两回事，调用方按报告
 // 规划并发就会撞上真实的 limit_exceeded。
 func Test能力发现只报实际生效的值(t *testing.T) {
-	s, _, _ := newTestServerTuned(t, 2*time.Second, func(c *terminal.Config) {
+	s, _, _, _, _ := newTestServerTuned(t, 2*time.Second, func(c *terminal.Config) {
 		c.MaxTerminals = 7
 		c.IdleTimeout = 90 * time.Second
 	})

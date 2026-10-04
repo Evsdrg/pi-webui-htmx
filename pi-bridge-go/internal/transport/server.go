@@ -54,7 +54,7 @@ var SupportedMethods = []string{
 	"session.models", "session.set_model", "session.cycle_model",
 	"session.thinking_levels", "session.set_thinking", "session.cycle_thinking",
 	"session.compact", "session.set_auto_compaction", "session.set_auto_retry", "session.abort_retry",
-	"session.new", "session.switch", "session.fork", "session.clone",
+	"session.new", "session.switch", "session.fork", "session.clone", "session.navigate",
 	"session.tree", "session.fork_messages", "session.entries",
 	"session.bash", "session.abort_bash", "session.bash_output",
 	"session.ui_response", "session.pending_dialogs", "session.ext_status",

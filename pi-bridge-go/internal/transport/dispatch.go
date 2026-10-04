@@ -318,6 +318,17 @@ func (s *Server) dispatchSession(ctx context.Context, r protocol.Request, w *run
 		}
 		return w.Fork(ctx, p.EntryID)
 
+	case "session.navigate":
+		// 会话文件内的叶子跳转（「从此处编辑」）：不派生新会话，
+		// 成功回执带新叶子，前端据此重画分支视图并回填输入框。
+		var p struct {
+			EntryID string `json:"entryId"`
+		}
+		if err := protocol.Decode(r.Params, &p); err != nil {
+			return nil, err
+		}
+		return w.Navigate(ctx, p.EntryID)
+
 	case "session.clone":
 		if err := decodeEmpty(r.Params); err != nil {
 			return nil, err
@@ -361,16 +372,11 @@ func (s *Server) dispatchSessionOps(ctx context.Context, r protocol.Request) (an
 		}
 		// 删除前先停掉该会话的工作进程：Pi 仍持有写入路径时删文件，
 		// 它会在删除后继续写入，造成幽灵会话与双写（B08）。
-		// force 只影响「是否强制停止忙中的 worker」，不跳过协调本身。
-		stopped, err := s.manager.StopSession(p.SessionID)
+		// force 透传给 Worker.Stop：忙会话只有 force 才会被强制停止；
+		// 不带 force 时忙会话会得到 busy 错误，由调用方决定是否重试。
+		stopped, err := s.manager.StopSession(p.SessionID, p.Force)
 		if err != nil {
-			if !p.Force {
-				return nil, protocol.E("busy", "该会话仍在运行且停止失败，请确认后带 force 重试")
-			}
-			// force 下仍需尽力再停一次，避免明知会双写还继续删。
-			if _, ferr := s.manager.StopSession(p.SessionID); ferr != nil {
-				return nil, ferr
-			}
+			return nil, err
 		}
 		result, derr := s.store.Delete(ctx, p.SessionID)
 		if derr != nil {

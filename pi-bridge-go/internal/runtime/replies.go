@@ -59,3 +59,10 @@ type ForkReply struct {
 	Text      string `json:"text"`
 	Persisted bool   `json:"persisted"`
 }
+
+// NavigateReply 是 session.navigate 的回执：叶子从 PreviousLeafID 移到 LeafID。
+// 空串代表根（Pi 用 null 表示根叶子）。目标原本就是当前叶子时两者相同。
+type NavigateReply struct {
+	LeafID         string `json:"leafId"`
+	PreviousLeafID string `json:"previousLeafId"`
+}

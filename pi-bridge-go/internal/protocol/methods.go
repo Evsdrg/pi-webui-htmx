@@ -126,6 +126,8 @@ var specs = map[string]Spec{
 	"session.set_thinking":   {Method: "session.set_thinking", Class: ClassState, NeedsIntent: true},
 	"session.cycle_thinking": {Method: "session.cycle_thinking", Class: ClassState, NeedsIntent: true},
 	"session.set_queue_mode": {Method: "session.set_queue_mode", Class: ClassState, NeedsIntent: true},
+	// 会话文件内的叶子跳转（「从此处编辑」）：不改变会话身份，但改变分支位置。
+	"session.navigate": {Method: "session.navigate", Class: ClassState, NeedsIntent: true},
 	// 长任务：按默认 30 秒放弃会留下「Pi 还在跑、桥已回 outcome_unknown」的状态。
 	"session.compact":             {Method: "session.compact", Class: ClassState, NeedsIntent: true, Timeout: 5 * time.Minute},
 	"session.set_auto_compaction": {Method: "session.set_auto_compaction", Class: ClassState, NeedsIntent: true},

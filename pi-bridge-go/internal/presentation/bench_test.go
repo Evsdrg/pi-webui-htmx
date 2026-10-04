@@ -26,7 +26,7 @@ func buildRenderer(tb testing.TB) *Renderer {
 		}
 	}
 	write("src/templates/sessions.html", `{{range .Items}}<a class="session-item" href="/?session={{.ID}}" data-session="{{.ID}}"><span class="session-title">{{.Title}}</span></a>{{end}}`)
-	write("src/templates/history.html", `{{range .Turns}}<article class="turn" data-turn-id="{{.ID}}"><div class="turn-user"><div class="bubble">{{.UserText}}</div></div>{{if .HasProcess}}<details><summary>{{len .Steps}} 步</summary><ol>{{range .Steps}}<li>{{.Kind}}:{{.Detail}}</li>{{end}}</ol></details>{{end}}<div class="turn-assistant"><div class="bubble markdown">{{.AssistantText}}</div></div></article>{{end}}`)
+	write("src/templates/history.html", `{{range .Turns}}<article class="turn" data-turn-id="{{.ID}}"><div class="turn-user"><div class="bubble">{{.UserText}}</div></div>{{range .Flow}}{{if eq .Kind "work"}}<details><summary>{{.Summary}}</summary><ol>{{range .Items}}{{if eq .Kind "tool"}}<li>{{.Step.Kind}}:{{.Step.Detail}}</li>{{end}}{{end}}</ol></details>{{else}}<div class="turn-assistant"><div class="bubble markdown">{{.Text}}</div></div>{{end}}{{end}}</article>{{end}}`)
 	write("ui-manifest.json", `{"protocolVersion":1,"requiredMethods":[],"templates":{"sessions":"templates/sessions.html","history":"templates/history.html"},"build":{"entry":"src/entry/app.ts"}}`)
 	write("dist/.vite/manifest.json", `{"src/entry/app.ts":{"file":"assets/app-abc123.js","isEntry":true,"css":[]}}`)
 	write("dist/assets/app-abc123.js", "console.log(1)")

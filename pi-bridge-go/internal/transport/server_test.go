@@ -35,13 +35,15 @@ const testToken = "0123456789abcdef0123456789abcdef"
 
 func newTestServer(t *testing.T) (*Server, *run.Manager, string) {
 	t.Helper()
-	return newTestServerTuned(t, 2*time.Second)
+	s, m, cwd, _, _ := newTestServerTuned(t, 2*time.Second)
+	return s, m, cwd
 }
 
 // newTestServerTuned 与 newTestServer 相同，只是把命令超时压到指定值，
 // 并允许改终端限额（能力发现的用例要证明报的是真实值而不是默认值）。
 // B66 的用例需要默认超时在几百毫秒内到期，才能区分长任务命令用的不是它。
-func newTestServerTuned(t *testing.T, commandTimeout time.Duration, termOpts ...func(*terminal.Config)) (*Server, *run.Manager, string) {
+// 额外的返回值给需要直接摆手写会话文件、刷新索引的用例（删除/跳转回归）。
+func newTestServerTuned(t *testing.T, commandTimeout time.Duration, termOpts ...func(*terminal.Config)) (*Server, *run.Manager, string, *sessions.Store, string) {
 	t.Helper()
 	cwd := t.TempDir()
 	state := t.TempDir()
@@ -84,6 +86,13 @@ func newTestServerTuned(t *testing.T, commandTimeout time.Duration, termOpts ...
 	cfg.IdleTimeout = 5 * time.Minute
 	cfg.OperationTimeout = commandTimeout
 	cfg.Metrics = metrics
+	// 与生产同路径：桥内跳转扩展随进程 -e 下发，结果目录每 worker 一份。
+	navExt, navResults, err := run.InstallNavigateExt(state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.NavigateExt = navExt
+	cfg.NavigateResultDir = navResults
 	m := run.New(cfg)
 	t.Cleanup(m.Close)
 
@@ -117,7 +126,7 @@ func newTestServerTuned(t *testing.T, commandTimeout time.Duration, termOpts ...
 	if err != nil {
 		t.Fatalf("构造测试服务器失败：%v", err)
 	}
-	return srv, m, cwd
+	return srv, m, cwd, store, sessionDir
 }
 
 func writeSessionFile(t *testing.T, dir, id, cwd string) {

@@ -3,10 +3,14 @@ package runtime
 import (
 	"context"
 	"encoding/json"
+	"os"
 	"slices"
 
 	"pi-bridge-go/internal/protocol"
 )
+
+// navigateCommandName 是桥内跳转扩展注册的命令名（见 navigate-ext.mjs）。
+const navigateCommandName = "pi-webui-navigate"
 
 // Models 返回当前配置可用的模型列表。
 // 只投影前端需要的字段，不透传供应商私有配置。
@@ -346,4 +350,103 @@ func (w *Worker) ExportHTML(ctx context.Context, outputPath string) (string, err
 		return "", protocol.E("pi_error", "Pi 返回的导出路径无效")
 	}
 	return out.Path, nil
+}
+
+// Navigate 在会话文件内跳转叶子到 targetID（「从此处编辑」的桥侧实现）。
+//
+// Pi 的 RPC 命令表没有 navigate_tree，唯一通道是 prompt 文本命中扩展命令：
+// 桥随进程下发的桥内扩展注册 /pi-webui-navigate，命中后不发给模型、
+// 不写 transcript；结果经每 worker 一份的结果文件回传（RPC 的命令上下文
+// 不返回叶子信息，只能由扩展自己读写 sessionManager）。
+func (w *Worker) Navigate(ctx context.Context, targetID string) (NavigateReply, error) {
+	if !validEntryID(targetID) {
+		return NavigateReply{}, protocol.E("invalid_params", "条目 ID 无效")
+	}
+	w.mu.Lock()
+	if w.closing {
+		w.mu.Unlock()
+		return NavigateReply{}, protocol.E("worker_exited", "工作进程正在关闭")
+	}
+	if w.busyLocked() {
+		w.mu.Unlock()
+		return NavigateReply{}, protocol.E("busy", "会话正在运行，请先等待当前回合结束")
+	}
+	resultPath := w.navResultPath
+	w.mu.Unlock()
+	if resultPath == "" {
+		return NavigateReply{}, protocol.E("unsupported", "该实例未启用会话内跳转")
+	}
+	// 自查扩展已注册：prompt 对未知斜杠命令的兜底是「当普通消息发给模型」，
+	// 扩展缺失时盲发会把命令文本写进会话正文（比报错糟糕得多）。
+	cmds, err := w.Commands(ctx)
+	if err != nil {
+		return NavigateReply{}, err
+	}
+	registered := false
+	for _, c := range cmds {
+		if c["name"] == navigateCommandName {
+			registered = true
+			break
+		}
+	}
+	if !registered {
+		return NavigateReply{}, protocol.E("unsupported", "跳转扩展未在 Pi 中注册，请检查桥内扩展")
+	}
+	// 先清掉旧结果：扩展失败未写文件时必须报错，而不是把上一次的成功当成这次。
+	_ = os.Remove(resultPath)
+	if _, err := w.call(ctx, "prompt", map[string]any{"message": "/" + navigateCommandName + " " + targetID}, true); err != nil {
+		return NavigateReply{}, err
+	}
+	// 扩展在命令 handler 内写结果文件，handler 返回后才回 response，
+	// 因此到这里文件应当已经写好；读不到只可能是扩展未加载或版本不兼容。
+	raw, err := os.ReadFile(resultPath)
+	if err != nil {
+		return NavigateReply{}, protocol.E("pi_error", "跳转扩展未返回结果，请确认 Pi 已加载桥内扩展")
+	}
+	var out struct {
+		OK        bool    `json:"ok"`
+		NewLeafID *string `json:"newLeafId"`
+		OldLeafID *string `json:"oldLeafId"`
+		Cancelled bool    `json:"cancelled"`
+		Error     string  `json:"error"`
+	}
+	if json.Unmarshal(raw, &out) != nil {
+		return NavigateReply{}, protocol.E("pi_error", "跳转扩展返回的结果无效")
+	}
+	if !out.OK {
+		msg := out.Error
+		if msg == "" {
+			msg = "跳转失败"
+		}
+		if out.Cancelled {
+			msg = "跳转被扩展取消"
+		}
+		return NavigateReply{}, protocol.E("pi_error", msg)
+	}
+	reply := NavigateReply{}
+	if out.NewLeafID != nil {
+		reply.LeafID = *out.NewLeafID
+	}
+	if out.OldLeafID != nil {
+		reply.PreviousLeafID = *out.OldLeafID
+	}
+	return reply, nil
+}
+
+// validEntryID 校验 Pi 的条目 ID。
+// 真实 ID 是 8 位十六进制；工具调用条目带 "call_…|uuid" 形状，因此放开
+// 字母数字与 . _ - |。上限 64 与图标列表的条目 ID 长度一致。
+func validEntryID(id string) bool {
+	if id == "" || len(id) > 64 {
+		return false
+	}
+	for _, r := range id {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
+		case r == '.', r == '_', r == '-', r == '|':
+		default:
+			return false
+		}
+	}
+	return true
 }

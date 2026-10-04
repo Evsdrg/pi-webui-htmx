@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"sort"
 	"sync"
 	"sync/atomic"
@@ -38,6 +39,9 @@ type Config struct {
 	SubscriberMessages, SubscriberBytes, EventBytes        int
 	ReplayItems, ReplayBytes                               int
 	MaxDialogs                                             int
+	// NavigateExt 是桥内会话跳转扩展的绝对路径；为空表示未启用 session.navigate。
+	// NavigateResultDir 存放各 worker 的一次性结果文件（由扩展写入）。
+	NavigateExt, NavigateResultDir string
 }
 
 // Defaults 给出默认限额与超时（capabilities 的 replay 声明也引用它，见 transport）。
@@ -172,13 +176,14 @@ func (m *Manager) CheckRebindTarget(w *Worker, targetID string) error {
 }
 
 // StopSession 停止某个会话的工作进程（若在运行），返回是否真的停掉了一个。
+// force 透传给 Worker.Stop：忙中的 worker 只有 force 才会被强制停止。
 // 删除会话文件前必须调用：否则 Pi 仍持有写入路径，文件被删后它还会继续写。
-func (m *Manager) StopSession(id string) (bool, error) {
+func (m *Manager) StopSession(id string, force bool) (bool, error) {
 	w := m.workers[id]
 	if w == nil {
 		return false, nil
 	}
-	if err := w.Stop(false); err != nil {
+	if err := w.Stop(force); err != nil {
 		return true, err
 	}
 	return true, nil
@@ -447,6 +452,9 @@ type Worker struct {
 	replay       *events.Ring
 	owner        *Manager
 	store        *sessions.Store
+	// navResultPath 是本 worker 的会话跳转结果文件（扩展写入、桥读取）。
+	// 为空表示 session.navigate 未启用。
+	navResultPath string
 }
 
 // newReplayRing 按配置构造补发环。
@@ -935,6 +943,11 @@ func launch(cfg Config, cwd, file, preset string) (*Worker, error) {
 	if file != "" {
 		args = append(args, "--session", file)
 	}
+	// 桥内扩展（会话内跳转）用显式 -e 下发：它不依赖 --extensions，
+	// 在禁用扩展发现的实例上同样可用（-e 路径不受 --no-extensions 影响）。
+	if cfg.NavigateExt != "" {
+		args = append(args, "-e", cfg.NavigateExt)
+	}
 	if !cfg.Extensions {
 		args = append(args, "--no-extensions", "--no-skills", "--no-prompt-templates", "--no-themes", "--no-context-files")
 	}
@@ -945,7 +958,16 @@ func launch(cfg Config, cwd, file, preset string) (*Worker, error) {
 	args = append(args, presetArgs...)
 	cmd := exec.Command(cfg.Binary, args...)
 	cmd.Dir = cwd
-	cmd.Env = childenv.Filter(append(append(os.Environ(), cfg.Env...), "PI_CODING_AGENT_DIR="+cfg.AgentDir, "PI_OFFLINE=1", "PI_TELEMETRY=0"))
+	env := append(append(os.Environ(), cfg.Env...), "PI_CODING_AGENT_DIR="+cfg.AgentDir, "PI_OFFLINE=1", "PI_TELEMETRY=0")
+	navResultPath := ""
+	if cfg.NavigateExt != "" && cfg.NavigateResultDir != "" {
+		// 每个 worker 一份结果文件：并发 worker 共用一份会互相覆盖。
+		// 变量名不能用 PI_BRIDGE_ 前缀：childenv.Filter 会把它当作桥凭据剥掉，
+		// 子进程就再也读不到结果路径了。
+		navResultPath = filepath.Join(cfg.NavigateResultDir, hex.EncodeToString(epoch)+".json")
+		env = append(env, "PI_WEBUI_NAV_RESULT="+navResultPath)
+	}
+	cmd.Env = childenv.Filter(env)
 	if err := prepareProcess(cmd); err != nil {
 		return nil, err
 	}
@@ -995,6 +1017,7 @@ func launch(cfg Config, cwd, file, preset string) (*Worker, error) {
 		dialogOpened:   map[string]time.Time{},
 		replay:         events.NewRing(cfg.ReplayItems, int64(cfg.ReplayBytes)),
 		store:          cfg.Store,
+		navResultPath:  navResultPath,
 	}
 	w.owner = nil // 由 Manager.Start 在入表前赋值
 	w.client = pi.New(inW, outR, cfg.MaxFrame, w.event)
@@ -1039,6 +1062,10 @@ func launch(cfg Config, cwd, file, preset string) (*Worker, error) {
 		w.mu.Unlock()
 		if cfg.Metrics != nil {
 			cfg.Metrics.WorkerExited()
+		}
+		if navResultPath != "" {
+			// 结果文件只服务于活着的 worker，进程退出即清理。
+			_ = os.Remove(navResultPath)
 		}
 		close(w.done)
 	}()

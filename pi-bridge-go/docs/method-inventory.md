@@ -13,7 +13,7 @@
 | `session.subscribe`、`session.unsubscribe` | 连接资源 | peer + 固定 worker/订阅代次 | 订阅数、重放及 live 字节 |
 | `session.start` | 生命周期申请 | sessionId 恢复或 cwd 新建意图 | 启动数/期限；新建需保留请求到结果身份的关联 |
 | `session.prompt`、`session.steer`、`session.follow_up`、`session.bash` | 一次性执行 | 固定 worker | 持久 intent；接受与完成分开 |
-| `session.set_model`、`session.cycle_model`、`session.set_thinking`、`session.cycle_thinking`、`session.set_queue_mode`、`session.compact`、`session.set_auto_compaction`、`session.set_auto_retry`、`session.set_name` | 状态变更 | 固定 worker | 持久 intent；compact 独立长操作期限 |
+| `session.set_model`、`session.cycle_model`、`session.set_thinking`、`session.cycle_thinking`、`session.set_queue_mode`、`session.compact`、`session.set_auto_compaction`、`session.set_auto_retry`、`session.set_name`、`session.navigate` | 状态变更 | 固定 worker | 持久 intent；compact 独立长操作期限；navigate 经桥内扩展命令通道，忙会话拒绝 |
 | `session.new`、`session.switch`、`session.fork`、`session.clone` | 身份事务 | 源 worker + 目标预留/transition | 持久 intent、身份核验与事件边界 |
 | `config.models.write` | 持久配置变更 | 设备/配置 revision | intent、配置锁、原子写入 |
 | `sessions.delete` | 持久删除 | params.sessionId | 与 start 共用预留，不按 request.sessionId 猜目标 |

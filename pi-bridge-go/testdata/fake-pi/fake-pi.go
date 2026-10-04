@@ -133,6 +133,28 @@ func main() {
 				"messageCount": 0, "pendingMessageCount": 0, "model": nil,
 			}})
 		case "prompt":
+			// 桥的内部跳转命令：模拟「扩展命令被 prompt 分流」的效果——
+			// 不触发 agent 事件，只把结果写进 PI_WEBUI_NAV_RESULT 结果文件，
+			// 与真机上桥随进程下发的桥内扩展行为一致。
+			if strings.HasPrefix(cmd.Message, "/pi-webui-navigate ") {
+				target := strings.TrimSpace(strings.TrimPrefix(cmd.Message, "/pi-webui-navigate "))
+				out := map[string]any{"targetId": target, "ok": false}
+				switch target {
+				case "u1": // 用户消息：叶子回到它的父节点（根）。
+					out["ok"], out["newLeafId"], out["oldLeafId"] = true, nil, "a1"
+				case "a1": // 非用户消息：叶子落在目标自身。
+					out["ok"], out["newLeafId"], out["oldLeafId"] = true, "a1", "a1"
+				default:
+					out["error"] = "Entry not found: " + target
+				}
+				if path := os.Getenv("PI_WEBUI_NAV_RESULT"); path != "" {
+					if b, err := json.Marshal(out); err == nil {
+						_ = os.WriteFile(path, b, 0600)
+					}
+				}
+				emit(frame{Type: "response", ID: cmd.ID, Success: true})
+				continue
+			}
 			if script["replay_burst"] {
 				emit(frame{Type: "agent_start"})
 				emit(frame{Type: "response", ID: cmd.ID, Success: true})
@@ -187,9 +209,14 @@ func main() {
 				"sessionId": sessionID(), "userMessages": 1, "assistantMessages": 1, "totalMessages": 2, "cost": 0.1,
 			}})
 		case "get_commands":
-			emit(frame{Type: "response", ID: cmd.ID, Success: true, Data: map[string]any{"commands": []map[string]any{
-				{"name": "demo", "description": "演示", "source": "extension"},
-			}}})
+			// 桥内跳转命令由桥自己的扩展注册；FAKE_PI_NAV_UNREGISTERED=1
+			// 模拟「扩展没加载成功」——桥必须先发现这一点，绝不能把
+			// `/pi-webui-navigate …` 当普通消息发给模型。
+			cmds := []map[string]any{{"name": "demo", "description": "演示", "source": "extension"}}
+			if os.Getenv("FAKE_PI_NAV_UNREGISTERED") == "" {
+				cmds = append(cmds, map[string]any{"name": "pi-webui-navigate", "description": "桥内部命令", "source": "extension"})
+			}
+			emit(frame{Type: "response", ID: cmd.ID, Success: true, Data: map[string]any{"commands": cmds}})
 		case "get_tree":
 			// 给一棵两层的真实形状：一个分叉点 + 两个叶子。
 			// 空树会让「分支片段到底渲染成什么」无法在端到端路径上验证。

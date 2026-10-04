@@ -12,6 +12,7 @@ import (
 	"html/template"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -199,8 +200,11 @@ func mimeFor(name string) string {
 // 结果是 %d 原样输出、非字符串的 %s 静默变空——模板写错了不报错，只显示错。
 // 模板实际只用到 `printf "%s/%s" .Provider .ID`（两个字符串），
 // 内置语义完全覆盖，且支持 %d/%v/任意类型。回归见 fragments_test.go。
+//
+// workDuration 把整秒数写成中文时长（「6 秒」「1 分 17 秒」），工具行与
+// 思考行共用同一写法；Duration 为 0 时模板里的 if 已经拦掉，不会渲染。
 func funcMap() template.FuncMap {
-	return template.FuncMap{}
+	return template.FuncMap{"workDuration": formatWorkDuration}
 }
 
 // Encoding 是响应的内容编码。
@@ -601,27 +605,131 @@ type Step struct {
 	Images []int
 }
 
-// Turn 是一个完整回合：用户消息 + 过程 + 助手回复。
+// Turn 是一个完整回合：用户消息 + 按时间顺序的正文/工作段。
 // 整轮渲染是刻意的：Pi Web 按单条消息切片，往回翻页时
 // 会把已在屏幕上的 assistant 重新折进 ProcessDetailsGroup，
 // 视口内容被顶走。一个片段只含完整回合，插入位置永远在轮边界。
+//
+// 模型会在工具与思考之间穿插正文（每次工具调用后重新生成的消息里
+// 常带一段说明）。这些正文段必须留在各自的时间位置上，因此回合内容
+// 建模为 Flow 序列，而不是「全部正文拼接 + 过程集合」的两个聚合字段。
 type Turn struct {
-	ID            string
-	EntryIDs      []string
-	UserText      string
-	UserImages    []ImageBlock
-	AssistantText string
-	Error         string
-	Steps         []Step
-	HasProcess    bool
-	// Thinking 是思考占位符列表，每项自带 entry ID 与块下标。
-	// 曾经用「单个 AssistantEntryID + 合并下标」表示，于是一个回合里
-	// 多个 assistant 条目时，较早条目承载的块会按最后一个条目的 ID 去取，
-	// 既取不回原文，又可能重复出现同一段（B11）。占位符必须自己知道归属。
-	Thinking []ThinkingBlock
+	ID         string
+	EntryIDs   []string
+	UserText   string
+	UserImages []ImageBlock
+	// Flow 是回合内按时间排序的块：正文段与工作段（工具/思考）交替。
+	Flow []FlowBlock
+	// Error 是回合内最后的错误提示（自动恢复成功后被清空）。
+	Error string
 	// Usage 汇总本回合全部 assistant 条目的 token 与费用。
 	// nil 表示这一回合没有任何用量记录（例如压缩边界轮）。
 	Usage *sessions.Usage
+	// start/end 是本回合首末条目的写入时间。
+	start, end time.Time
+}
+
+// FlowBlock 是回合时间线上的一个块：一段正文，或一段连续的工作。
+type FlowBlock struct {
+	// Kind 是 "text" 或 "work"；模板按它选择渲染形态。
+	Kind string
+	// Text 是正文段的内容（Kind=="text"）。
+	Text string
+	// Items 是工作段内按时间排序的项（Kind=="work"）。
+	// 工具与思考必须共用一条时间线：先思考后调工具再思考的回合，
+	// 分两个列表渲染会把顺序拆散。
+	Items []FlowItem
+	// Summary 是工作段折叠时可见的标题行（Kind=="work"）：工具步骤数、
+	// 思考段数、失败数，时间可靠时再附上本段耗时。失败必须写进摘要——
+	// 工作段默认折叠，失败若只藏在内部，用户根本看不到。
+	Summary string
+	// start/end 是本段覆盖的时间范围：每个项的开始 ≈ 时间戳 − 该项时长
+	// （工具由请求它的 assistant 条目起算、思考由生成间隔起算），结束取
+	// 最后一项的时间戳。绝不用 IDuration 求和：同一 assistant 条目上的
+	// 多个思考块共享同一段时间，并行工具也各自覆盖同一区间，相加必然重复。
+	start, end time.Time
+}
+
+// FlowItem 是工作段里的一项，要么是工具步骤要么是思考占位符。
+type FlowItem struct {
+	Kind     string // "tool" | "thinking"
+	Step     Step
+	Thinking ThinkingBlock
+}
+
+// workBlock 返回末尾的工作段；末尾不是工作段时新开一段。
+// 相邻的工作项共用一段，直到正文段把它们隔开。
+func (t *Turn) workBlock() *FlowBlock {
+	if n := len(t.Flow); n > 0 && t.Flow[n-1].Kind == "work" {
+		return &t.Flow[n-1]
+	}
+	t.Flow = append(t.Flow, FlowBlock{Kind: "work"})
+	return &t.Flow[len(t.Flow)-1]
+}
+
+// appendText 追加一段正文；与上一段相邻时合并（模型重试等场景下，
+// 同一段话可能分条目写入，不应该出现两个气泡）。
+//
+// 两类伪影在这里被拦掉，它们都会渲染成「看不见内容的气泡」：
+//   - 纯空白文本（模型只调工具时不写正文，个别 provider 会给出空串或换行）；
+//   - 提供商的内容丢弃标记（如 "[dropped ]"，出现在文本结尾或独占整个文本）。
+func (t *Turn) appendText(text string) {
+	text = stripDroppedMarker(text)
+	if strings.TrimSpace(text) == "" {
+		return
+	}
+	if n := len(t.Flow); n > 0 && t.Flow[n-1].Kind == "text" {
+		if t.Flow[n-1].Text != "" {
+			t.Flow[n-1].Text += "\n\n"
+		}
+		t.Flow[n-1].Text += text
+		return
+	}
+	t.Flow = append(t.Flow, FlowBlock{Kind: "text", Text: text})
+}
+
+// droppedMarker 匹配提供商把模型文本丢弃后留下的占位标记。
+// 实测形态只有 "[dropped ]"（方括号 + dropped + 可选空格）；它没有语义，
+// 显示出来只会让用户以为模型输出了乱码。只在文本整体或结尾处剥离，
+// 不碰正文中间出现的疑似字样——那是内容，不是标记。
+var droppedMarker = regexp.MustCompile(`(?s)\s*\[dropped\s*\]\s*$`)
+
+func stripDroppedMarker(text string) string {
+	return droppedMarker.ReplaceAllString(text, "")
+}
+
+// appendThinking 把某个 assistant 条目承载的思考块追加到当前工作段。
+func (t *Turn) appendThinking(blocks []ThinkingBlock, at time.Time) {
+	if len(blocks) == 0 {
+		return
+	}
+	w := t.workBlock()
+	for _, b := range blocks {
+		w.Items = append(w.Items, FlowItem{Kind: "thinking", Thinking: b})
+		w.touch(at, b.Duration)
+	}
+}
+
+// appendStep 把一个工具步骤追加到当前工作段。
+func (t *Turn) appendStep(step Step, at time.Time) {
+	w := t.workBlock()
+	w.Items = append(w.Items, FlowItem{Kind: "tool", Step: step})
+	w.touch(at, step.Duration)
+}
+
+// touch 用「时间戳 − 时长 → 时间戳」扩展工作段的时间范围。
+// 零值时间戳不参与：它是「缺失」而不是 1970 年。
+func (b *FlowBlock) touch(at time.Time, durationSeconds int) {
+	if at.IsZero() {
+		return
+	}
+	start := at.Add(-time.Duration(durationSeconds) * time.Second)
+	if b.start.IsZero() || start.Before(b.start) {
+		b.start = start
+	}
+	if at.After(b.end) {
+		b.end = at
+	}
 }
 
 // ImageBlock 指向用户条目中的图片块，历史片段不包含 base64 正文。
@@ -688,7 +796,7 @@ func GroupTurns(entries []sessions.Entry) []Turn {
 			for _, index := range lazyIndexes(e.Lazy, "image") {
 				images = append(images, ImageBlock{EntryID: e.ID, BlockIndex: index})
 			}
-			turns = append(turns, Turn{ID: e.ID, EntryIDs: []string{e.ID}, UserText: e.Text, UserImages: images})
+			turns = append(turns, Turn{ID: e.ID, EntryIDs: []string{e.ID}, UserText: e.Text, UserImages: images, start: e.Timestamp, end: e.Timestamp})
 			current = len(turns) - 1
 		case sessions.KindAssistant:
 			// 每个块都带上自己的 entry ID，绝不合并到回合级的单一 ID 上。
@@ -696,53 +804,136 @@ func GroupTurns(entries []sessions.Entry) []Turn {
 			thinking := thinkingBlocks(e.ID, e.Lazy, secondsBetween(previous, e.Timestamp))
 			assistantAt = e.Timestamp
 			if current < 0 {
-				turns = append(turns, Turn{ID: e.ID, EntryIDs: []string{e.ID}, AssistantText: e.Text, Error: e.Error, Thinking: thinking, Usage: cloneUsage(e.Usage)})
-				continue
-			}
-			turns[current].EntryIDs = append(turns[current].EntryIDs, e.ID)
-			turns[current].Thinking = append(turns[current].Thinking, thinking...)
-			if e.Error != "" {
-				turns[current].Error = e.Error
-			} else if e.Text != "" {
-				turns[current].Error = ""
-			}
-			if turns[current].AssistantText != "" && e.Text != "" {
-				turns[current].AssistantText += "\n\n"
-			}
-			turns[current].AssistantText += e.Text
-			if e.Usage != nil {
-				if turns[current].Usage == nil {
-					copy := *e.Usage
-					turns[current].Usage = &copy
-				} else {
-					turns[current].Usage.Input += e.Usage.Input
-					turns[current].Usage.Output += e.Usage.Output
-					turns[current].Usage.CacheRead += e.Usage.CacheRead
-					turns[current].Usage.CacheWrite += e.Usage.CacheWrite
-					turns[current].Usage.Cost += e.Usage.Cost
+				turns = append(turns, Turn{ID: e.ID, EntryIDs: []string{e.ID}, Error: e.Error, Usage: cloneUsage(e.Usage), start: e.Timestamp, end: e.Timestamp})
+				current = len(turns) - 1
+			} else {
+				turns[current].EntryIDs = append(turns[current].EntryIDs, e.ID)
+				if e.Error != "" {
+					turns[current].Error = e.Error
+				} else if e.Text != "" {
+					turns[current].Error = ""
 				}
+				if e.Usage != nil {
+					if turns[current].Usage == nil {
+						copy := *e.Usage
+						turns[current].Usage = &copy
+					} else {
+						turns[current].Usage.Input += e.Usage.Input
+						turns[current].Usage.Output += e.Usage.Output
+						turns[current].Usage.CacheRead += e.Usage.CacheRead
+						turns[current].Usage.CacheWrite += e.Usage.CacheWrite
+						turns[current].Usage.Cost += e.Usage.Cost
+					}
+				}
+				turns[current].touch(e.Timestamp)
 			}
+			// 条目内的块顺序是 thinking 在前、text 在后；先归工作段再归正文段，
+			// 正文段一出现就把工作段封口（下一个工具/思考起新段）。
+			turns[current].appendThinking(thinking, e.Timestamp)
+			turns[current].appendText(e.Text)
 		case sessions.KindTool:
 			images := lazyIndexes(e.Lazy, "image")
 			step := Step{Kind: "工具", Detail: e.Text, EntryID: e.ID, Images: images, Name: e.ToolName, OK: !e.Failed, Duration: secondsBetween(assistantAt, e.Timestamp)}
 			if current < 0 {
-				turns = append(turns, Turn{ID: e.ID, EntryIDs: []string{e.ID}, HasProcess: true, Steps: []Step{step}})
-				previous = e.Timestamp
-				continue
+				turns = append(turns, Turn{ID: e.ID, EntryIDs: []string{e.ID}, start: e.Timestamp, end: e.Timestamp})
+				current = len(turns) - 1
+				turns[current].appendStep(step, e.Timestamp)
+			} else {
+				turns[current].EntryIDs = append(turns[current].EntryIDs, e.ID)
+				turns[current].appendStep(step, e.Timestamp)
+				turns[current].touch(e.Timestamp)
 			}
-			turns[current].EntryIDs = append(turns[current].EntryIDs, e.ID)
-			turns[current].Steps = append(turns[current].Steps, step)
-			turns[current].HasProcess = true
 		case sessions.KindCompaction:
 			// 压缩边界单独成轮，避免把摘要并进相邻回合。
-			turns = append(turns, Turn{ID: e.ID, EntryIDs: []string{e.ID}, AssistantText: e.Text})
+			turns = append(turns, Turn{ID: e.ID, EntryIDs: []string{e.ID}, start: e.Timestamp, end: e.Timestamp})
 			current = len(turns) - 1
+			turns[current].appendText(e.Text)
 		}
 		if !e.Timestamp.IsZero() {
 			previous = e.Timestamp
 		}
 	}
+	// 工作段摘要统一在聚合完成后生成：它只依赖本段已收齐的项，
+	// 逐条边收边算既更容易写错，也没有必要。
+	for i := range turns {
+		for j := range turns[i].Flow {
+			if turns[i].Flow[j].Kind == "work" {
+				turns[i].Flow[j].Summary = workSummary(&turns[i].Flow[j])
+			}
+		}
+	}
 	return turns
+}
+
+// touch 用一个条目时间戳扩展回合的时间范围。零值时间戳不参与：
+// 它是「缺失」而不是 1970 年，不能拿它把范围撑开或清零。
+func (t *Turn) touch(ts time.Time) {
+	if ts.IsZero() {
+		return
+	}
+	if t.start.IsZero() {
+		t.start = ts
+	}
+	t.end = ts
+}
+
+// workSummary 生成工作段折叠时可见的标题行。
+//
+// 措辞对齐 ZCode 的回合工作标题：「已工作 1 分 17 秒」；时间不可靠时
+// 退回「已处理」，工具/思考/失败计数保留——折叠后仍要知道里面发生了什么。
+// 耗时取本段「各项起点的最早值 → 最后一项时间戳」的时间范围，
+// 绝不累加各步 Duration——同一 assistant 上的多个思考块共享同一段时间，
+// 并行工具也各自覆盖同一区间，相加必然重复计数。
+func workSummary(w *FlowBlock) string {
+	tools, thinkings, failures := 0, 0, 0
+	for _, item := range w.Items {
+		switch item.Kind {
+		case "tool":
+			tools++
+			if !item.Step.OK {
+				failures++
+			}
+		case "thinking":
+			thinkings++
+		}
+	}
+	if tools == 0 && thinkings == 0 {
+		return ""
+	}
+	parts := []string{"已处理"}
+	if d := secondsBetween(w.start, w.end); d > 0 {
+		parts = []string{"已工作 " + formatWorkDuration(d)}
+	}
+	if tools > 0 {
+		parts = append(parts, fmt.Sprintf("%d 个工具", tools))
+	}
+	if thinkings > 0 {
+		parts = append(parts, fmt.Sprintf("%d 段思考", thinkings))
+	}
+	if failures > 0 {
+		parts = append(parts, fmt.Sprintf("%d 个失败", failures))
+	}
+	return strings.Join(parts, " · ")
+}
+
+// formatWorkDuration 把整秒数写成「N 秒」「M 分 N 秒」「H 时 M 分」。
+// 尾段为零时不出现（「2 分」而不是「2 分 0 秒」），与 ZCode 的时长写法一致。
+func formatWorkDuration(seconds int) string {
+	if seconds < 60 {
+		return fmt.Sprintf("%d 秒", seconds)
+	}
+	minutes := seconds / 60
+	if minutes < 60 {
+		if rest := seconds % 60; rest > 0 {
+			return fmt.Sprintf("%d 分 %d 秒", minutes, rest)
+		}
+		return fmt.Sprintf("%d 分", minutes)
+	}
+	hours := minutes / 60
+	if rest := minutes % 60; rest > 0 {
+		return fmt.Sprintf("%d 时 %d 分", hours, rest)
+	}
+	return fmt.Sprintf("%d 时", hours)
 }
 
 // secondsBetween 返回 to 相对于 from 的整秒数；顺序写反会得到负数，

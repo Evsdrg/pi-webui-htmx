@@ -145,6 +145,13 @@ func serve() error {
 	cfg.IdleTimeout = *idle
 	cfg.MaxWorkers = *maxWorkers
 	cfg.Metrics = metrics
+	// 会话内跳转（「从此处编辑」）依赖桥内扩展：随进程 -e 下发，结果经结果目录回传。
+	navExt, navResults, err := run.InstallNavigateExt(absolute)
+	if err != nil {
+		return err
+	}
+	cfg.NavigateExt = navExt
+	cfg.NavigateResultDir = navResults
 	files, err := workspace.NewFiles(policy, workspace.DefaultLimits())
 	if err != nil {
 		return err

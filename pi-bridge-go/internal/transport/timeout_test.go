@@ -17,7 +17,7 @@ import (
 func Test长任务命令不被默认超时砍断(t *testing.T) {
 	t.Setenv("FAKE_PI_DELAY_MS", "900")
 	t.Setenv("FAKE_PI_DELAY_METHOD", "compact,get_session_stats")
-	s, _, cwd := newTestServerTuned(t, 300*time.Millisecond)
+	s, _, cwd, _, _ := newTestServerTuned(t, 300*time.Millisecond)
 
 	var mu sync.Mutex
 	var sent [][]byte

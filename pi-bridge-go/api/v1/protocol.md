@@ -58,6 +58,7 @@ WebSocket 的 origin 白名单与同一规则对齐，否则库层（`Origin.Hos
 | `{level}` | `session.set_thinking`、`session.cycle_thinking`（返回生效后的等级） |
 | `{sessionId}` | `session.new`、`session.switch`、`session.clone` |
 | `{sessionId,text,persisted}` | `session.fork`（见下文「分支与导出」：`persisted:false` 只在当前 worker 中存在） |
+| `{leafId,previousLeafId}` | `session.navigate`（会话文件内跳转叶子；空串 `leafId` 表示根，两者相同表示目标原本就是当前叶子） |
 | `{models}` | `config.models.discover`（供应商返回）、`config.catalog`（models.dev） |
 | `{providers,modelCount}` | `config.models`（`providers` 是脱敏后的用户文档子树，形状由用户的 models.json 决定） |
 | `{id,name,provider}` / `{id,provider,thinkingLevel}` | `session.set_model` / `session.cycle_model`（后者把生效后的思考等级一并返回） |
@@ -93,7 +94,7 @@ WebSocket 的 origin 白名单与同一规则对齐，否则库层（`Origin.Hos
 | 模型 | `session.models`、`session.set_model`、`session.cycle_model`、`session.thinking_levels`、`session.set_thinking`、`session.cycle_thinking` |
 | 工具预设 | `session.start` 的 `toolPreset` 参数（`chat-only`/`read-only`/`default`/`full`），见第 5 节 |
 | 压缩与重试 | `session.compact`、`session.set_auto_compaction`、`session.set_auto_retry`、`session.abort_retry` |
-| 分支 | `session.new`、`session.switch`、`session.fork`、`session.clone`、`session.tree`、`session.fork_messages`、`session.entries` |
+| 分支 | `session.new`、`session.switch`、`session.fork`、`session.clone`、`session.navigate`、`session.tree`、`session.fork_messages`、`session.entries` |
 | bash | `session.bash`、`session.abort_bash`、`session.bash_output` |
 | 扩展对话 | `session.ui_response`、`session.pending_dialogs`、`session.ext_status` |
 | 终端 | `terminal.open`、`terminal.input`、`terminal.resize`、`terminal.close`、`terminal.list` |
@@ -101,6 +102,8 @@ WebSocket 的 origin 白名单与同一规则对齐，否则库层（`Origin.Hos
 | 其他 | `session.stats`、`session.set_name`、`session.last_assistant`、`session.commands`、`session.export_html`、`sessions.search`、`sessions.delete` |
 
 `session.export_html` 是**磁盘投影**：不要求活动 worker，也不调用 Pi 的 `export_html`——桥直接从 JSONL 生成自包含 HTML（无脚本、单文件 ≤ 64 MiB、写入用临时文件加改名，目录 32 个 / 256 MiB 上限）。Pi 自己的 `export_html` 仍被 `/ui/system` 与 `/ui/tools` 用来取 `systemPrompt`/`tools`。
+
+`session.navigate` 在**同一个会话文件内**把叶子移到指定条目（「从此处编辑」），不派生新会话、不复制历史：目标是 user 消息时叶子回到它的父节点（随后发送的新消息就从这个位置分叉），非 user 条目时叶子落在目标自身。运行中的会话（streaming/压缩/等待输入）会被拒绝为 `busy`。它经桥内下发的 Pi 扩展命令通道实现（`prompt` 命中扩展命令，不发给模型、不写 transcript）；实例未随进程下发该扩展时返回错误而不是静默无效。返回的 `leafId`（空串为根）供 UI 重画分支视图；想开新会话仍用 `session.fork`。删除会话时 `sessions.delete` 的 `force` 语义与 `session.stop` 相同：忙会话不带 force 报 `busy`，带 force 先强制停 worker 再删文件。
 | 模型配置 | `config.models`、`config.models.raw`、`config.models.write`、`config.models.discover`、`config.models.test`、`config.catalog` |
 | 资源清单 | `config.packages`、`config.settings`、`config.trust` |
 

@@ -225,14 +225,15 @@ func Test详情数字格式对齐(t *testing.T) {
 	}
 }
 
-// 「编辑并重发」只对用户消息有意义：它把原消息文本放回输入框。
-// 对 assistant 条目提供它没有语义（Pi 的 fork 只接受用户 entry），
+// 「从此处编辑」与「新建会话」只对用户消息有意义：前者在会话内跳回该处
+// 继续编辑，后者把原消息文本复制进新会话的输入框。
+// 对 assistant 条目提供它们没有语义（Pi 的 fork/navigate 只接受用户 entry），
 // 而且会把「改写我的提问」误导成「改写 AI 的回答」。
 //
-// 注意回合结构：assistant 条目会并进前一个用户轮，所以「没有 fork 按钮」
+// 注意回合结构：assistant 条目会并进前一个用户轮，所以「没有这两个按钮」
 // 只能出现在两种位置——并进用户轮的 assistant 文本（按钮属于该用户轮），
 // 以及没有任何 user 锚点的孤儿 assistant 轮。
-func Test编辑并重发只出现在用户轮(t *testing.T) {
+func Test编辑按钮只出现在用户轮(t *testing.T) {
 	renderer := testRenderer(t)
 	html, err := renderer.RenderHistory("s1", sessions.Page{
 		Entries: []json.RawMessage{
@@ -247,19 +248,22 @@ func Test编辑并重发只出现在用户轮(t *testing.T) {
 		t.Fatalf("渲染失败：%v", err)
 	}
 	if got := strings.Count(html, `data-action="fork"`); got != 1 {
-		t.Fatalf("只应有一个用户轮带「编辑并重发」，实际 %d：%s", got, html)
+		t.Fatalf("只应有一个用户轮带「新建会话」，实际 %d：%s", got, html)
+	}
+	if got := strings.Count(html, `data-action="edit-here"`); got != 1 {
+		t.Fatalf("只应有一个用户轮带「从此处编辑」，实际 %d：%s", got, html)
 	}
 	// 孤儿 assistant 轮必须只有复制按钮。
 	block := turnBlock(t, html, "a0")
-	if strings.Contains(block, `data-action="fork"`) {
-		t.Fatalf("助手轮不应有「编辑并重发」：%s", block)
+	if strings.Contains(block, `data-action="fork"`) || strings.Contains(block, `data-action="edit-here"`) {
+		t.Fatalf("助手轮不应有编辑/新建按钮：%s", block)
 	}
 	if !strings.Contains(block, `data-action="copy-turn"`) {
 		t.Fatalf("助手轮应保留复制按钮：%s", block)
 	}
-	// 用户轮两者都有。
+	// 用户轮三者都有。
 	block = turnBlock(t, html, "u1")
-	for _, want := range []string{`data-action="fork"`, `data-action="copy-turn"`} {
+	for _, want := range []string{`data-action="edit-here"`, `data-action="fork"`, `data-action="copy-turn"`} {
 		if !strings.Contains(block, want) {
 			t.Fatalf("用户轮应含 %s：%s", want, block)
 		}
