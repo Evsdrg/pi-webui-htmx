@@ -10,7 +10,7 @@
 /* ==== 模型树 ==== */
 /* 模型行比 provider 行缩进一级；Pi Web 用 padding-left:26px。 */
 .models-indent { padding-left:26px; }
-.models-tag { font-size:9px; font-weight:600; color:var(--accent); border:1px solid var(--border); border-radius:3px; padding:0 3px; }
+.models-tag { font-size:9px; font-weight:600; color:var(--accent); border:1px solid var(--border); border-radius:0; padding:0 3px; }
 .is-grow { flex:1; }
 /* 标识类输入（provider 名、Base URL、密钥、model id、上下文窗口等）用等宽，
    便于逐字符核对。此前这个类被引用却无定义，输入框一直不是等宽。 */
@@ -27,7 +27,7 @@
 .tl-row[data-thinking-level=high] { --tl-color:var(--tl-high); }
 .tl-row[data-thinking-level=xhigh] { --tl-color:var(--tl-xhigh); }
 .tl-row[data-thinking-level=max] { --tl-color:var(--tl-max); }
-.tl-row { display:flex; align-items:center; gap:6px; padding:2px 3px; border:1px solid transparent; border-radius:5px; }
+.tl-row { display:flex; align-items:center; gap:6px; padding:2px 3px; border:1px solid transparent; border-radius:0; }
 .tl-id { display:flex; align-items:center; gap:4px; flex:0 0 56px; }
 .tl-dot { width:5px; height:5px; border-radius:50%; background:var(--tl-color,var(--text-dim)); flex:0 0 auto; }
 /* 禁用态：点变暗、名字加删除线——和 Pi Web 一致，让人一眼看出这一级被关掉了。 */
@@ -35,7 +35,7 @@
 .tl-row[data-state=null] .tl-name { color:var(--text-dim); text-decoration:line-through; }
 .tl-name { color:var(--text-muted); font-family:var(--font-mono); font-size:10px; }
 /* 分段按钮与自定义输入共用一套外形：5px 圆角、细边框、10px 字。 */
-.tl-seg,.tl-custom { display:flex; flex:0 0 auto; border:1px solid var(--border); border-radius:5px; overflow:hidden; }
+.tl-seg,.tl-custom { display:flex; flex:0 0 auto; border:1px solid var(--border); border-radius:0; overflow:hidden; }
 .tl-custom { transition:border-color .1s; }
 .tl-row[data-state=string] .tl-custom { border-color:var(--accent); }
 .tl-btn { padding:2px 7px; border:0; background:var(--bg-panel); color:var(--text-dim); cursor:pointer; font-size:10px; line-height:1.5; white-space:nowrap; transition:background .1s,color .1s; }
@@ -64,13 +64,13 @@
 .config-footer .status { flex:1 1 auto; min-width:0; color:var(--text-dim); font-size:11px; }
 
 /* ==== JSON 源码编辑与模型发现 ==== */
-.config-editor { width:100%; min-height:280px; font-family:var(--font-mono, ui-monospace, monospace); font-size:12px; line-height:1.5; padding:10px; border:1px solid var(--border); border-radius:8px; background:var(--bg-subtle); color:var(--text); resize:vertical; }
-.discover-result { font-size:12px; color:var(--text-muted); max-height:220px; overflow:auto; border:1px solid var(--border); border-radius:8px; padding:8px 10px; }
+.config-editor { width:100%; min-height:280px; font-family:var(--font-mono, ui-monospace, monospace); font-size:12px; line-height:1.5; padding:10px; border:1px solid var(--border); border-radius:0; background:var(--bg-subtle); color:var(--text); resize:vertical; }
+.discover-result { font-size:12px; color:var(--text-muted); max-height:220px; overflow:auto; border:1px solid var(--border); border-radius:0; padding:8px 10px; }
 .discover-list { margin:6px 0 0; padding-left:18px; }
 .discover-list li { font-size:12px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 /* 模型目录候选（B70）：整行可点，点击后由前端把参数填进表单。 */
 .catalog-list { list-style:none; margin:6px 0 0; padding:0; display:grid; gap:2px; }
-.catalog-item { display:flex; gap:8px; align-items:baseline; width:100%; padding:3px 6px; border:1px solid transparent; border-radius:5px; background:transparent; color:inherit; font:inherit; text-align:left; cursor:pointer; }
+.catalog-item { display:flex; gap:8px; align-items:baseline; width:100%; padding:3px 6px; border:1px solid transparent; border-radius:0; background:transparent; color:inherit; font:inherit; text-align:left; cursor:pointer; }
 .catalog-item:hover { background:var(--bg-selected); }
 .catalog-id { font-family:var(--font-mono); font-size:11px; flex:0 0 auto; }
 .catalog-meta { font-size:11px; color:var(--text-muted); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
