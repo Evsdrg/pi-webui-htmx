@@ -540,7 +540,12 @@ func (s *Server) serveUIFragments(w http.ResponseWriter, r *http.Request, encodi
 			if err != nil {
 				return "", err
 			}
-			return s.ui.RenderPackages(packageRows(pkgs))
+			// 扩展文件清单是补充信息：读不到目录不该让整块清单失败。
+			exts, extErr := s.piConfig.Extensions()
+			if extErr != nil {
+				exts = nil
+			}
+			return s.ui.RenderPackages(packageRows(pkgs), extensionRows(exts))
 		})
 
 	case path == "/ui/files":
@@ -638,7 +643,7 @@ func (s *Server) serveUIFragments(w http.ResponseWriter, r *http.Request, encodi
 			if err != nil {
 				return "", err
 			}
-			return s.ui.RenderSystem(value.SystemPrompt)
+			return s.ui.RenderSystem(presentation.SystemData{Prompt: value.SystemPrompt, Source: value.Source})
 		})
 
 	case path == "/ui/tools":
@@ -647,7 +652,7 @@ func (s *Server) serveUIFragments(w http.ResponseWriter, r *http.Request, encodi
 			if err != nil {
 				return "", err
 			}
-			return s.ui.RenderTools(value.Tools)
+			return s.ui.RenderTools(value.Tools, value.Source)
 		})
 
 	case path == "/ui/stats":
@@ -981,6 +986,14 @@ func fileRows(entries []workspace.Entry) []presentation.FileRow {
 	rows := make([]presentation.FileRow, 0, len(entries))
 	for _, e := range entries {
 		rows = append(rows, presentation.FileRow{Name: e.Name, Path: e.Path, IsDir: e.IsDir, Size: e.Size})
+	}
+	return rows
+}
+
+func extensionRows(exts []management.ExtensionFile) []presentation.ExtensionRow {
+	rows := make([]presentation.ExtensionRow, 0, len(exts))
+	for _, e := range exts {
+		rows = append(rows, presentation.ExtensionRow{Name: e.Name, Path: e.Path})
 	}
 	return rows
 }

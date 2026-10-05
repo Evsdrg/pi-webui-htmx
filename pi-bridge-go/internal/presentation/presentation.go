@@ -1047,9 +1047,16 @@ type PackageRow struct {
 	Error     string
 }
 
+// ExtensionRow 是随 Pi 自动加载的扩展文件（不是 npm 包）。
+type ExtensionRow struct {
+	Name string
+	Path string
+}
+
 // PackagesData 驱动资源清单。
 type PackagesData struct {
-	Packages []PackageRow
+	Packages   []PackageRow
+	Extensions []ExtensionRow
 }
 
 // RenderPackages 渲染已安装资源清单。
@@ -1057,8 +1064,8 @@ type PackagesData struct {
 // 入参是具名行而不是 map：这两层之间曾经靠 map 传递，调用方用 JSON 往返
 // 把结构体转成 map，这里再按键取值拼回类型——绕一圈没有任何收益，
 // 而且键名拼错只会在渲染时表现为空白。类型化入参让编译器做这件事。
-func (r *Renderer) RenderPackages(packages []PackageRow) (string, error) {
-	return r.execute("packages.html", PackagesData{Packages: packages})
+func (r *Renderer) RenderPackages(packages []PackageRow, extensions []ExtensionRow) (string, error) {
+	return r.execute("packages.html", PackagesData{Packages: packages, Extensions: extensions})
 }
 
 // FileRow 是文件浏览的一行。

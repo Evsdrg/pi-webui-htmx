@@ -42,6 +42,9 @@ type Config struct {
 	// NavigateExt 是桥内会话跳转扩展的绝对路径；为空表示未启用 session.navigate。
 	// NavigateResultDir 存放各 worker 的一次性结果文件（由扩展写入）。
 	NavigateExt, NavigateResultDir string
+	// CaptureExt 是桥内「实际载荷捕获」扩展的绝对路径；为空表示未启用。
+	// CaptureResultDir 是各 worker 按会话 id 写入的捕获结果目录（由扩展写入）。
+	CaptureExt, CaptureResultDir string
 }
 
 // Defaults 给出默认限额与超时（capabilities 的 replay 声明也引用它，见 transport）。
@@ -455,6 +458,9 @@ type Worker struct {
 	// navResultPath 是本 worker 的会话跳转结果文件（扩展写入、桥读取）。
 	// 为空表示 session.navigate 未启用。
 	navResultPath string
+	// captureResultDir 是本 worker 的运行时捕获结果目录（按会话 id 命名文件）。
+	// 为空表示未启用捕获，/ui/system 与 /ui/tools 回退到 export_html 基线。
+	captureResultDir string
 }
 
 // newReplayRing 按配置构造补发环。
@@ -948,6 +954,10 @@ func launch(cfg Config, cwd, file, preset string) (*Worker, error) {
 	if cfg.NavigateExt != "" {
 		args = append(args, "-e", cfg.NavigateExt)
 	}
+	// 桥内捕获扩展同样用显式 -e 下发（不受 --no-extensions 影响）。
+	if cfg.CaptureExt != "" {
+		args = append(args, "-e", cfg.CaptureExt)
+	}
 	if !cfg.Extensions {
 		args = append(args, "--no-extensions", "--no-skills", "--no-prompt-templates", "--no-themes", "--no-context-files")
 	}
@@ -966,6 +976,10 @@ func launch(cfg Config, cwd, file, preset string) (*Worker, error) {
 		// 子进程就再也读不到结果路径了。
 		navResultPath = filepath.Join(cfg.NavigateResultDir, hex.EncodeToString(epoch)+".json")
 		env = append(env, "PI_WEBUI_NAV_RESULT="+navResultPath)
+	}
+	if cfg.CaptureExt != "" && cfg.CaptureResultDir != "" {
+		// 按会话 id 写入结果目录，扩展与桥对同一份目录达成一致。
+		env = append(env, "PI_WEBUI_CAPTURE_DIR="+cfg.CaptureResultDir)
 	}
 	cmd.Env = childenv.Filter(env)
 	if err := prepareProcess(cmd); err != nil {
@@ -1018,6 +1032,9 @@ func launch(cfg Config, cwd, file, preset string) (*Worker, error) {
 		replay:         events.NewRing(cfg.ReplayItems, int64(cfg.ReplayBytes)),
 		store:          cfg.Store,
 		navResultPath:  navResultPath,
+	}
+	if cfg.CaptureExt != "" && cfg.CaptureResultDir != "" {
+		w.captureResultDir = cfg.CaptureResultDir
 	}
 	w.owner = nil // 由 Manager.Start 在入表前赋值
 	w.client = pi.New(inW, outR, cfg.MaxFrame, w.event)

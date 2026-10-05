@@ -138,6 +138,7 @@ TimeoutStopSec=30
 | RPC 只按 LF 分帧（可接受 CRLF） | U+2028/U+2029 不切行；外部 requestId 与内部 RPC id 相互独立 |
 | `models` 是数组，`api` 是协议标识 | `baseUrl` 才是 HTTP 地址；读、脱敏、恢复、校验共用同一 schema |
 | RPC 命令表没有树跳转 | `session.navigate` 走桥内扩展命令通道：桥随进程 `-e` 下发 `navigate-ext.mjs`（显式路径不受 `--no-extensions` 影响），`prompt("/pi-webui-navigate <id>")` 被扩展命令分流截获、不发给模型；RPC 的命令上下文不返回叶子，结果由扩展经 `PI_WEBUI_NAV_RESULT` 结果文件回传（每 worker 一份，变量名不能带 `PI_BRIDGE_` 前缀——`childenv.Filter` 会把它当凭据剥掉）。发命令前先核对 `get_commands` 已注册：prompt 对未知斜杠命令的兜底是**当普通消息发给模型**，会把命令文本写进会话正文 |
+| 快照里的系统提示词是基线 | `export_html` 抓到的是扩展改写**之前**的 `AgentState.systemPrompt`（Pi 每轮结束会复位）。真正下发给模型的那份由桥内 `capture-ext.mjs` 在 `before_provider_request` 落盘（按 `PI_WEBUI_CAPTURE_DIR/<sessionId>.json`）；`-e` 扩展运行在其它扩展**之前**，故同步读取会漏掉其后的改写，统一用 `setImmediate` 延迟读取、并在 `agent_settled` 兜底。MC 子代理是独立进程（`--no-session`），不会写进主会话的捕获文件 |
 
 ## 模型配置与执行边界
 

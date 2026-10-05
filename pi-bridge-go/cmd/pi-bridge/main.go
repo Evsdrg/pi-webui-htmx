@@ -152,6 +152,14 @@ func serve() error {
 	}
 	cfg.NavigateExt = navExt
 	cfg.NavigateResultDir = navResults
+	// 运行时载荷捕获（/ui/system、/ui/tools 显示真正下发给模型的提示词与工具）：
+	// 同一套桥内扩展机制，随进程 -e 下发，结果按会话 id 写入结果目录。
+	captureExt, captureResults, err := run.InstallCaptureExt(absolute)
+	if err != nil {
+		return err
+	}
+	cfg.CaptureExt = captureExt
+	cfg.CaptureResultDir = captureResults
 	files, err := workspace.NewFiles(policy, workspace.DefaultLimits())
 	if err != nil {
 		return err

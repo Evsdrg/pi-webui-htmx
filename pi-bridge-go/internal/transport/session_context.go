@@ -68,14 +68,34 @@ func (c *sessionContextCache) put(sessionID, epoch string, value presentation.Se
 
 // sessionContext 取回会话的系统提示词与工具定义。
 //
-// 这不是一次"查询"：Pi 的 RPC 没有暴露这两项的命令，唯一带着它们的出口是
-// export_html（它把 AgentState 的 systemPrompt/tools 写进 HTML）。因此桥导出
-// 到自己的临时目录、读回、删掉临时文件——不让这类内部产物出现在导出目录里，
-// 也就不会被 /ui/exports 下载到。
+// 两个来源，按可信度排序：
+//  1. 桥内捕获扩展记录的「实际下发给模型」的载荷（扩展改写之后）——每轮 provider
+//     请求后刷新，是真正发出去的那份。export_html 拿不到它，因为 Pi 每轮结束都会
+//     把 AgentState.systemPrompt 复位成基线。
+//  2. export_html 快照里的基线（扩展改写之前）——仅用于尚未产生任何请求的新会话，
+//     返回值标成 baseline，面板据此如实标注。
+//
+// 走 export_html 不是一次"查询"：Pi 的 RPC 没有暴露这两项的命令，唯一带着它们的
+// 出口是 export_html。因此桥导出到自己的临时目录、读回、删掉临时文件——不让这类
+// 内部产物出现在导出目录里，也就不会被 /ui/exports 下载到。
 func (s *Server) sessionContext(ctx context.Context, sessionID string) (presentation.SessionContext, error) {
 	worker, err := s.manager.Get(sessionID)
 	if err != nil {
 		return presentation.SessionContext{}, err
+	}
+	if captured, ok := worker.CapturedRequest(sessionID); ok {
+		tools := make([]presentation.ToolInfo, 0, len(captured.Tools))
+		for _, tool := range captured.Tools {
+			if tool.Name == "" {
+				continue
+			}
+			tools = append(tools, presentation.ToolInfo{
+				Name:        tool.Name,
+				Description: strings.TrimSpace(tool.Description),
+				Parameters:  tool.Parameters,
+			})
+		}
+		return presentation.SessionContext{SystemPrompt: captured.SystemPrompt, Tools: tools, Source: "request"}, nil
 	}
 	epoch := worker.Info().Epoch
 	if cached, ok := s.sessionContexts.get(sessionID, epoch); ok {
@@ -98,6 +118,7 @@ func (s *Server) sessionContext(ctx context.Context, sessionID string) (presenta
 	if err != nil {
 		return presentation.SessionContext{}, err
 	}
+	value.Source = "baseline"
 	s.sessionContexts.put(sessionID, epoch, value)
 	return value, nil
 }

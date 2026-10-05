@@ -121,7 +121,7 @@
     <section id="panel-system" class="top-panel" hidden>
       <button class="icon-btn panel-close" type="button" data-action="panel-system-close" aria-label="关闭系统面板">×</button>
       <input type="hidden" id="system-session" name="sessionId" value="">
-      <div id="system-body" hx-sync="this:replace" hx-get="ui/system" hx-trigger="system-refresh from:body" hx-include="#system-session" hx-swap="innerHTML" title="Pi 的 RPC 不直接暴露系统提示词；此处内容来自一次按需导出的会话快照。"><p class="muted">打开时读取。</p></div>
+      <div id="system-body" hx-sync="this:replace" hx-get="ui/system" hx-trigger="system-refresh from:body" hx-include="#system-session" hx-swap="innerHTML" title="优先显示桥内捕获扩展记录的、实际下发给模型的系统提示词；尚未运行过则回退到 Pi 会话快照的基线。"><p class="muted">打开时读取。</p></div>
     </section>
     <section id="panel-mc" class="top-panel" hidden>
       <button class="icon-btn panel-close" type="button" data-action="panel-mc-close" aria-label="关闭记忆面板">×</button>
@@ -265,10 +265,10 @@
           </section>
           {{/* 扩展 */}}
           <section class="config-detail-stack" data-settings-panel="extensions" hidden>
-            <div class="config-detail-header"><h3 class="config-detail-title">已安装的包</h3>
+            <div class="config-detail-header"><h3 class="config-detail-title">已安装的插件与扩展</h3>
               <div class="config-actions"><button class="config-btn" type="button" data-action="packages-refresh">重新读取</button></div>
             </div>
-            <p class="config-note">清单来自桥所在机器的 Pi 配置。包由 Pi 自己加载，这里只做展示；安装与卸载请直接改 <code>settings.json</code> 的 <code>packages</code>。</p>
+            <p class="config-note">清单来自桥所在机器的 Pi 配置，由 Pi 自己加载，这里只做展示。包（<code>settings.json</code> 的 <code>packages</code>）的安装与卸载请直接改配置；<code>extensions/</code> 目录下的扩展文件由 Pi 自动加载。</p>
             <div id="packages-slot" hx-get="ui/packages" hx-trigger="packages-refresh from:body"><p class="config-empty">正在读取已安装清单…</p></div>
           </section>
         </div>

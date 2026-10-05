@@ -1,4 +1,6 @@
-{{/* 已安装资源清单：只读，不含安装/更新操作 */}}
+{{/* 已安装资源清单：只读，不含安装/更新操作。
+     分两块：settings.json 里的包（packages 数组），以及 <agent-dir>/extensions
+     下由 Pi 自动加载的扩展文件——后者不在 packages 里，只看包清单会漏掉本地扩展。 */}}
 <table class="packages" data-packages-loaded>
   <thead><tr><th>名称</th><th>来源</th><th>已安装</th><th>最新</th><th>状态</th></tr></thead>
   <tbody>
@@ -19,3 +21,15 @@
   {{end}}
   </tbody>
 </table>
+{{if .Extensions}}
+<h4 class="config-detail-title">自动加载的扩展文件</h4>
+<p class="config-note">来自 Pi 的 <code>extensions/</code> 目录，随工作进程自动加载，不在 <code>settings.json</code> 的 <code>packages</code> 里。</p>
+<table class="packages" data-extensions-loaded>
+  <thead><tr><th>名称</th><th>路径</th></tr></thead>
+  <tbody>
+  {{range .Extensions}}
+  <tr><td>{{.Name}}</td><td class="muted"><code>{{.Path}}</code></td></tr>
+  {{end}}
+  </tbody>
+</table>
+{{end}}

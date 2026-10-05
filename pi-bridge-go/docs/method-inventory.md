@@ -35,7 +35,7 @@
 | GET `/api/v1/sessions`、`/api/v1/sessions/{id}/history` | Store 只读 | 目录/字节/并发/取消；0 worker |
 | GET `/`、`/assets/*` | UI 外壳/资产 | 同一构建代次、缓存/压缩、路径限制 |
 | GET `/ui/sessions`、`/ui/sessions/{id}/history`、`/ui/sessions/{id}/lazy` | Store + presentation | 与 JSON API 同一读取服务，不能单独绕过扫描预算 |
-| GET `/ui/models`、`/ui/packages` | management + presentation | 配置域/出站读取预算；packages 不是本地廉价操作 |
+| GET `/ui/models`、`/ui/packages` | management + presentation | 配置域/出站读取预算；packages 不是本地廉价操作（含 npm 查询）；另列 `<agent-dir>/extensions` 下自动加载的扩展文件（只读目录结构） |
 | POST `/ui/models/discover`、`/ui/models/test` | management + presentation | 复用出站策略与全局操作槽；64KiB表单，认证/Host/Origin先于路由，拒绝打码/命令型凭据 |
 | GET `/ui/dirs`、`/ui/mc`、`/ui/mc/content` | workspace / magiccontext + presentation | 目录沙箱；记忆只读、正文65536字符上限、分页动作服务端生成 |
 | GET `/ui/files`、`/ui/file-image`、`/ui/diff` | workspace + presentation | 文件沙箱、实际 reader 上限、Git runner |

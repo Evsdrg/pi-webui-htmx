@@ -38,6 +38,11 @@ type ToolInfo struct {
 type SessionContext struct {
 	SystemPrompt string
 	Tools        []ToolInfo
+	// Source 标记这两项来自哪里：
+	//   "request"  —— 桥内捕获扩展记录的「实际下发给模型」的载荷（扩展改写之后）
+	//   "baseline" —— export_html 快照里的基线（扩展改写之前，Pi 每轮会复位）
+	// 面板据此如实标注，避免把基线误当成真正下发的内容。
+	Source string
 }
 
 // ParseSessionContext 从导出的 HTML 里取回系统提示词与工具定义。
@@ -100,10 +105,12 @@ type ToolView struct {
 // 状态，不该为它再发一次请求（那会重新导出一次会话快照）。
 type ToolsData struct {
 	Tools []ToolView
+	// Source 同 SessionContext.Source，供模板如实标注来源。
+	Source string
 }
 
 // RenderTools 渲染工具定义片段。
-func (r *Renderer) RenderTools(tools []ToolInfo) (string, error) {
+func (r *Renderer) RenderTools(tools []ToolInfo, source string) (string, error) {
 	views := make([]ToolView, 0, len(tools))
 	for _, tool := range tools {
 		views = append(views, ToolView{
@@ -112,7 +119,7 @@ func (r *Renderer) RenderTools(tools []ToolInfo) (string, error) {
 			Params:      toolParams(tool.Parameters),
 		})
 	}
-	return r.execute("tools.html", ToolsData{Tools: views})
+	return r.execute("tools.html", ToolsData{Tools: views, Source: source})
 }
 
 // toolParams 从 JSON Schema 里挑出顶层属性。
@@ -239,9 +246,11 @@ func sortStrings(values []string) {
 // SystemData 驱动系统提示词片段。
 type SystemData struct {
 	Prompt string
+	// Source 同 SessionContext.Source：request=实际下发，baseline=扩展改写前基线。
+	Source string
 }
 
 // RenderSystem 渲染系统提示词片段。
-func (r *Renderer) RenderSystem(prompt string) (string, error) {
-	return r.execute("system.html", SystemData{Prompt: prompt})
+func (r *Renderer) RenderSystem(data SystemData) (string, error) {
+	return r.execute("system.html", data)
 }

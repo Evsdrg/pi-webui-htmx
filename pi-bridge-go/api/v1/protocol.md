@@ -101,7 +101,7 @@ WebSocket 的 origin 白名单与同一规则对齐，否则库层（`Origin.Hos
 | 文件与 Git | `files.list`、`files.index`、`files.stat`、`files.read`、`files.image`、`files.roots`、`git.status`、`git.diff` |
 | 其他 | `session.stats`、`session.set_name`、`session.last_assistant`、`session.commands`、`session.export_html`、`sessions.search`、`sessions.delete` |
 
-`session.export_html` 是**磁盘投影**：不要求活动 worker，也不调用 Pi 的 `export_html`——桥直接从 JSONL 生成自包含 HTML（无脚本、单文件 ≤ 64 MiB、写入用临时文件加改名，目录 32 个 / 256 MiB 上限）。Pi 自己的 `export_html` 仍被 `/ui/system` 与 `/ui/tools` 用来取 `systemPrompt`/`tools`。
+`session.export_html` 是**磁盘投影**：不要求活动 worker，也不调用 Pi 的 `export_html`——桥直接从 JSONL 生成自包含 HTML（无脚本、单文件 ≤ 64 MiB、写入用临时文件加改名，目录 32 个 / 256 MiB 上限）。`/ui/system` 与 `/ui/tools` 优先读桥内捕获扩展落盘的**实际下发载荷**，仅在尚未产生请求时回退到 Pi 自己的 `export_html`（取基线的 `systemPrompt`/`tools`）。
 
 `session.navigate` 在**同一个会话文件内**把叶子移到指定条目（「从此处编辑」），不派生新会话、不复制历史：目标是 user 消息时叶子回到它的父节点（随后发送的新消息就从这个位置分叉），非 user 条目时叶子落在目标自身。运行中的会话（streaming/压缩/等待输入）会被拒绝为 `busy`。它经桥内下发的 Pi 扩展命令通道实现（`prompt` 命中扩展命令，不发给模型、不写 transcript）；实例未随进程下发该扩展时返回错误而不是静默无效。返回的 `leafId`（空串为根）供 UI 重画分支视图；想开新会话仍用 `session.fork`。删除会话时 `sessions.delete` 的 `force` 语义与 `session.stop` 相同：忙会话不带 force 报 `busy`，带 force 先强制停 worker 再删文件。
 | 模型配置 | `config.models`、`config.models.raw`、`config.models.write`、`config.models.discover`、`config.models.test`、`config.catalog` |
@@ -216,17 +216,31 @@ POST /ui/models/discover、/ui/models/test
 
 ### 系统提示词与工具定义
 
-Pi 的 RPC **没有**暴露这两项的命令（`rpc-mode` 的命令表里 `get_state` 只给模型/思考等级/流式状态/会话文件，没有 `systemPrompt` 也没有 `tools`）。唯一带着它们的出口是 `export_html`：它把 `AgentState` 的 `systemPrompt` 与 `tools` 一并写进导出 HTML 内嵌的 `<script id="session-data">`（base64 编码的 JSON，字段 `header/entries/leafId/systemPrompt/tools`）。
+Pi 的 RPC **没有**暴露这两项的命令（`rpc-mode` 的命令表里 `get_state` 只给模型/思考等级/流式状态/会话文件，没有 `systemPrompt` 也没有 `tools`）。两个来源按可信度排序。
+
+**首选：桥内捕获扩展**。桥随进程 `-e` 下发一个内部扩展，它在每次 provider 请求前
+（`before_provider_request`）把**真正下发给模型**的载荷落盘，按会话 id 分成
+`<captureDir>/<sessionId>.json`（`systemPrompt` + `tools`，先写 `.tmp` 再改名）。这是
+扩展改写**之后**的那份——Pi 每轮结束会把 `AgentState.systemPrompt` 复位成基线，所以
+下面那条 `export_html` 路径拿不到它。捕获文件是幂等快照，读到旧值也只反映上一次请求；
+尚未产生任何请求时读不到，回退到基线。
+
+**回退：export_html 快照**。它把 `AgentState` 的 `systemPrompt` 与 `tools` 写进导出
+HTML 内嵌的 `<script id="session-data">`（base64 编码的 JSON，字段
+`header/entries/leafId/systemPrompt/tools`）——但那是**扩展改写之前**的基线。
 
 ```text
-GET /ui/system?sessionId=ID     系统提示词（含按工具集重建的规则段与扩展追加部分）
+GET /ui/system?sessionId=ID     系统提示词（默认显示运行时捕获的实际下发版本）
 GET /ui/tools?sessionId=ID      当前实际暴露给模型的工具：name/description/parameters
 ```
 
-- 桥按需导出一次到**自己的临时目录**（不是导出目录，避免内部产物被 `/ui/exports` 下载），读回后立即删除。
-- 结果按 `(sessionId, epoch)` 缓存 120 秒、上限 8 条。epoch 变化（fork/clone/切换身份）即失效；不缓存就等于每开一次面板都重导一次完整会话。
-- `tools` 是 `AgentState.tools`，也就是**实际生效**的工具集合，受启动时的工具预设与扩展追加影响，不是"全部可用工具目录"。
-- 两个端点都需要活动 worker（`systemPrompt`/`tools` 只存在于活的 Pi 进程里，JSONL 不含它们）。导出超过 64 MiB（`limit_exceeded`）或模板里找不到数据块时明确失败，不静默返回空面板。
+- 两个端点都需要活动 worker（`systemPrompt`/`tools` 只存在于活的 Pi 进程里，JSONL 不含它们）。
+- 面板顶部标注来源：`request`（运行时捕获的实际下发载荷）或 `baseline`（Pi 快照基线）。
+  标成基线时提示用户「在本会话运行一次后会显示实际下发的版本」。
+- 回退路径按需导出一次到**自己的临时目录**（不是导出目录，避免内部产物被 `/ui/exports` 下载），
+  读回后立即删除；结果按 `(sessionId, epoch)` 缓存 120 秒、上限 8 条。epoch 变化（fork/clone/切换身份）即失效。
+- `tools` 是**实际生效**的工具集合，受启动时的工具预设与扩展追加影响，不是"全部可用工具目录"。
+- 导出超过 64 MiB（`limit_exceeded`）或模板里找不到数据块时明确失败，不静默返回空面板。
 
 ### 顶栏面板的呈现方式
 

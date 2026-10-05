@@ -54,6 +54,9 @@ func NewConfig(agentDir string, limits Limits) *Config {
 	return &Config{agentDir: agentDir, limits: limits, packageSlots: make(chan struct{}, maxPackageQueries), httpClient: providerHTTPClient, registryBaseURL: defaultRegistryBaseURL, catalogURL: defaultCatalogURL}
 }
 
+// AgentDir 返回受管 Pi 配置目录。供运行时代码（如列扩展文件）与测试定位。
+func (c *Config) AgentDir() string { return c.agentDir }
+
 // Raw 返回可编辑的脱敏文档。v1 的 *** 只能表示保留已存在的秘密。
 func (c *Config) Raw() (map[string]any, error) {
 	doc, err := c.readObject("models.json")

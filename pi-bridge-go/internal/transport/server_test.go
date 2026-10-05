@@ -93,6 +93,13 @@ func newTestServerTuned(t *testing.T, commandTimeout time.Duration, termOpts ...
 	}
 	cfg.NavigateExt = navExt
 	cfg.NavigateResultDir = navResults
+	// 运行时载荷捕获同样与生产同路径。
+	captureExt, captureResults, err := run.InstallCaptureExt(state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.CaptureExt = captureExt
+	cfg.CaptureResultDir = captureResults
 	m := run.New(cfg)
 	t.Cleanup(m.Close)
 

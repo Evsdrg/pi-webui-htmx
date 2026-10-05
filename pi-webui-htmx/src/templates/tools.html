@@ -1,7 +1,9 @@
 {{/* 工具定义面板：左栏工具名、右栏详情，结构对齐 Pi Web 的 ToolDefinitionsPanel。
-     显示的是**当前实际暴露给模型**的工具集合（AgentState.tools），
-     因此会随启动时的工具预设与扩展追加变化。
+     显示的是**当前实际暴露给模型**的工具集合。
+     来源优先是桥内捕获扩展记录的运行时载荷（扩展改写之后）；尚未产生任何请求时
+     回退到 export_html 快照里的基线，并如实标注。
      全部详情都渲染进 HTML；点击只切换可见性，不再发请求。 */}}
+{{if .Source}}<p class="config-note">{{if eq .Source "request"}}来源：扩展改写之后、实际下发给模型的工具定义（运行时捕获）。{{else}}来源：Pi 会话快照的基线工具定义（扩展改写之前）。在本会话运行一次后，这里会显示实际下发的版本。{{end}}</p>{{end}}
 {{if .Tools}}<div class="tool-panel">
   <nav class="tool-list" aria-label="工具列表">
     {{range $index, $tool := .Tools}}<button type="button" class="tool-item{{if eq $index 0}} selected{{end}}" data-tool-select="{{$tool.Name}}" aria-pressed="{{if eq $index 0}}true{{else}}false{{end}}"><code>{{$tool.Name}}</code></button>

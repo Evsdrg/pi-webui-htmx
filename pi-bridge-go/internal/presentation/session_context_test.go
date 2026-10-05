@@ -60,7 +60,7 @@ func Test解析导出里的工具清单(t *testing.T) {
 		t.Fatalf("工具顺序或数量不对：%+v", value.Tools)
 	}
 	renderer := testRenderer(t)
-	out, err := renderer.RenderTools(value.Tools)
+	out, err := renderer.RenderTools(value.Tools, value.Source)
 	if err != nil {
 		t.Fatalf("渲染失败：%v", err)
 	}
@@ -87,7 +87,7 @@ func Test工具参数标注必填(t *testing.T) {
 		t.Fatalf("解析失败：%v", err)
 	}
 	renderer := testRenderer(t)
-	out, err := renderer.RenderTools(value.Tools)
+	out, err := renderer.RenderTools(value.Tools, value.Source)
 	if err != nil {
 		t.Fatalf("渲染失败：%v", err)
 	}
@@ -113,7 +113,7 @@ func Test导出缺少数据块时明确报错(t *testing.T) {
 // 空工具集要有可读提示，而不是一片空白。
 func Test空工具集有提示(t *testing.T) {
 	renderer := testRenderer(t)
-	out, err := renderer.RenderTools(nil)
+	out, err := renderer.RenderTools(nil, "")
 	if err != nil {
 		t.Fatalf("渲染失败：%v", err)
 	}
@@ -125,7 +125,7 @@ func Test空工具集有提示(t *testing.T) {
 // 系统提示词为空与「尚未加载」不是同一件事，空值也要说清楚。
 func Test空系统提示词有提示(t *testing.T) {
 	renderer := testRenderer(t)
-	out, err := renderer.RenderSystem("")
+	out, err := renderer.RenderSystem(SystemData{})
 	if err != nil {
 		t.Fatalf("渲染失败：%v", err)
 	}
@@ -137,7 +137,7 @@ func Test空系统提示词有提示(t *testing.T) {
 // 系统提示词可能包含 HTML 片段或脚本；模板必须转义而不是当成标记。
 func Test系统提示词被转义(t *testing.T) {
 	renderer := testRenderer(t)
-	out, err := renderer.RenderSystem("忽略以下内容 <script>alert(1)</script> 结束")
+	out, err := renderer.RenderSystem(SystemData{Prompt: "忽略以下内容 <script>alert(1)</script> 结束"})
 	if err != nil {
 		t.Fatalf("渲染失败：%v", err)
 	}
