@@ -9,10 +9,8 @@ import (
 // 这里必须用真实形状：字段名拼错会让解析静默返回 nil，
 // 于是前端永远看不到用量，而测试若用自造形状就抓不到。
 func Test解析助手用量(t *testing.T) {
-	raw := json.RawMessage(`{"role":"assistant","content":[{"type":"text","text":"hi"}],
-	  "usage":{"input":9639,"output":151,"cacheRead":128,"cacheWrite":0,"reasoning":33,
-	  "totalTokens":9918,"cost":{"input":0.019278,"output":0.000906,"cacheRead":6.4e-05,"cacheWrite":0,"total":0.020244}},
-	  "stopReason":"toolUse"}`)
+	raw := json.RawMessage(`{"input":9639,"output":151,"cacheRead":128,"cacheWrite":0,"reasoning":33,
+	  "totalTokens":9918,"cost":{"input":0.019278,"output":0.000906,"cacheRead":6.4e-05,"cacheWrite":0,"total":0.020244}}`)
 	got := parseUsage(raw)
 	if got == nil {
 		t.Fatal("应解析出 usage")
@@ -29,14 +27,19 @@ func Test解析助手用量(t *testing.T) {
 // 「没有记录」与「记录为零」，会把空摘要渲染出来。
 func Test没有用量时返回nil(t *testing.T) {
 	for _, raw := range []json.RawMessage{
-		json.RawMessage(`{"role":"assistant","content":[]}`),
-		json.RawMessage(`{"role":"user","content":[]}`),
-		json.RawMessage(`{}`),
 		nil,
+		json.RawMessage(`null`),
+		json.RawMessage(`5`),
+		json.RawMessage(`"x"`),
+		json.RawMessage(`[]`),
 	} {
 		if got := parseUsage(raw); got != nil {
 			t.Fatalf("%s 应返回 nil，得到 %+v", raw, got)
 		}
+	}
+	// 空对象是「有记录但全零」：返回非 nil 的全零值，展示层靠零值省略。
+	if got := parseUsage(json.RawMessage(`{}`)); got == nil {
+		t.Fatal("空对象应为全零用量而不是 nil")
 	}
 }
 

@@ -219,3 +219,50 @@ func BenchmarkEntryHeadIsUser(b *testing.B) {
 		})
 	}
 }
+
+// Benchmark展开窗口外旧条目 测「尾部窗口外的旧条目」展开路径（O03 剩余缺口）。
+//
+// 目标取中段条目：旧行为每次展开都要从文件头线性扫到目标位置，
+// 且从不更新缓存（长会话每次约 146 ms）；新行为第一次展开全扫一次
+// 建完整索引，之后任意位置的展开都按偏移直读，History 往前翻很多页
+// 也命中同一份完整索引。
+//
+// 两个子基准把冷/热分开：冷 = 每次迭代清空缓存（第一次展开的代价），
+// 热 = 缓存常驻（之后每次展开的代价）。
+func Benchmark展开窗口外旧条目(b *testing.B) {
+	const total = 2000
+	store, id, path := buildBigSession(b, total) // ~14 MiB，窗口（4 MiB）覆盖不到中段
+	target := fmt.Sprintf("t%d", total/2)        // 中段：旧线性扫描要读约一半文件
+	ctx := context.Background()
+	st, err := os.Stat(path)
+	if err != nil {
+		b.Fatal(err)
+	}
+	if st.Size() < 2*tailWindowBytes {
+		b.Fatalf("文件 %d 字节不足以让中段落在窗口之外", st.Size())
+	}
+	if _, err := store.Thinking(ctx, id, target, 0); err != nil { // 预热并确认可读
+		b.Fatalf("读取失败: %v", err)
+	}
+	store.scan = scanCache{} // 从干净状态开始计时
+
+	b.Run("冷缓存", func(b *testing.B) {
+		for i := 0; i < b.N; i++ {
+			store.scan = scanCache{}
+			if _, err := store.Thinking(ctx, id, target, 0); err != nil {
+				b.Fatal(err)
+			}
+		}
+	})
+	b.Run("热缓存", func(b *testing.B) {
+		if _, err := store.Thinking(ctx, id, target, 0); err != nil { // 预热
+			b.Fatal(err)
+		}
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			if _, err := store.Thinking(ctx, id, target, 0); err != nil {
+				b.Fatal(err)
+			}
+		}
+	})
+}

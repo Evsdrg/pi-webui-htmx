@@ -36,42 +36,6 @@ type LazyBlock struct {
 	Kind string
 }
 
-// scanLazyBlocks 扫一条原始记录的 content，列出可延后加载的块。
-// 只在投影阶段调用一次：历史页因此能带上占位符，而不必把内容本身传出去。
-func scanLazyBlocks(message json.RawMessage) []LazyBlock {
-	if len(message) == 0 {
-		return nil
-	}
-	var msg struct {
-		Role    string          `json:"role"`
-		Content json.RawMessage `json:"content"`
-	}
-	if json.Unmarshal(message, &msg) != nil || len(msg.Content) == 0 {
-		return nil
-	}
-	// content 可能是字符串（纯文本消息），那种情况没有可延后加载的块。
-	// 用首字节判断形状，不靠 unmarshal 失败去试错。
-	if shapeOf(msg.Content) != shapeArray {
-		return nil
-	}
-	var blocks []struct {
-		Type string `json:"type"`
-	}
-	if json.Unmarshal(msg.Content, &blocks) != nil {
-		return nil
-	}
-	out := make([]LazyBlock, 0, 4)
-	for i, b := range blocks {
-		switch {
-		case msg.Role == "assistant" && b.Type == "thinking":
-			out = append(out, LazyBlock{BlockIndex: i, Kind: "thinking"})
-		case (msg.Role == "toolResult" || msg.Role == "user") && b.Type == "image":
-			out = append(out, LazyBlock{BlockIndex: i, Kind: "image"})
-		}
-	}
-	return out
-}
-
 // Thinking 取某条 assistant 消息里指定下标的思考块文本。
 //
 // 历史页只带占位符：把几千字思考塞进每一页，翻页成本全花在
@@ -179,15 +143,23 @@ func (s *Store) entryImage(ctx context.Context, id, entryID string, blockIndex i
 
 // rawEntry 读一条原始记录并返回它的 message 与 role。
 //
-// 快路径复用 History 的扫描索引：里面已存好每条记录的 offset/size，
-// 直接 ReadAt 单条即可。老实现每次都从文件头逐行扫到目标条目，
-// 展开多个旧思考块会把长会话反复扫很多遍（B38/O03）。
-// 缓存未命中（冷路径）就先做一次完整扫描并写入缓存。
+// 三段式路径：
 //
-// 扫描方式与 History 完全一致：bufio + jsonl.Read，按行边界切分，
-// 只读到文件当前长度。这里曾手写过一套 chunk 扫描，结果 offset 在
-// 消耗会话头后被推进两次，跨缓冲区的行既被跳过又被截断——单元测试
-// 用小文件碰不到，真实会话里稍大的条目就整条找不到。
+//  1. 快路径按扫描索引的 offset/size 直接 ReadAt 单条。索引命中缓存或
+//     目标在尾部窗口内时，展开任何条目都是单次磁盘读（B38/O03）。
+//  2. 目标在尾部窗口之外（或窗口扫描失败）时全扫一次，把**完整**索引
+//     写进缓存，再按偏移读。首次展开付一次全扫（与旧的逐次线性扫描同价），
+//     此后任何位置的展开、以及往前翻很多页的历史取页都直接命中完整索引。
+//  3. 全扫失败（文件含损坏行等）或读数校验不通过时，退回宽松的线性扫描。
+//     它跳过无法解析的行——这正是 B38 之前的行为：损坏位置之前的条目仍然
+//     可读，而不是把整份文件判死。窗口扫描对坏行是严格的，没有这条兜底，
+//     一条坏行就会让全部展开请求失败。
+//
+// 读数一律先校验记录 ID 与请求一致，绝不给错内容：偏移可能因并发改写而错位。
+//
+// 这里不再手写 chunk 扫描：曾自研的一套 offset 在消耗会话头后被推进两次，
+// 跨缓冲区的行既被跳过又被截断——单元测试用小文件碰不到，真实会话里稍大的
+// 条目就整条找不到。扫描一律走与 History 相同的 bufio + jsonl.Read。
 func (s *Store) rawEntry(ctx context.Context, id, entryID string) (json.RawMessage, string, error) {
 	h, err := s.Find(ctx, id)
 	if err != nil {
@@ -205,28 +177,46 @@ func (s *Store) rawEntry(ctx context.Context, id, entryID string) (json.RawMessa
 	if !st.Mode().IsRegular() || st.Size() > s.limits.FileBytes {
 		return nil, "", fileTooLargeError("历史文件", st.Size(), s.limits.FileBytes)
 	}
+	mtime := st.ModTime().UnixNano()
 	// 与 History 用同一个缓存键（绝对路径），两边才能互相命中。
-	// 这里只要能覆盖最近内容的窗口就够：目标不在窗口内时会走下面的
-	// 线性扫描回退，那一条路径本来就存在（偏移错位时也走它）。
-	nodes, _, _, err := s.scanNodes(ctx, h, f, st.Size(), st.ModTime().UnixNano(), 1)
-	if err != nil {
-		return nil, "", err
-	}
-	if target, ok := nodes[entryID]; ok && target.size > 0 {
-		buf := make([]byte, target.size)
-		if _, err := f.ReadAt(buf, target.offset); err == nil || errors.Is(err, io.EOF) {
-			// 偏移可能因并发改写而错位：读出来的记录必须与请求的 ID 一致，
-			// 否则回退到线性扫描，绝不给错内容。
-			if msg, role, ok := entryMessage(buf, entryID); ok {
+	nodes, _, complete, scanErr := s.scanNodes(ctx, h, f, st.Size(), mtime, 1)
+	if scanErr == nil {
+		if target, ok := nodes[entryID]; ok && target.size > 0 {
+			if msg, role, ok := s.readIndexed(f, target, entryID); ok {
 				return msg, role, nil
+			}
+		} else if complete {
+			// 完整索引里没有这个条目：与线性扫描得到同样的结论，且不必再扫。
+			return nil, "", protocol.E("not_found", "条目不存在")
+		}
+	}
+	// 窗口未命中：全扫一次建完整索引（失败说明文件有问题，交给线性兜底）。
+	if scanErr == nil {
+		if full, _, fullErr := s.scanFullAll(ctx, h, f, st.Size(), mtime); fullErr == nil {
+			if target, ok := full[entryID]; ok {
+				if msg, role, ok := s.readIndexed(f, target, entryID); ok {
+					return msg, role, nil
+				}
+			} else {
+				return nil, "", protocol.E("not_found", "条目不存在")
 			}
 		}
 	}
-	// 回退：线性扫描（保留原有更严格的错误报告）。
+	// 宽松线性扫描兜底。
 	if _, err := f.Seek(0, io.SeekStart); err != nil {
 		return nil, "", protocol.E("pi_error", "无法读取会话文件")
 	}
 	return s.rawEntryScan(ctx, f, st.Size(), entryID)
+}
+
+// readIndexed 按索引读一条完整记录。读不到或记录 ID 与请求不符时返回 false，
+// 由调用方决定兜底路径；绝不给错内容。
+func (s *Store) readIndexed(f *os.File, target node, entryID string) (json.RawMessage, string, bool) {
+	buf := make([]byte, target.size)
+	if _, err := f.ReadAt(buf, target.offset); err != nil && !errors.Is(err, io.EOF) {
+		return nil, "", false
+	}
+	return entryMessage(buf, entryID)
 }
 
 // entryMessage 从一条完整记录里取 message 与角色；ID 不符或无法解析时返回 false。

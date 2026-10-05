@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -33,7 +34,7 @@ func writeLazySession(t *testing.T, rows []map[string]any) (*Store, string) {
 	return store, id
 }
 
-func TestScanLazyBlocks只认配对角色(t *testing.T) {
+func Test块扫描只认配对角色(t *testing.T) {
 	cases := map[string]struct {
 		role    string
 		content []map[string]any
@@ -47,18 +48,17 @@ func TestScanLazyBlocks只认配对角色(t *testing.T) {
 		"user 的 thinking 不算":       {"user", []map[string]any{{"type": "thinking"}}, 0},
 	}
 	for name, c := range cases {
-		raw, err := json.Marshal(map[string]any{"role": c.role, "content": c.content})
+		raw, err := json.Marshal(c.content)
 		if err != nil {
 			t.Fatal(err)
 		}
-		got := scanLazyBlocks(raw)
+		_, got := projectContent(c.role, raw)
 		if len(got) != c.want {
 			t.Errorf("%s: 期望 %d 个惰性块，实际 %d (%v)", name, c.want, len(got), got)
 		}
 	}
 	// content 是字符串（纯文本消息）时必须返回 nil，不能 panic。
-	str, _ := json.Marshal(map[string]any{"role": "assistant", "content": "纯文本"})
-	if got := scanLazyBlocks(str); got != nil {
+	if _, got := projectContent("assistant", json.RawMessage(`"纯文本"`)); got != nil {
 		t.Errorf("字符串 content 应无惰性块: %v", got)
 	}
 }
@@ -204,5 +204,116 @@ func Test惰性读取复用扫描索引(t *testing.T) {
 	}
 	if _, err := store.Thinking(ctx, id, "nope", 0); err == nil {
 		t.Fatal("不存在的条目仍应报错")
+	}
+}
+
+// writeLazySessionWithFiller 造一个超出尾部窗口的会话：
+// 目标条目在最前，后面接若干条大填充记录（每条约 768 KiB），
+// 使文件远离「尾部 4 MiB 窗口」——目标只有在完整索引里才能按偏移直读。
+func writeLazySessionWithFiller(t *testing.T, prefix []map[string]any) (*Store, string, string) {
+	t.Helper()
+	cwd := t.TempDir()
+	store, sessionDir := newStore(t, cwd)
+	id := "lazy-window"
+	path := filepath.Join(sessionDir, id+".jsonl")
+	header := map[string]any{"type": "session", "version": 3, "id": id, "timestamp": "2026-09-27T00:00:00Z", "cwd": cwd}
+	rows := append([]map[string]any{header}, prefix...)
+	filler := strings.Repeat("填", 256*1024)
+	parent := any(nil)
+	if len(prefix) > 0 {
+		parent = prefix[len(prefix)-1]["id"]
+	}
+	for i := 0; i < 8; i++ {
+		parentID := parent
+		row := map[string]any{"type": "message", "id": fmt.Sprintf("f%d", i), "parentId": parentID, "message": map[string]any{"role": "toolResult", "content": []map[string]any{{"type": "text", "text": filler}}}}
+		rows = append(rows, row)
+		parent = fmt.Sprintf("f%d", i)
+	}
+	buf := make([]byte, 0, 7<<20)
+	for _, r := range rows {
+		b, err := json.Marshal(r)
+		if err != nil {
+			t.Fatal(err)
+		}
+		buf = append(buf, b...)
+		buf = append(buf, '\n')
+	}
+	if err := os.WriteFile(path, buf, 0644); err != nil {
+		t.Fatal(err)
+	}
+	return store, id, path
+}
+
+// O03 的另一半：目标在尾部窗口之外时，第一次展开应全扫一次并把**完整**索引
+// 写进缓存——此后任何位置的展开都直接按偏移读取，而不是每次从头线性扫。
+// 旧实现在窗口未命中时每次线性扫描且从不更新缓存（长会话每次约 146 ms）。
+func Test窗口外旧条目展开建完整索引(t *testing.T) {
+	store, id, path := writeLazySessionWithFiller(t, []map[string]any{
+		{"type": "message", "id": "u1", "parentId": nil, "message": map[string]any{"role": "user", "content": "问题"}},
+		{"type": "message", "id": "a1", "parentId": "u1", "message": map[string]any{"role": "assistant", "content": []map[string]any{
+			{"type": "thinking", "thinking": "旧思考一"},
+			{"type": "text", "text": "回答"},
+		}}},
+		{"type": "message", "id": "a2", "parentId": "a1", "message": map[string]any{"role": "assistant", "content": []map[string]any{
+			{"type": "thinking", "thinking": "旧思考二"},
+			{"type": "text", "text": "回答"},
+		}}},
+	})
+	ctx := context.Background()
+	// 目标在窗口之外（文件 ~6 MiB，窗口只有尾部 4 MiB）：读取必须正确。
+	if got, err := store.Thinking(ctx, id, "a1", 0); err != nil || got != "旧思考一" {
+		t.Fatalf("窗口外条目读取失败: %q %v", got, err)
+	}
+	st, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _, complete, ok := store.scan.get(path, st.Size(), st.ModTime().UnixNano())
+	if !ok {
+		t.Fatal("第一次展开后应有扫描缓存")
+	}
+	if !complete {
+		t.Fatal("窗口未命中时应收敛到完整索引并缓存；当前缓存仍是不完整的尾部窗口")
+	}
+	// 完整索引落盘后，另一条旧条目（同样在窗口外）也走索引路径且内容正确。
+	if got, err := store.Thinking(ctx, id, "a2", 0); err != nil || got != "旧思考二" {
+		t.Fatalf("第二条旧条目读取失败: %q %v", got, err)
+	}
+	if _, err := store.Thinking(ctx, id, "missing", 0); err == nil {
+		t.Fatal("完整索引里不存在的条目仍应报错")
+	}
+}
+
+// 全扫失败（文件含损坏行）时必须保留旧的宽松线性扫描兜底：
+// 损坏位置之前的条目仍能读到，而不是把整份文件判死。
+func Test窗口外条目不因中途损坏行而不可读(t *testing.T) {
+	store, id, path := writeLazySessionWithFiller(t, []map[string]any{
+		{"type": "message", "id": "u1", "parentId": nil, "message": map[string]any{"role": "user", "content": "问题"}},
+		{"type": "message", "id": "a1", "parentId": "u1", "message": map[string]any{"role": "assistant", "content": []map[string]any{
+			{"type": "thinking", "thinking": "损坏之前的思考"},
+			{"type": "text", "text": "回答"},
+		}}},
+	})
+	// 在文件中部插入一行坏 JSON：完整扫描会拒绝它，线性扫描会跳过它。
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mid := len(data) / 2
+	for mid < len(data) && data[mid] != '\n' {
+		mid++
+	}
+	broken := append([]byte{}, data[:mid+1]...)
+	broken = append(broken, []byte("{oops\n")...)
+	broken = append(broken, data[mid+1:]...)
+	if err := os.WriteFile(path, broken, 0644); err != nil {
+		t.Fatal(err)
+	}
+	got, err := store.Thinking(context.Background(), id, "a1", 0)
+	if err != nil {
+		t.Fatalf("完整扫描失败时不应把损坏位置之前的条目判死: %v", err)
+	}
+	if got != "损坏之前的思考" {
+		t.Fatalf("内容不符: %q", got)
 	}
 }

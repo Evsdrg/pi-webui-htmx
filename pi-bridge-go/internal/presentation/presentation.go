@@ -18,6 +18,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"pi-bridge-go/internal/magiccontext"
 	"pi-bridge-go/internal/protocol"
@@ -588,6 +589,11 @@ func sessionTitle(h sessions.Header) string {
 type Step struct {
 	Kind   string
 	Detail string
+	// Preview 是收起态预览：只含 Detail 的前 previewRunes 个码点（外加省略号）。
+	// 工作段默认折叠，预览是唯一始终可见的文本，而写文件类工具的输出可达
+	// 数 MB——预览与详情渲染同一份全文曾把页面撑到 96.8% 的体积，CSS 却只
+	// 显示一行。展开详情、复制与导出继续使用完整的 Detail，不得截断。
+	Preview string
 	// Name 是工具名（read/bash/edit/...），直接来自工具结果的 toolName 字段。
 	// 空值表示记录里没有工具名，模板退回 Kind。
 	Name string
@@ -603,6 +609,29 @@ type Step struct {
 	// Images 是这一步里可延后加载的图片块下标；
 	// 详情只放文字，base64 图片等用户点了才取。
 	Images []int
+}
+
+// previewRunes 是收起预览保留的码点数。约「一行加一点上下文」的体量：
+// 足够让用户认出这是哪一步，其余交给展开详情。
+const previewRunes = 200
+
+// toolPreview 截取工具步骤的收起态预览。
+// 按码点扫描且最多走 previewRunes 步：超长输出（写文件正文可能是数 MB）
+// 不会为了找截断边界而遍历整个字符串，也不会切断多字节字符。
+func toolPreview(s string) string {
+	if s == "" {
+		return s
+	}
+	i, n := 0, 0
+	for i < len(s) && n < previewRunes {
+		_, size := utf8.DecodeRuneInString(s[i:])
+		i += size
+		n++
+	}
+	if i >= len(s) {
+		return s
+	}
+	return s[:i] + "…"
 }
 
 // Turn 是一个完整回合：用户消息 + 按时间顺序的正文/工作段。
@@ -833,7 +862,7 @@ func GroupTurns(entries []sessions.Entry) []Turn {
 			turns[current].appendText(e.Text)
 		case sessions.KindTool:
 			images := lazyIndexes(e.Lazy, "image")
-			step := Step{Kind: "工具", Detail: e.Text, EntryID: e.ID, Images: images, Name: e.ToolName, OK: !e.Failed, Duration: secondsBetween(assistantAt, e.Timestamp)}
+			step := Step{Kind: "工具", Detail: e.Text, Preview: toolPreview(e.Text), EntryID: e.ID, Images: images, Name: e.ToolName, OK: !e.Failed, Duration: secondsBetween(assistantAt, e.Timestamp)}
 			if current < 0 {
 				turns = append(turns, Turn{ID: e.ID, EntryIDs: []string{e.ID}, start: e.Timestamp, end: e.Timestamp})
 				current = len(turns) - 1

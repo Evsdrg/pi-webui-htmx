@@ -1,20 +1,17 @@
 package sessions
 
 import (
-	"encoding/json"
 	"strings"
 )
 
 // assistantError 只投影已知失败类别，不把上游原文或请求标识送给浏览器。
-func assistantError(raw json.RawMessage) string {
-	var message struct {
-		StopReason   string `json:"stopReason"`
-		ErrorMessage string `json:"errorMessage"`
-	}
-	if json.Unmarshal(raw, &message) != nil || message.StopReason != "error" {
+// stopReason 与 errorMessage 由调用方从消息里一次解出（见 projectMessage）；
+// stopReason 不是 error 时不投影。
+func assistantError(stopReason, errorMessage string) string {
+	if stopReason != "error" {
 		return ""
 	}
-	body := strings.ToLower(message.ErrorMessage)
+	body := strings.ToLower(errorMessage)
 	switch {
 	case strings.HasPrefix(body, "402 ") && strings.Contains(body, "insufficient balance"):
 		return "模型请求失败：供应商余额不足（HTTP 402），请检查额度或稍后重试。"

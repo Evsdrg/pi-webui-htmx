@@ -128,6 +128,11 @@ type Entry struct {
 
 // ProjectEntries 把原始条目投影成渲染友好的结构。
 // 解析失败的单条记录被跳过，不让一个坏条目毁掉整页。
+//
+// 每条 message 只做一次外层扫描（projectMessage）：旧实现对同一条消息
+// 解了四到五遍（角色+文本、惰性块、错误、用量、工具元数据各一遍），
+// 大消息的解析开销因此翻了几倍。外层字段各自按 RawMessage 收下后再单独
+// 解码，单个字段的畸形只降级它自己，不会把整条消息清零。
 func ProjectEntries(raw []json.RawMessage) []Entry {
 	out := make([]Entry, 0, len(raw))
 	for _, r := range raw {
@@ -141,22 +146,22 @@ func ProjectEntries(raw []json.RawMessage) []Entry {
 		if json.Unmarshal(r, &item) != nil || item.ID == "" {
 			continue
 		}
-		e := Entry{ID: item.ID, Detail: r, Lazy: scanLazyBlocks(item.Message), Timestamp: parseTimestamp(item.Timestamp)}
+		e := Entry{ID: item.ID, Detail: r, Timestamp: parseTimestamp(item.Timestamp)}
 		switch item.Type {
 		case "message":
-			role, text := messageRoleAndText(item.Message)
-			switch role {
+			pm := projectMessage(item.Message)
+			e.Lazy = pm.lazy
+			switch pm.role {
 			case "user":
-				e.Kind, e.Text = KindUser, text
+				e.Kind, e.Text = KindUser, pm.text
 			case "assistant":
-				e.Kind, e.Text = KindAssistant, text
-				e.Error = assistantError(item.Message)
-				e.Usage = parseUsage(item.Message)
+				e.Kind, e.Text = KindAssistant, pm.text
+				e.Error, e.Usage = pm.errText, pm.usage
 			case "toolResult":
-				e.Kind, e.Text = KindTool, text
-				e.ToolName, e.Failed = toolResultMeta(item.Message)
+				e.Kind, e.Text = KindTool, pm.text
+				e.ToolName, e.Failed = pm.toolName, pm.failed
 			default:
-				e.Kind, e.Text = KindOther, text
+				e.Kind, e.Text = KindOther, pm.text
 			}
 		case "compaction":
 			e.Kind, e.Text = KindCompaction, item.Summary
@@ -168,32 +173,125 @@ func ProjectEntries(raw []json.RawMessage) []Entry {
 	return out
 }
 
-// messageRoleAndText 取出消息的角色与纯文本。
-func messageRoleAndText(raw json.RawMessage) (string, string) {
-	if len(raw) == 0 {
-		return "", ""
+// projectedMessage 是一条 message 的一次解码结果。
+type projectedMessage struct {
+	role     string
+	text     string
+	lazy     []LazyBlock
+	errText  string
+	usage    *Usage
+	toolName string
+	failed   bool
+}
+
+// projectMessage 扫一遍 message，把投影需要的字段一次解出来。
+//
+// 外层每个字段先收成 RawMessage 再单独解码：任何单字段的类型错误都只
+// 降级它自己（例如 usage 置 nil、工具名为空、该块跳过），不会像「一份
+// 严格结构整体解码」那样把角色、正文、工具名全部清零——那正是原型出过
+// 的 bug（错误类型让整条 message 清零）。各字段语义与旧的一组独立解码
+// 逐条对齐，差分语料见 project_diff_test.go。
+func projectMessage(raw json.RawMessage) projectedMessage {
+	var fields struct {
+		Role         json.RawMessage `json:"role"`
+		Content      json.RawMessage `json:"content"`
+		Command      json.RawMessage `json:"command"`
+		Output       json.RawMessage `json:"output"`
+		ToolName     json.RawMessage `json:"toolName"`
+		IsError      json.RawMessage `json:"isError"`
+		StopReason   json.RawMessage `json:"stopReason"`
+		ErrorMessage json.RawMessage `json:"errorMessage"`
+		Usage        json.RawMessage `json:"usage"`
 	}
-	var msg struct {
-		Role    string          `json:"role"`
-		Content json.RawMessage `json:"content"`
-		Command string          `json:"command"`
-		Output  string          `json:"output"`
+	if json.Unmarshal(raw, &fields) != nil {
+		return projectedMessage{}
 	}
-	if json.Unmarshal(raw, &msg) != nil {
-		return "", ""
-	}
-	role := msg.Role
-	if role == "toolResult" || (role == "" && msg.Command != "") {
+	// 惰性块的归属按**原始** role 判定（与旧 scanLazyBlocks 一致）：
+	// 无 role 有 command 的旧式记录会被推断为工具，但那种记录没有图片块。
+	rawRole := decodeString(fields.Role)
+	text, lazy := projectContent(rawRole, fields.Content)
+	role := rawRole
+	if role == "toolResult" || (role == "" && decodeString(fields.Command) != "") {
 		role = "toolResult"
 	}
-	text := flattenContent(msg.Content)
 	if text == "" {
-		text = msg.Command
+		text = decodeString(fields.Command)
 	}
 	if text == "" {
-		text = msg.Output
+		text = decodeString(fields.Output)
 	}
-	return role, text
+	pm := projectedMessage{role: role, text: text, lazy: lazy}
+	switch role {
+	case "assistant":
+		pm.errText = assistantError(decodeString(fields.StopReason), decodeString(fields.ErrorMessage))
+		pm.usage = parseUsage(fields.Usage)
+	case "toolResult":
+		pm.toolName = decodeString(fields.ToolName)
+		pm.failed = decodeBool(fields.IsError)
+	}
+	return pm
+}
+
+// projectContent 一次扫描 content，同时产出纯文本与惰性块清单。
+// 文本的连接规则与 flattenContent 相同（各文本块以空格连接）。
+//
+// 每个块先按 RawMessage 收下再单独解字段：单个块的字段类型异常只跳过
+// 它自己。旧的严格解码会因为一个坏块丢掉整条消息的全部块清单，同一个
+// 消息里合法的思考/图片占位符会一起消失。
+func projectContent(rawRole string, content json.RawMessage) (string, []LazyBlock) {
+	switch shapeOf(content) {
+	case shapeString:
+		var s string
+		if json.Unmarshal(content, &s) != nil {
+			return "", nil
+		}
+		return s, nil
+	case shapeArray:
+		var blocks []struct {
+			Type json.RawMessage `json:"type"`
+			Text json.RawMessage `json:"text"`
+		}
+		if json.Unmarshal(content, &blocks) != nil {
+			return "", nil
+		}
+		parts := make([]string, 0, len(blocks))
+		var lazy []LazyBlock
+		for i, b := range blocks {
+			blockType := decodeString(b.Type)
+			if text := decodeString(b.Text); text != "" {
+				parts = append(parts, text)
+			}
+			switch {
+			case rawRole == "assistant" && blockType == "thinking":
+				lazy = append(lazy, LazyBlock{BlockIndex: i, Kind: "thinking"})
+			case (rawRole == "toolResult" || rawRole == "user") && blockType == "image":
+				lazy = append(lazy, LazyBlock{BlockIndex: i, Kind: "image"})
+			}
+		}
+		return strings.Join(parts, " "), lazy
+	default:
+		// 空值、null、对象等形状都没有可压的文本与占位符。
+		return "", nil
+	}
+}
+
+// decodeString 解一个先收下的 RawMessage 字符串字段；缺失、null 或类型
+// 不符都返回 ""——单字段降级，不影响同一消息的其它字段。
+func decodeString(raw json.RawMessage) string {
+	var s string
+	if len(raw) == 0 || json.Unmarshal(raw, &s) != nil {
+		return ""
+	}
+	return s
+}
+
+// decodeBool 同上，用于 isError 这类布尔字段。
+func decodeBool(raw json.RawMessage) bool {
+	var b bool
+	if len(raw) == 0 || json.Unmarshal(raw, &b) != nil {
+		return false
+	}
+	return b
 }
 
 // ModelRef 是会话文件记录的历史模型标识，不代表当前仍可用。
@@ -684,27 +782,25 @@ type Usage struct {
 	Cost       float64 `json:"cost"`
 }
 
-// parseUsage 从 assistant 消息里取出 usage。字段缺失或形状不符时返回 nil，
-// 不返回全零值——调用方据此区分「没有记录」与「记录为零」。
+// parseUsage 解 usage 值本身（调用方已把它从消息里收成 RawMessage）。
+// 缺失、null 或形状不符时返回 nil，不返回全零值——调用方据此区分
+// 「没有记录」与「记录为零」。
 func parseUsage(raw json.RawMessage) *Usage {
-	if len(raw) == 0 {
+	if len(raw) == 0 || shapeOf(raw) != shapeObject {
 		return nil
 	}
-	var msg struct {
-		Usage *struct {
-			Input      int `json:"input"`
-			Output     int `json:"output"`
-			CacheRead  int `json:"cacheRead"`
-			CacheWrite int `json:"cacheWrite"`
-			Cost       struct {
-				Total float64 `json:"total"`
-			} `json:"cost"`
-		} `json:"usage"`
+	var u struct {
+		Input      int `json:"input"`
+		Output     int `json:"output"`
+		CacheRead  int `json:"cacheRead"`
+		CacheWrite int `json:"cacheWrite"`
+		Cost       struct {
+			Total float64 `json:"total"`
+		} `json:"cost"`
 	}
-	if json.Unmarshal(raw, &msg) != nil || msg.Usage == nil {
+	if json.Unmarshal(raw, &u) != nil {
 		return nil
 	}
-	u := msg.Usage
 	return &Usage{Input: u.Input, Output: u.Output, CacheRead: u.CacheRead, CacheWrite: u.CacheWrite, Cost: u.Cost.Total}
 }
 
@@ -742,21 +838,6 @@ func parseTimestamp(raw string) time.Time {
 		return time.Time{}
 	}
 	return ts
-}
-
-// toolResultMeta 取出工具名与失败标记。
-func toolResultMeta(raw json.RawMessage) (string, bool) {
-	if len(raw) == 0 {
-		return "", false
-	}
-	var msg struct {
-		ToolName string `json:"toolName"`
-		IsError  bool   `json:"isError"`
-	}
-	if json.Unmarshal(raw, &msg) != nil {
-		return "", false
-	}
-	return msg.ToolName, msg.IsError
 }
 
 // ElapsedSeconds 计算整秒差，四舍五入到最接近的整秒。

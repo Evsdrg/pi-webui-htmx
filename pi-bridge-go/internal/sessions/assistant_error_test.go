@@ -15,54 +15,56 @@ func TestAssistantError按类别投影(t *testing.T) {
 		generic = "模型请求失败，请检查供应商连接、账户状态与模型配置。"
 	)
 	cases := []struct {
-		name string
-		raw  string
-		want string
+		name       string
+		stopReason string
+		message    string
+		want       string
 	}{
 		{
-			name: "402 且明说余额不足",
-			raw:  `{"stopReason":"error","errorMessage":"402 {\"error\":{\"message\":\"insufficient balance (1008)\"}}"}`,
-			want: "模型请求失败：供应商余额不足（HTTP 402），请检查额度或稍后重试。",
+			name: "402 且明说余额不足", stopReason: "error",
+			message: `402 {"error":{"message":"insufficient balance (1008)"}}`,
+			want:    "模型请求失败：供应商余额不足（HTTP 402），请检查额度或稍后重试。",
 		},
 		{
-			name: "402 但不是余额不足",
-			raw:  `{"stopReason":"error","errorMessage":"402 payment required: model not included in current plan"}`,
-			want: generic,
+			name: "402 但不是余额不足", stopReason: "error",
+			message: "402 payment required: model not included in current plan",
+			want:    generic,
 		},
 		{
-			name: "429 限流",
-			raw:  `{"stopReason":"error","errorMessage":"429 too many requests"}`,
-			want: "模型请求失败：供应商限流（HTTP 429），请稍后重试。",
+			name: "429 限流", stopReason: "error",
+			message: "429 too many requests",
+			want:    "模型请求失败：供应商限流（HTTP 429），请稍后重试。",
 		},
 		{
-			name: "401 认证失败",
-			raw:  `{"stopReason":"error","errorMessage":"401 invalid api key"}`,
-			want: "模型请求失败：供应商拒绝认证，请检查模型凭据。",
+			name: "401 认证失败", stopReason: "error",
+			message: "401 invalid api key",
+			want:    "模型请求失败：供应商拒绝认证，请检查模型凭据。",
 		},
 		{
-			name: "403 认证失败",
-			raw:  `{"stopReason":"error","errorMessage":"403 forbidden"}`,
-			want: "模型请求失败：供应商拒绝认证，请检查模型凭据。",
+			name: "403 认证失败", stopReason: "error",
+			message: "403 forbidden",
+			want:    "模型请求失败：供应商拒绝认证，请检查模型凭据。",
 		},
 		{
-			name: "500 通用",
-			raw:  `{"stopReason":"error","errorMessage":"500 upstream error"}`,
-			want: generic,
+			name: "500 通用", stopReason: "error",
+			message: "500 upstream error",
+			want:    generic,
 		},
 		{
-			name: "结束原因不是 error 时不投影",
-			raw:  `{"stopReason":"endTurn","errorMessage":"402 insufficient balance"}`,
-			want: "",
+			// 错误消息缺失（null/类型异常在投影层解成空串）也要给通用提示。
+			name: "错误消息缺失时给通用提示", stopReason: "error",
+			message: "",
+			want:    generic,
 		},
 		{
-			name: "不是 JSON 时不投影",
-			raw:  `not json`,
-			want: "",
+			name: "结束原因不是 error 时不投影", stopReason: "endTurn",
+			message: "402 insufficient balance",
+			want:    "",
 		},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			if got := assistantError([]byte(c.raw)); got != c.want {
+			if got := assistantError(c.stopReason, c.message); got != c.want {
 				t.Fatalf("投影结果不符\n得到: %q\n期望: %q", got, c.want)
 			}
 		})
@@ -71,8 +73,7 @@ func TestAssistantError按类别投影(t *testing.T) {
 
 // TestAssistantError不回显原文：摘要里不得出现供应商原文、密钥或请求标识。
 func TestAssistantError不回显原文(t *testing.T) {
-	raw := []byte(`{"stopReason":"error","errorMessage":"402 insufficient balance sk-secret-value request_id=rid-123"}`)
-	got := assistantError(raw)
+	got := assistantError("error", `402 insufficient balance sk-secret-value request_id=rid-123`)
 	for _, leak := range []string{"sk-secret-value", "rid-123", "insufficient"} {
 		if strings.Contains(got, leak) {
 			t.Fatalf("摘要泄漏了原文内容 %q: %s", leak, got)

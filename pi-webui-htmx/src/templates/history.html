@@ -22,7 +22,7 @@
     {{range $item := $block.Items}}{{if eq $item.Kind "tool"}}<details class="tool-call" data-ok="{{if $item.Step.OK}}true{{else}}false{{end}}" data-entry-id="{{$item.Step.EntryID}}">
       <summary>
         <span class="tool-name">{{if $item.Step.Name}}{{$item.Step.Name}}{{else}}{{$item.Step.Kind}}{{end}}</span>
-        <span class="tool-preview">{{$item.Step.Detail}}</span>
+        <span class="tool-preview">{{$item.Step.Preview}}</span>
         {{if $item.Step.Duration}}<span class="tool-duration">{{workDuration $item.Step.Duration}}</span>{{end}}
         <svg class="tool-chevron" width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="3.5 2 6.5 5 3.5 8" /></svg>
       </summary>

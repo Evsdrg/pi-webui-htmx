@@ -43,14 +43,14 @@ func Test压平内容按形状分支(t *testing.T) {
 
 func Test块扫描按形状分支(t *testing.T) {
 	// 纯文本（字符串）内容没有可延后加载的块。
-	if got := scanLazyBlocks(json.RawMessage(`{"role":"assistant","content":"纯文本"}`)); len(got) != 0 {
+	if _, got := projectContent("assistant", json.RawMessage(`"纯文本"`)); len(got) != 0 {
 		t.Fatalf("字符串内容不应产生惰性块: %+v", got)
 	}
-	blocks := scanLazyBlocks(json.RawMessage(`{"role":"assistant","content":[{"type":"thinking","thinking":"x"}]}`))
+	_, blocks := projectContent("assistant", json.RawMessage(`[{"type":"thinking","thinking":"x"}]`))
 	if len(blocks) != 1 || blocks[0].Kind != "thinking" {
 		t.Fatalf("思考块应被识别: %+v", blocks)
 	}
-	blocks = scanLazyBlocks(json.RawMessage(`{"role":"user","content":[{"type":"image","data":"x"}]}`))
+	_, blocks = projectContent("user", json.RawMessage(`[{"type":"image","data":"x"}]`))
 	if len(blocks) != 1 || blocks[0].Kind != "image" {
 		t.Fatalf("用户图片应被识别: %+v", blocks)
 	}
