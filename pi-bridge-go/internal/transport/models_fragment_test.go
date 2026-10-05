@@ -64,4 +64,28 @@ func Test模型清单从配置文件一路读到选项(t *testing.T) {
 	if strings.Contains(html, "sk-should-not-appear") || strings.Contains(html, "apiKey") {
 		t.Errorf("模型选择器不得带出凭据：%s", html)
 	}
+	// 下拉按供应商分组（optgroup）：供应商名成为组标题，且每个模型
+	// 落在自己供应商的组里。数据已按 provider 名排序（ConfigModels），
+	// 因此组的顺序应是 Messages 在前、Responses 在后。
+	messagesAt := strings.Index(html, `<optgroup label="CPA-Messages">`)
+	responsesAt := strings.Index(html, `<optgroup label="CPA-Responses">`)
+	if messagesAt < 0 || responsesAt < 0 {
+		t.Fatalf("应有按供应商的 optgroup 分组：%s", html)
+	}
+	if messagesAt > responsesAt {
+		t.Errorf("组顺序应跟随 provider 名排序（Messages 在前）：%s", html)
+	}
+	groupBody := func(start int) string {
+		rest := html[start:]
+		if end := strings.Index(rest, "</optgroup>"); end >= 0 {
+			return rest[:end]
+		}
+		return rest
+	}
+	if body := groupBody(messagesAt); !strings.Contains(body, "MiniMax-M3") || strings.Contains(body, "deepseek-flash") {
+		t.Errorf("MiniMax 应只出现在 CPA-Messages 组内：%s", body)
+	}
+	if body := groupBody(responsesAt); !strings.Contains(body, "deepseek-flash") {
+		t.Errorf("deepseek-flash 应出现在 CPA-Responses 组内：%s", body)
+	}
 }

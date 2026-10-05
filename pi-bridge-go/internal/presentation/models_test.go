@@ -12,9 +12,9 @@ func Test模型选择器selected仍正确(t *testing.T) {
 	r := testRenderer(t)
 	html, err := r.execute("models.html", ModelsData{
 		Current: "CPA-Responses/deepseek-flash",
-		Models: []ModelRow{
-			{Provider: "CPA-Responses", ID: "deepseek-flash", Name: "DeepSeek Flash"},
-			{Provider: "CPA-Messages", ID: "MiniMax-M3", Name: "MiniMax M3"},
+		Groups: []ModelGroup{
+			{Label: "CPA-Responses", Models: []ModelRow{{Provider: "CPA-Responses", ID: "deepseek-flash", Name: "DeepSeek Flash"}}},
+			{Label: "CPA-Messages", Models: []ModelRow{{Provider: "CPA-Messages", ID: "MiniMax-M3", Name: "MiniMax M3"}}},
 		},
 	})
 	if err != nil {

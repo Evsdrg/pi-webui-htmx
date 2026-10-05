@@ -989,13 +989,23 @@ type ModelRow struct {
 	Provider string
 }
 
+// ModelGroup 是按供应商聚在一起的一组模型。
+// 下拉按供应商分组的语义：组标题是供应商名，组内是它的模型。
+type ModelGroup struct {
+	Label  string
+	Models []ModelRow
+}
+
 // ModelsData 驱动模型选择器。
 type ModelsData struct {
 	Models  []ModelRow
+	Groups  []ModelGroup
 	Current string
 }
 
-// RenderModels 渲染模型下拉框。
+// RenderModels 渲染模型下拉框；模型按供应商分组（optgroup）。
+// 输入已按 provider 名排序（ConfigModels 里 sort.Strings），这里按首次出现
+// 顺序聚类即可：同名供应商的模型聚进同一组，即使输入未排序也不会裂成两组。
 func (r *Renderer) RenderModels(models []map[string]any, current string) (string, error) {
 	rows := make([]ModelRow, 0, len(models))
 	for _, m := range models {
@@ -1012,7 +1022,18 @@ func (r *Renderer) RenderModels(models []map[string]any, current string) (string
 		}
 		rows = append(rows, row)
 	}
-	return r.execute("models.html", ModelsData{Models: rows, Current: current})
+	groups := make([]ModelGroup, 0, 8)
+	byProvider := map[string]int{}
+	for _, row := range rows {
+		index, ok := byProvider[row.Provider]
+		if !ok {
+			index = len(groups)
+			byProvider[row.Provider] = index
+			groups = append(groups, ModelGroup{Label: row.Provider})
+		}
+		groups[index].Models = append(groups[index].Models, row)
+	}
+	return r.execute("models.html", ModelsData{Models: rows, Groups: groups, Current: current})
 }
 
 // PackageRow 是资源清单的一行。
