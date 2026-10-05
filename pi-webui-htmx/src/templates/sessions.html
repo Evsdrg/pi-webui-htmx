@@ -1,8 +1,13 @@
 {{range .Items}}
-<a class="session-item{{if eq .ID $.Selected}} selected{{end}}" href="?session={{.ID}}" data-session="{{.ID}}" data-cwd="{{.Cwd}}" data-title="{{.Title}}">
-  <span class="session-title">{{.Title}}</span>
-  <span class="session-meta"><time>{{.Modified}}</time><span title="{{.Cwd}}">{{.Cwd}}</span></span>
-</a>
+<div class="session-item{{if eq .ID $.Selected}} selected{{end}}" data-session="{{.ID}}" data-cwd="{{.Cwd}}" data-title="{{.Title}}">
+  <a class="session-link" href="?session={{.ID}}">
+    <span class="session-title">{{.Title}}</span>
+    <span class="session-meta"><time>{{.Modified}}</time><span title="{{.Cwd}}">{{.Cwd}}</span></span>
+  </a>
+  {{/* 改名/删除是行操作：按钮放在链接外（<a> 里嵌按钮是非法 HTML，
+       浏览器会拆 DOM）。data-session 留在行容器上，选中与点击委托不变。 */}}
+  <span class="session-ops"><button type="button" class="session-op" data-action="session-rename" title="重命名会话" aria-label="重命名会话"><svg width="12" height="12" aria-hidden="true"><use href="#icon-pencil"/></svg></button><button type="button" class="session-op session-op-danger" data-action="session-delete" title="删除会话" aria-label="删除会话"><svg width="12" height="12" aria-hidden="true"><use href="#icon-trash"/></svg></button></span>
+</div>
 {{else}}{{if $.Cwd}}<p class="empty-note">这个工作区下还没有会话。</p>{{else}}<p class="empty-note">还没有会话。新建一个，开始协作。</p>{{end}}{{end}}
 {{if .HasMore}}<button class="btn" hx-get="ui/sessions?offset={{.NextOffset}}{{if .Cwd}}&amp;cwd={{.Cwd | urlquery}}{{end}}" hx-target="this" hx-swap="outerHTML" hx-disabled-elt="this">加载更多会话</button>{{end}}
 {{/* 工作区下拉整体替换：候选与计数只能由桥算，前端从已渲染的行里收集

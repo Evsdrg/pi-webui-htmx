@@ -1,11 +1,5 @@
-export const THEMES = ['system', 'light', 'dark', 'mist', 'rose', 'pine'] as const;
 export function readPreference(key: string): string { try { return localStorage.getItem(`pi-ui:${key}`) ?? ''; } catch { return ''; } }
 export function savePreference(key: string, value: string): void { try { localStorage.setItem(`pi-ui:${key}`, value); } catch { /* 禁用存储时保持当前页面可用。 */ } }
-export function applyTheme(theme: string): void {
-  const value = THEMES.includes(theme as typeof THEMES[number]) ? theme : 'system';
-  if (value === 'system') delete document.documentElement.dataset.theme; else document.documentElement.dataset.theme = value;
-  savePreference('theme', value);
-}
 export function clampSidebar(width: number): number { return Number.isFinite(width) ? Math.min(380, Math.max(200, width)) : 260; }
 type Draft = { key: string; text: string };
 function drafts(): Draft[] {
@@ -20,9 +14,9 @@ export function saveDraft(key: string, text: string): void {
 export function mountLayout(): () => void {
   const abort = new AbortController();
   const shell = document.getElementById('workbench')!;
-  const theme = document.getElementById('theme-select') as HTMLSelectElement;
-  theme.value = readPreference('theme') || 'system'; applyTheme(theme.value);
-  theme.addEventListener('change', () => applyTheme(theme.value), { signal: abort.signal });
+  // 主题接线按需加载：首屏防闪烁由 shell.html 内联脚本完成，交互逻辑
+  // 放独立分块，不占首屏预算（与 branch/models 同一策略）。
+  void import('./theme').then(({ mountTheme }) => { if (!abort.signal.aborted) mountTheme(abort.signal); });
   // 对话字号与行宽：两个滑块写的是 .conversation 上的 CSS 变量，
   // 数值标签同步显示，让用户知道当前是哪一档。
   const conv = document.getElementById('main')!;
@@ -125,7 +119,7 @@ export function mountLayout(): () => void {
   syncExpanded();
   window.addEventListener('resize', syncExpanded, { signal: abort.signal });
   document.addEventListener('click', (event) => {
-    const button = (event.target as Element).closest<HTMLElement>('[data-action=sidebar],[data-close-dialog]');
+    const button = event.target instanceof Element ? event.target.closest<HTMLElement>('[data-action=sidebar],[data-close-dialog]') : null;
     if (!button) return;
     if (button.hasAttribute('data-close-dialog')) { button.closest('dialog')?.close(); return; }
     if (matchMedia('(max-width:760px)').matches) {

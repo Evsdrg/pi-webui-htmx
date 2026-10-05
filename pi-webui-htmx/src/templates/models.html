@@ -1,2 +1,4 @@
 <option value="">Pi 默认模型</option>
-{{range .Models}}<option value="{{.Provider}}/{{.ID}}" data-provider="{{.Provider}}" data-model-id="{{.ID}}"{{if eq (printf "%s/%s" .Provider .ID) $.Current}} selected{{end}} title="{{.Provider}}/{{.ID}}">{{.Name}}</option>{{end}}
+{{/* 按供应商分组：组标题就是 provider 名。组内 option 的 value/dataset 与
+     扁平列表完全一致，前端的选中与回读逻辑不受分组影响。 */}}
+{{range .Groups}}<optgroup label="{{.Label}}">{{range .Models}}<option value="{{.Provider}}/{{.ID}}" data-provider="{{.Provider}}" data-model-id="{{.ID}}"{{if eq (printf "%s/%s" .Provider .ID) $.Current}} selected{{end}} title="{{.Provider}}/{{.ID}}">{{.Name}}</option>{{end}}</optgroup>{{end}}

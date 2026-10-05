@@ -19,8 +19,9 @@
   --code-addition: #166b2f;
   --code-deletion: #b3261e;
 }
-/* 深色的两处入口必须一致（与 tokens.css 的深色调色板同一约定）。 */
-[data-theme="dark"] {
+/* 深色主题共用这套代码配色（dark 与 obsidian 都是深底；obsidian 纯黑，
+   这组值在纯黑上对比度更高，同样成立）。 */
+[data-theme="dark"], [data-theme="obsidian"] {
   --code-comment: #8b949e;
   --code-keyword: #ff7b72;
   --code-entity: #d2a8ff;
@@ -31,20 +32,6 @@
   --code-bullet: #f2cc60;
   --code-addition: #7ee787;
   --code-deletion: #ffa198;
-}
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme]) {
-    --code-comment: #8b949e;
-    --code-keyword: #ff7b72;
-    --code-entity: #d2a8ff;
-    --code-constant: #79c0ff;
-    --code-string: #a5d6ff;
-    --code-builtin: #ffa657;
-    --code-name: #7ee787;
-    --code-bullet: #f2cc60;
-    --code-addition: #7ee787;
-    --code-deletion: #ffa198;
-  }
 }
 .hljs { background:transparent; color:inherit; }
 .hljs-comment,.hljs-code,.hljs-formula { color:var(--code-comment); }

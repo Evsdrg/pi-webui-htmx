@@ -27,7 +27,9 @@ function tokens(selector) {
   return merged;
 }
 
-// 深色主题的值指向 --dark-* 别名，这里展开成字面色值。
+// 主题清单必须与 layout.ts 的 LIGHT_THEMES/DARK_THEMES 保持同步：
+// 清单里有、CSS 里没有的主题会在运行时整页回退到亮色（最严重的一类分叉，
+// check-contract.mjs 也会核对两者一致）。
 const base = tokens(':root');
 function hex(value) {
   const resolved = value.replace(/var\((--[\w-]+)\)/, (_, name) => base[name] ?? '');
@@ -36,10 +38,11 @@ function hex(value) {
 
 const themes = {
   light: { ...base },
-  dark: { ...base, ...tokens('[data-theme="dark"]') },
   mist: { ...base, ...tokens('[data-theme="mist"]') },
   rose: { ...base, ...tokens('[data-theme="rose"]') },
   pine: { ...base, ...tokens('[data-theme="pine"]') },
+  dark: { ...base, ...tokens('[data-theme="dark"]') },
+  obsidian: { ...base, ...tokens('[data-theme="obsidian"]') },
 };
 
 const channel = value => { const c = value / 255; return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4; };

@@ -23,7 +23,9 @@ it('目录输入或模型选择变更使在途片段失效',()=>{
 // <base href> 影响，写根绝对路径在云端会跳出设备前缀。
 describe('请求入口都用相对路径', () => {
   it('导出下载通过文档基地址解析', async () => {
-    const source = await readFile(resolve(process.cwd(), 'src/modules/workbench.ts'), 'utf8');
+    // 导出下载逻辑现在在按需分块 session-actions.ts（它才是发起 location.assign
+    // 的地方）；workbench.ts 只路由动作。
+    const source = await readFile(resolve(process.cwd(), 'src/modules/session-actions.ts'), 'utf8');
     const calls = [...source.matchAll(/location\.assign\(([^)]*)\)/g)].map((m) => m[1]);
     expect(calls.length).toBeGreaterThan(0);
     for (const call of calls) {

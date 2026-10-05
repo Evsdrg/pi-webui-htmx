@@ -1,6 +1,6 @@
 import { BridgeClient, BridgeError } from './bridge';
 import { LiveView, EventCursor, record, text, runStateAfter, hasVisibleText, type RunState } from './stream';
-import { closeMobileSidebar, readDraft, saveDraft } from './layout';
+import { closeMobileSidebar, readDraft, readPreference, saveDraft, savePreference } from './layout';
 import { addFiles, toWire, formatSize, WIRE_BUDGET } from './attachments';
 import type { Attachment } from './attachments';
 import type { Capabilities, EventMessage, Message, Method, WorkerInfo } from '@/types/protocol';
@@ -8,7 +8,7 @@ import type { TopbarHost } from './topbar';
 import { closeDialog, el, openDialog } from './dom';
 import { mountFragmentRequests } from './fragment-requests';
 import { SessionScope } from './scope';
-import { absoluteUrl, relativeSocketUrl } from '../lib/url';
+import { relativeSocketUrl } from '../lib/url';
 import type { Scope } from './scope';
 
 const DIALOGS = new Set(['select','confirm','input','editor']);
@@ -65,19 +65,12 @@ export class Workbench {
   private pendingHistory: { sessionId: string; epoch: number } = { sessionId: '', epoch: 0 };
   private searchFocus: { sessionId: string; entryId: string; epoch: number } | undefined;
   /**
-   * autoRetryBySession 按会话记录自动重试偏好。
-   * Pi 的 RPC 没有 auto-retry 读回字段，桥也无从得知；因此这是本地偏好，
-   * 不是 Pi 的实时状态——界面必须这样说，不能让未勾选看起来像「已确认关闭」。
-   */
-  private autoRetryBySession = new Map<string, boolean>();
-  /**
    * thinkingBySession 按会话记住思考强度选择；空字符串表示「自动」——
    * 不向 Pi 发送 set_thinking，由 Pi 自己按 settings 与模型能力决定。
    */
   private thinkingBySession = new Map<string, string>();
   /** toolPresetBySession 记住每个会话的工具预设，跨启动沿用。 */
   private toolPresetBySession = new Map<string, string>();
-  private queueChoiceBySession = new Map<string, 'steering' | 'followUp'>();
   private statuses = new Map<string, string>();
   private widgets = new Map<string, { lines: string[]; placement: string }>();
   private commands: { name: string; description: string }[] = [];
@@ -85,11 +78,12 @@ export class Workbench {
   private searchTimer: ReturnType<typeof setTimeout> | undefined;
   private historyLoading = '';
   private historyRefreshPending = false;
+  /** renameTarget 是「重命名会话」对话框当前指向的会话 id（空表示未打开）。 */
+  private renameTarget = '';
   private subscribed = '';
   private dialogsLoading = false;
   private dialogsDirty = false;
   private cancelSessionFragments = () => {};
-  private dirRequest: XMLHttpRequest | undefined;
   private workspace: import('./workspace').Workspace | undefined;
   private models: import('./models').ModelsEditor | undefined;
   private branch: import('./branch').BranchNavigator | undefined;
@@ -143,35 +137,8 @@ export class Workbench {
       try { this.mention?.refresh(); } catch (error) { console.warn('@ 补全刷新失败', error); }
       this.updateControls();
     }, { signal });
-    // 目录列表每次换页后回显路径；用 htmx 自己的事件而不是轮询。
-    document.body.addEventListener('htmx:afterSwap', (event) => {
-      if ((event.target as HTMLElement).id === 'dir-list') this.syncDirInput();
-    }, { signal });
-    // 目录选择器是 shell 的一部分，但精简的测试夹具可能不渲染它；
-    // 缺元素时静默跳过，不让整个工作台起不来。
-    document.addEventListener('htmx:beforeRequest', (event) => {
-      const detail = (event as CustomEvent).detail;
-      if (detail?.target?.id === 'dir-list') { this.dirRequest = detail.xhr; this.updateDirUse(); }
-    }, { signal });
-    document.addEventListener('htmx:afterRequest', (event) => {
-      if ((event as CustomEvent).detail?.xhr === this.dirRequest) { this.dirRequest = undefined; this.updateDirUse(); }
-    }, { signal });
-    const dirInput = document.getElementById('cwd-input') as HTMLInputElement | null;
-    dirInput?.addEventListener('input', () => {
-      const list = document.getElementById('dir-list');
-      if (list) list.dataset.requestScope = String(Number(list.dataset.requestScope || '0') + 1);
-      this.updateDirUse();
-    }, { signal });
-    const dirGo = document.getElementById('dir-go');
-    dirGo?.addEventListener('click', () => {
-      const path = el<HTMLInputElement>('cwd-input').value.trim();
-      if (!path) return;
-      const requested = document.getElementById('dir-request') as HTMLInputElement | null;
-      if (requested) requested.value = path;
-      const use = document.getElementById('dir-use') as HTMLButtonElement | null;
-      if (use) use.disabled = true;
-      window.htmx.trigger(document.body, 'dirs-refresh');
-    }, { signal });
+    // 目录选择器与「新建会话」按需加载（低频交互，不占首屏预算）。
+    void import('./new-session').then((m) => { if (!this.abort.signal.aborted) m.wireDirectory(this.abort.signal); });
     // 两个配置面板共用一套「左栏导航 → 右栏内容」的切换逻辑，
     // 差别只在 data 属性前缀。写成一个函数避免两处漂移。
     const wireConfigNav = (navAttr: string, panelAttr: string, onActivate?: (section: string) => void) => {
@@ -211,50 +178,44 @@ export class Workbench {
       if (item?.dataset.modelsSection === 'json') this.models?.select('json');
     }, { signal });
     el('new-form').addEventListener('submit', (event) => {
-      event.preventDefault(); const cwd = el<HTMLInputElement>('cwd-input').value.trim();
-      if (!cwd || !this.directoryReady()) return;
-      const firstDirectory = !this.sessionId && !this.cwd;
-      const input = el<HTMLTextAreaElement>('prompt');
-      const draft = firstDirectory ? input.value : '';
-      const model = firstDirectory ? this.selectedModel() : undefined;
-      const queueChoice = firstDirectory ? this.queueChoiceBySession.get(this.queueChoiceKey()) : undefined;
-      this.selectSession('', cwd, '新会话');
-      if (firstDirectory) {
-        input.value = draft;
-        if (model) { this.modelIntent = model; this.renderModel(); }
-        if (queueChoice) {
-          this.queueChoiceBySession.set(this.queueChoiceKey(), queueChoice);
-          const radio = document.querySelector<HTMLInputElement>(`input[name="queue-kind"][value="${queueChoice}"]`);
-          if (radio) radio.checked = true;
-        }
-        this.saveCurrentDraft(); saveDraft('new:', ''); this.updateControls();
-      }
-      closeDialog('new-dialog'); input.focus();
+      event.preventDefault();
+      void import('./new-session').then((m) => m.submitNewSession(this.newSessionHost())).catch((err) => this.fail(err));
     }, { signal });
     el('session-search').addEventListener('input', () => {
       clearTimeout(this.searchTimer); const query = el<HTMLInputElement>('session-search').value.trim();
       this.searchTimer = setTimeout(() => void this.search(query), 250);
     }, { signal });
     el('model-select').addEventListener('change', () => void this.changeModel().catch((err) => this.fail(err)), { signal });
-    el('auto-compaction').addEventListener('change', () => {
-      const enabled = el<HTMLInputElement>('auto-compaction').checked;
-      // 成功后必须回读：command() 会先ensureWorker，其中的预取状态刷新
-      // 发生在 set 之前，会把勾选重置成旧值。回读才能反映 Pi 的真实状态。
-      void this.command('session.set_auto_compaction', { enabled })
-        .then(async () => { this.notify(enabled ? '已开启自动压缩。' : '已关闭自动压缩。'); await this.refreshState(); })
-        .catch((err) => { this.fail(err); void this.refreshState(); });
-    }, { signal });
     this.wireAttachments();
     void this.wireMention();
     void this.wireLazy();
-    el('auto-retry').addEventListener('change', () => {
-      const enabled = el<HTMLInputElement>('auto-retry').checked;
-      // Pi 没有自动重试的读回字段，失败时把勾选还原，避免界面停在假状态。
-      // 偏好按会话记忆：Pi 不提供 auto-retry 的读回字段，
-      // 跨会话共用一个 DOM 状态会把上一会话的选择带到新会话（U14）。
-      this.autoRetryBySession.set(this.scope.current || '', enabled);
-      void this.command('session.set_auto_retry', { enabled }).then(() => this.notify(enabled ? '已开启自动重试。' : '已关闭自动重试。')).catch((err) => { this.fail(err); el<HTMLInputElement>('auto-retry').checked = !enabled; });
+    // 会话默认（自动压缩 / 自动重试 / 运行中发送方式）是全局设置：
+    // 改动时对当前已启动的会话立即生效，新会话在 ensureWorker 里按默认对齐。
+    // 自动压缩有 Pi 读回字段；自动重试没有，只能 set 后不回读。
+    el('default-auto-compaction').addEventListener('change', async (event) => {
+      const enabled = (event.target as HTMLInputElement).checked;
+      savePreference('auto-compaction', enabled ? '1' : '0');
+      if (!this.sessionId) return;
+      try {
+        await this.command('session.set_auto_compaction', { enabled });
+        this.notify(enabled ? '已开启自动压缩。' : '已关闭自动压缩。');
+        // 回读：command() 内的预取状态刷新发生在 set 之前，不回读会停在旧值。
+        await this.refreshState();
+      } catch (err) { this.fail(err); void this.refreshState(); }
     }, { signal });
+    el('default-auto-retry').addEventListener('change', (event) => {
+      const enabled = (event.target as HTMLInputElement).checked;
+      savePreference('auto-retry', enabled ? '1' : '0');
+      if (!this.sessionId) return;
+      void this.command('session.set_auto_retry', { enabled }).then(() => this.notify(enabled ? '已开启自动重试。' : '已关闭自动重试。')).catch((err) => this.fail(err));
+    }, { signal });
+    for (const option of document.querySelectorAll<HTMLInputElement>('input[name="default-queue-kind"]')) {
+      option.addEventListener('change', () => {
+        if (!option.checked) return;
+        this.saveDefaultQueueKind(option.value === 'followUp' ? 'followUp' : 'steering');
+        this.updateControls();
+      }, { signal });
+    }
     el('thinking-select').addEventListener('change', () => {
       const level = el<HTMLSelectElement>('thinking-select').value;
       this.thinkingBySession.set(this.sessionId, level);
@@ -277,13 +238,6 @@ export class Workbench {
     document.querySelector('[data-action="full-history"]')?.addEventListener('click', () => {
       void this.topbar().then((m) => m.openFullHistory(this.host)).catch((err) => this.fail(err));
     }, { signal });
-    for (const option of document.querySelectorAll<HTMLInputElement>('input[name="queue-kind"]')) {
-      option.addEventListener('change', () => {
-        if (!option.checked) return;
-        this.queueChoiceBySession.set(this.queueChoiceKey(), option.value === 'followUp' ? 'followUp' : 'steering');
-        this.updateControls();
-      }, { signal });
-    }
     // 记忆分区、筛选与分页动作由 mc.html 声明。
     document.addEventListener('click', (event) => this.onClick(event), { signal });
     document.addEventListener('keydown', (event) => { if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'k') { event.preventDefault(); void this.newSession().catch((err) => this.fail(err)); } }, { signal });
@@ -399,24 +353,29 @@ export class Workbench {
     if (!oldId && !this.cwd) { await this.newSession(); throw new Error('请先选择工作目录，再发送消息。'); }
     // 工具预设只在拉起进程时生效，因此每次启动都带上该会话上次的选择。
     const preset = this.toolPresetBySession.get(this.queueChoiceKey()) ?? '';
+    // 「会话默认」（自动压缩/自动重试/运行中发送方式）在启动时对齐：
+    // 每个新拉起的工作进程先按默认设置一次，之后的改动即时下发。
+    const autoCompaction = readPreference('auto-compaction') !== '0';
+    const autoRetry = readPreference('auto-retry') === '1';
     const info = await this.request<WorkerInfo>('session.start', { cwd: this.cwd, ...(preset ? { toolPreset: preset } : {}) }, oldId);
     if (!scope.alive()) throw new Error('会话已切换，本条消息未发送；内容已保留，请手动重发。');
     let activeScope = scope;
     if (!oldId) {
-      const queueChoice = this.queueChoiceBySession.get(this.queueChoiceKey());
       // Pi 分配新 ID 是本次发送自身的身份迁移；旧 scope 失效后必须
       // 交给新代次继续执行，不能误判为用户主动切换会话。
       this.scope.switchTo(info.sessionId);
       this.cancelSessionFragments();
       activeScope = this.scope.current$();
       this.sessionId = info.sessionId; this.cwd = info.cwd;
-      if (queueChoice) this.queueChoiceBySession.set(info.sessionId, queueChoice);
       if (preset) this.toolPresetBySession.set(info.sessionId, preset);
       document.body.dataset.sessionId = this.sessionId;
       history.replaceState(null, '', `/?session=${encodeURIComponent(info.sessionId)}`);
     }
     this.cwd = info.cwd;
     await this.subscribe();
+    // 对齐默认设置：命令都固定发往本次启动的会话（失败不阻塞发送）。
+    await this.request('session.set_auto_compaction', { enabled: autoCompaction }, this.sessionId).catch(() => {});
+    await this.request('session.set_auto_retry', { enabled: autoRetry }, this.sessionId).catch(() => {});
     await this.refreshState(activeScope);
     // 启动后立刻取一次统计：上下文用量只有 worker 持有模型时才非空，
     // 等到第一轮 settled 才显示会让用户以为没有这个指标。
@@ -575,9 +534,6 @@ export class Workbench {
     this.searchFocus = entryId ? { sessionId: id, entryId, epoch: this.scope.epoch } : undefined;
     if (previous && this.bridge.connected) void this.request('session.unsubscribe', undefined, previous).catch(() => {});
     this.sessionId = id; this.subscribed = ''; this.cwd = cwd; this.diskSession = !!id && persisted; this.cursor.reset(); this.live.clear();
-    const choice = this.queueChoiceBySession.get(this.queueChoiceKey()) ?? 'steering';
-    const queueRadio = document.querySelector<HTMLInputElement>(`input[name="queue-kind"][value="${choice}"]`);
-    if (queueRadio) queueRadio.checked = true;
     this.currentModel = undefined; this.historicalModel = undefined; this.modelIntent = undefined; this.modelUnavailable = false;
     const modelSelect = el<HTMLSelectElement>('model-select');
     modelSelect.querySelectorAll('option[data-runtime-model]').forEach((option) => option.remove());
@@ -592,9 +548,7 @@ export class Workbench {
     // 用户要能在这里继续重发（U13）。其余情况照常载入目标会话草稿。
     // 附件按会话隔离：上一会话的图片不能留在新会话里被发送出去（U01）。
     this.clearAttachments();
-    // 自动重试是本地偏好：切换会话时套用该会话上次的选择，默认关闭。
-    el<HTMLInputElement>('auto-retry').checked = this.autoRetryBySession.get(id) ?? false;
-    // 思考强度同样按会话记住；没有记录时显示「自动」。
+    // 思考强度按会话记住；没有记录时显示「自动」。
     const rememberedThinking = this.thinkingBySession.get(id);
     const thinkingSelect = el<HTMLSelectElement>('thinking-select');
     thinkingSelect.value = rememberedThinking && Array.from(thinkingSelect.options).some((option) => option.value === rememberedThinking) ? rememberedThinking : '';
@@ -651,49 +605,30 @@ export class Workbench {
     if (sub) sub.textContent = section === 'extensions' ? '已安装的包' : '外观与对话';
     openDialog('settings-dialog');
     if (section === 'extensions') window.htmx.trigger(document.body, 'packages-refresh');
+    // 「会话默认」控件是全局偏好：每次打开设置时按偏好回显，
+    // 避免显示值与实际生效的偏好两处各说各话。
+    if (section === 'general') this.syncDefaultControls();
   }
 
+  // newSession 打开「新建会话」对话框（逻辑在按需分块 new-session.ts）。
   private async newSession(): Promise<void> {
-    const response = await this.request<{ roots: string[] }>('files.roots', undefined, '');
-    const start = this.cwd || response.roots[0] || '';
-    el<HTMLInputElement>('cwd-input').value = start;
-    // 路径输入框先于列表刷新填好：列表用 hx-include 读它，
-    // 顺序反了就会拿到上一次的路径。
-    el<HTMLInputElement>('cwd-input').value = start;
-    const current = document.getElementById('dir-current') as HTMLInputElement | null;
-    if (current) current.value = '';
-    const requested = document.getElementById('dir-request') as HTMLInputElement | null;
-    if (requested) requested.value = start;
-    this.updateDirUse();
-    openDialog('new-dialog');
-    // hx-trigger 上的 load 只在元素首次插入 DOM 时触发，第二次打开对话框
-    // 不会重新请求，所以这里显式触发一次。
-    window.htmx.trigger(document.body, 'dirs-refresh');
-    this.syncNewSessionButton();
+    const m = await import('./new-session');
+    await m.openNewSession(this.newSessionHost());
   }
-
-  /** 目录列表换页后把新路径回显到输入框。当前路径由片段的带外交换写进
-      * #dir-current，输入框只是它的可见形态——两者不保持一致的话，
-      * 用户改完输入框再刷新会读到旧路径。 */
-  private syncDirInput(): void {
-    const current = document.getElementById('dir-current') as HTMLInputElement | null;
-    const loaded = document.querySelector<HTMLElement>('#dir-list [data-dir-loaded-path]');
-    if (current && loaded && current.value === loaded.dataset.dirLoadedPath) el<HTMLInputElement>('cwd-input').value = current.value;
-    this.updateDirUse();
+  private newSessionHost(): import('./new-session').Host {
+    return {
+      request: (method, params, session) => this.request(method, params, session),
+      selectSession: (id, cwd, title) => this.selectSession(id, cwd, title),
+      currentCwd: () => this.cwd,
+      firstDirectory: () => !this.sessionId && !this.cwd,
+      selectedModel: () => this.selectedModel(),
+      applyModelIntent: (model) => { this.modelIntent = model; this.renderModel(); },
+      saveDraft: (key, text) => saveDraft(key, text),
+      updateControls: () => this.updateControls(),
+      syncButton: () => this.syncNewSessionButton(),
+      fail: (error) => this.fail(error),
+    };
   }
-
-  private directoryReady(): boolean {
-    const current = document.getElementById('dir-current') as HTMLInputElement | null;
-    if (!current) return true; // 精简嵌入页没有目录浏览器。
-    const loaded = document.querySelector<HTMLElement>('#dir-list [data-dir-loaded-path]');
-    return !this.dirRequest && !!current.value && current.value === loaded?.dataset.dirLoadedPath && current.value === el<HTMLInputElement>('cwd-input').value.trim();
-  }
-
-  private updateDirUse(): void {
-    const use = document.getElementById('dir-use') as HTMLButtonElement | null;
-    if (use) use.disabled = !this.directoryReady();
-  }
-
   /** 侧栏按钮上的路径展示。家目录缩写不在客户端做：桥没有暴露 home，
       * 而猜一个前缀会把别人的路径改错。超长路径由 CSS 做左省略，
       * 保留最有信息量的尾部（与 Pi Web 的 PathLabel 同一手法）。 */
@@ -729,7 +664,7 @@ export class Workbench {
     // 排队意图必须在 ensureWorker 之前取：它会刷新会话状态，
     // 而刷新会把单选按钮重置成 Pi 的当前值，晚一步读就丢了用户的选择。
     const busy = this.run !== 'idle';
-    const queuedKind = busy ? this.queueKind() : undefined;
+    const queuedKind = busy ? this.defaultQueueKind() : undefined;
     const selectedModel = this.selectedModel();
     try {
       const scope = this.scope.current$(); const draftKey = this.draftKey();
@@ -851,16 +786,28 @@ export class Workbench {
   }
   // 低频会话结构操作（「从此处编辑」的会话内跳转、删除会话）在独立
   // 分块里按需加载（与 branch/models 同一策略），不占首屏预算。
-  private async sessionAction(kind: string, button: HTMLElement): Promise<void> {
+  // openRename 打开行内重命名对话框，带入当前标题。
+  private openRename(id: string, title: string): void {
+    this.renameTarget = id;
+    el<HTMLInputElement>('rename-input').value = title;
+    openDialog('rename-dialog');
+    const input = el<HTMLInputElement>('rename-input');
+    input.focus();
+    input.select();
+  }
+  private async sessionAction(kind: string, button: HTMLElement, targetId = '', name = ''): Promise<void> {
     const { run } = await import('./session-actions');
     await run(kind, {
       command: this.command.bind(this),
-      request: (m, p) => this.request(m, p, ''),
+      request: (m, p, s) => this.request(m, p, s === undefined ? '' : s),
       refreshHistory: this.refreshHistory.bind(this),
       selectSession: this.selectSession.bind(this),
       refreshSessions: this.refreshSessions.bind(this),
       fail: this.fail.bind(this),
-      sessionId: this.sessionId, cwd: this.cwd,
+      notify: this.notify.bind(this),
+      sessionId: targetId || this.sessionId,
+      cwd: this.cwd,
+      name,
     }, button);
   }
   private async refreshHistory(leafId = ''): Promise<void> {
@@ -1081,11 +1028,9 @@ export class Workbench {
     try { await this.request('session.ui_response', params); if (!scope.alive()) return; dialog.close(); dialog.remove(); await this.refreshDialogs(); await this.reconcile(); }
     catch (error) { if (!scope.alive()) return; this.fail(error); for (const btn of form.querySelectorAll('button')) btn.disabled = false; }
   }
+  // 斜杠命令菜单的渲染在按需分块 commands.ts（低频交互，不占首屏）。
   private showCommands(): void {
-    const menu = el('command-menu'); const value = el<HTMLTextAreaElement>('prompt').value;
-    menu.replaceChildren(); menu.hidden = !value.startsWith('/') || value.includes(' ') || !this.commands.length;
-    if (menu.hidden) return;
-    for (const command of this.commands.filter((c) => c.name.startsWith(value.slice(1))).slice(0, 20)) { const button = document.createElement('button'); button.type = 'button'; button.dataset.command = command.name; button.textContent = `/${command.name}  ${command.description}`; menu.append(button); }
+    void import('./commands').then((m) => { if (!this.abort.signal.aborted) m.buildCommands(this.commands); });
   }
   private onClick(event: MouseEvent): void {
     const target = event.target as Element;
@@ -1098,12 +1043,14 @@ export class Workbench {
     // 分支面板的两个动作由片段里的 data-branch-* 声明，交给模块翻译；
     // 模块可能还没加载（面板未开过），所以先问一句。
     if (this.branch?.handleClick(event)) return;
+    // 行内操作按钮（改名/删除）优先于整行导航：它们嵌在 [data-session] 行里，
+    // 若先判 [data-session] 就会把点击当成打开会话。
+    const action = target.closest<HTMLElement>('[data-action]');
+    if (action) { void this.action(action.dataset.action ?? '', action).catch((error) => this.fail(error)); return; }
     const link = target.closest<HTMLElement>('[data-session]');
     if (link) { event.preventDefault(); this.selectSession(link.dataset.session ?? '', link.dataset.cwd ?? '', link.dataset.title ?? '会话', true, link.dataset.entryId ?? ''); return; }
     const command = target.closest<HTMLElement>('[data-command]');
     if (command) { el<HTMLTextAreaElement>('prompt').value = `/${command.dataset.command} `; el('command-menu').hidden = true; el('prompt').focus(); return; }
-    const button = target.closest<HTMLElement>('[data-action]');
-    if (button) void this.action(button.dataset.action ?? '', button).catch((error) => this.fail(error));
   }
   private async action(action: string, button: HTMLElement): Promise<void> {
     switch (action) {
@@ -1155,7 +1102,6 @@ export class Workbench {
       case 'models-test': await this.models?.test(); break;
       case 'models-catalog': await this.models?.catalog(); break;
       case 'session-menu': {
-        el<HTMLInputElement>('session-name').value = this.sessionTitle;
         openDialog('session-dialog');
         if (this.sessionId) await this.refreshState();
         break;
@@ -1164,35 +1110,34 @@ export class Workbench {
         await this.request('session.abort');
         if (this.run !== 'idle') this.notice(ABORT_PENDING_NOTICE);
         break;
-      case 'rename': this.sessionTitle = el<HTMLInputElement>('session-name').value; await this.command('session.set_name', { name: this.sessionTitle }); this.refreshSessions(); break;
+      case 'session-rename': {
+        const id = button.closest<HTMLElement>('[data-session]')?.dataset.session ?? '';
+        if (id) this.openRename(id, button.closest<HTMLElement>('[data-session]')?.dataset.title ?? '');
+        break;
+      }
+      case 'session-delete': {
+        const id = button.closest<HTMLElement>('[data-session]')?.dataset.session ?? '';
+        if (id) await this.sessionAction('delete', button, id);
+        break;
+      }
+      case 'rename-save': {
+        const name = el<HTMLInputElement>('rename-input').value.trim();
+        if (!name || !this.renameTarget) { closeDialog('rename-dialog'); break; }
+        const target = this.renameTarget; this.renameTarget = '';
+        try {
+          await this.sessionAction('rename', button, target, name);
+        } finally { closeDialog('rename-dialog'); this.renameTarget = ''; }
+        break;
+      }
+      case 'rename-cancel': this.renameTarget = ''; closeDialog('rename-dialog'); break;
       case 'compact': this.setRun('compacting'); try { await this.command('session.compact'); await this.refreshHistory(); } finally { await this.reconcile(); } break;
-      case 'clone': { const result = await this.command<{sessionId:string}>('session.clone'); this.selectSession(result.sessionId, this.cwd, '克隆会话'); this.refreshSessions(); break; }
+      case 'clone': await this.sessionAction('clone', button); break;
       case 'fork': await this.forkFrom(button.dataset.entryId ?? ''); break;
       case 'edit-here': await this.sessionAction('edit', button); break;
       case 'stop': await this.request('session.stop', { force: false }); this.setRun('idle'); this.notice('工作进程已释放，历史保留在磁盘。'); break;
-      case 'delete': await this.sessionAction('delete', button); break;
-      case 'copy-turn': {
-        // 一个回合可能有多段正文（工具之间穿插说明）；全部按顺序复制，
-        // 只取第一段会把中间的解释丢掉。
-        const turn = button.closest('.turn');
-        const parts = [...(turn?.querySelectorAll('.turn-assistant .bubble') ?? [])].map((node) => node.textContent ?? '').filter(Boolean);
-        await navigator.clipboard.writeText(parts.join('\n\n')); this.notify('已复制'); break;
-      }
+      case 'copy-turn': await import('./commands').then((m) => m.copyTurn(button, this.notify.bind(this))); break;
       case 'commands': this.commands = (await this.command<Record<string,unknown>[]>('session.commands')).map((c) => ({name: text(c.name), description: text(c.description)})); el<HTMLTextAreaElement>('prompt').value = '/'; this.showCommands(); el('prompt').focus(); break;
-      case 'export': {
-        // 用完整会话 ID，截断只会得到 "history-" 这种没有辨识度的名字。
-        const name = `session-${this.sessionId.slice(0, 64)}.html`;
-        // 导出是磁盘投影：这里刻意不走 command()（它会先 ensureWorker），
-        // 只看历史不该拉起 Pi 进程（B76）。
-        const result = await this.request<{ path: string }>('session.export_html', { fileName: name });
-        const file = text(result.path).split('/').pop() || name;
-        this.notify('已导出，开始下载。');
-        // 走普通导航而不是 fetch：需要浏览器弹出下载，且要带登录 Cookie。
-        // 用文档基地址解析：`location.assign` 不受 <base href> 影响，
-        // 写根绝对路径在设备前缀形态下会跳出前缀，下载 404（B54）。
-        location.assign(absoluteUrl(`ui/exports/${encodeURIComponent(file)}`).toString());
-        break;
-      }
+      case 'export': await this.sessionAction('export', button); break;
       case 'abort-retry': await this.command('session.abort_retry'); this.notify('已请求中止重试。'); await this.reconcile(); break;
       case 'attach': el<HTMLInputElement>('attach-input').click(); break;
       case 'workspace': {
@@ -1202,20 +1147,12 @@ export class Workbench {
       }
     }
   }
-  // refreshQueueState 反映 Pi 可读回的排队模式与自动压缩。
-  // 自动重试没有读回字段，只在用户本次操作时更新，不清空。
+  // refreshQueueState 只保留自动压缩的读回：它是 Pi 的实时状态。
+  // 排队发送方式现在是全局默认（设置面板），不再从 Pi 读回；自动重试没有
+  // 读回字段，同样不在这里处理。
   private refreshQueueState(state: State): void {
-    const steering = document.querySelector<HTMLInputElement>('input[name="queue-kind"][value="steering"]');
-    const followUp = document.querySelector<HTMLInputElement>('input[name="queue-kind"][value="followUp"]');
-    if (steering && followUp) {
-      const chosen = this.queueChoiceBySession.get(this.queueChoiceKey());
-      if (chosen) (chosen === 'followUp' ? followUp : steering).checked = true;
-      else if (state.followUpMode !== undefined) {
-        (state.followUpMode === 'one-at-a-time' ? followUp : steering).checked = true;
-      }
-    }
-    const compaction = el<HTMLInputElement>('auto-compaction');
-    if (state.autoCompactionEnabled !== undefined) compaction.checked = state.autoCompactionEnabled;
+    const compaction = document.getElementById('default-auto-compaction') as HTMLInputElement | null;
+    if (compaction && state.autoCompactionEnabled !== undefined) compaction.checked = state.autoCompactionEnabled;
     this.updateControls();
   }
   // wireAttachments 接管文件选择、粘贴与拖拽三条入口。
@@ -1311,14 +1248,29 @@ export class Workbench {
 
   private clearAttachments(): void { this.attachments = []; this.renderAttachments(); }
   private draftKey(): string { return this.sessionId || `new:${this.cwd}`; }
-  private queueChoiceKey(): string { return this.sessionId || `new:${this.cwd}`; }
+  // defaultQueueKind 读全局默认的「运行中发送方式」。
+  private defaultQueueKind(): 'steering' | 'followUp' {
+    return readPreference('queue-kind') === 'followUp' ? 'followUp' : 'steering';
+  }
+  private saveDefaultQueueKind(kind: 'steering' | 'followUp'): void { savePreference('queue-kind', kind); }
+  // syncDefaultControls 把全局默认回显到设置面板的控件上。
+  private syncDefaultControls(): void {
+    const compaction = document.getElementById('default-auto-compaction') as HTMLInputElement | null;
+    if (compaction) compaction.checked = readPreference('auto-compaction') !== '0';
+    const retry = document.getElementById('default-auto-retry') as HTMLInputElement | null;
+    if (retry) retry.checked = readPreference('auto-retry') === '1';
+    const kind = this.defaultQueueKind();
+    for (const option of document.querySelectorAll<HTMLInputElement>('input[name="default-queue-kind"]')) {
+      option.checked = option.value === kind;
+    }
+  }
   private saveCurrentDraft(): void { saveDraft(this.draftKey(), el<HTMLTextAreaElement>('prompt').value); }
   private setConnection(online: boolean): void { el('conn-state').textContent = online ? '已连接' : '未连接'; el('conn-state').className = `state state-${online ? 'online' : 'offline'}`; if (online) this.notice(''); this.updateControls(); }
   private setRun(state: RunState): void { this.run = state; el('session-state').textContent = {idle:'就绪',running:'运行中',retrying:'重试中',compacting:'压缩中',waiting_input:'等待确认'}[state]; this.updateControls(); }
-  private updateControls(): void { el<HTMLButtonElement>('send-button').disabled = !this.bridge.connected || this.sending || !el<HTMLTextAreaElement>('prompt').value.trim() || (this.modelUnavailable && !this.selectedModel()); el('abort-button').hidden = this.run === 'idle'; const hint = el('queue-hint'); const busy = this.run !== 'idle'; hint.hidden = !busy; if (busy) hint.textContent = this.queueKind() === 'steering' ? '本轮结束后插入指令' : '排到队列末尾，本轮完成后追加'; el<HTMLSelectElement>('model-select').disabled = busy; el<HTMLSelectElement>('thinking-select').disabled = busy || !this.sessionId; }
-  // queueKind 读会话对话框里的 radio；缺省 steering，与 Pi 的默认一致。
-  // 取值必须与桥的协议一致：steering/followUp，不是 steer。
-  private queueKind(): 'steering' | 'followUp' { return document.querySelector<HTMLInputElement>('input[name="queue-kind"]:checked')?.value === 'followUp' ? 'followUp' : 'steering'; }
+  private updateControls(): void { el<HTMLButtonElement>('send-button').disabled = !this.bridge.connected || this.sending || !el<HTMLTextAreaElement>('prompt').value.trim() || (this.modelUnavailable && !this.selectedModel()); el('abort-button').hidden = this.run === 'idle'; const hint = el('queue-hint'); const busy = this.run !== 'idle'; hint.hidden = !busy; if (busy) hint.textContent = this.defaultQueueKind() === 'steering' ? '本轮结束后插入指令' : '排到队列末尾，本轮完成后追加'; el<HTMLSelectElement>('model-select').disabled = busy; el<HTMLSelectElement>('thinking-select').disabled = busy || !this.sessionId; }
+  // queueChoiceKey 供工具预设按会话记忆（会话 id 或「新会话 + cwd」）。
+  // 排队发送方式已改为全局默认（defaultQueueKind），不再按会话取键。
+  private queueChoiceKey(): string { return this.sessionId || `new:${this.cwd}`; }
   // sendQueued 在运行中发送：先把模式同步给桥，再带 streamingBehavior 提交。
   // 不先同步的话，用户改了 radio 但桥仍是旧模式，行为与界面显示不一致。
   private async sendQueued(text: string, kind: 'steering' | 'followUp', images: Attachment[], scope: Scope): Promise<void> {

@@ -76,6 +76,12 @@ export class Workspace {
       const target = (event as CustomEvent).detail?.target as HTMLElement | undefined;
       if (target?.id === 'file-list') { const label = document.getElementById('sidebar-file-path'); if (label) label.textContent = this.path.split('/').filter(Boolean).pop() ?? ''; }
     }, { signal: this.abort.signal });
+    // 状态片段的结果到达后决定差异区：成功才请求并显示；失败（非 git 仓库等）
+    // 保持隐藏——错误已在状态区显示一次，重复展示是同一句话出现两遍的来源。
+    document.addEventListener('htmx:afterRequest', (event) => {
+      const detail = (event as CustomEvent).detail as { elt?: Element; xhr?: { status?: number; responseText?: string } } | undefined;
+      if (detail?.elt instanceof Element && detail.elt.id === 'git-status') this.gitStatusLoaded(detail.xhr);
+    }, { signal: this.abort.signal });
   }
   setCwd(cwd: string): void {
     if (cwd === this.cwd) return;
@@ -369,12 +375,24 @@ export class Workspace {
   private async git(): Promise<void> {
     // 「变更」面板的两块内容都是「数据 → HTML」，全部交给桥渲染：
     // 状态行与文件列表走 /ui/git-status，差异走 /ui/diff。
-    // 之前这里用 createElement 拼状态列表，截断文案因此重复了一份，
-    // 而且和桥的服务端渲染容易走偏。
+    // 但两者不能同时触发：非 git 仓库时两个端点渲染的是同一句错误，
+    // 界面上会出现两次。先请求状态，由 gitStatusLoaded 按结果决定差异区。
     const cwd = this.cwd;
     el<HTMLInputElement>('git-path').value = cwd;
+    // 刷新期间先藏旧差异，避免它与新状态短暂矛盾；结果到达后由
+    // gitStatusLoaded 决定显示（成功）还是保持隐藏（失败）。
+    const diff = document.getElementById('git-diff');
+    if (diff) diff.hidden = true;
     window.htmx.trigger(document.body, 'git-status-refresh');
-    await this.diff(cwd);
+  }
+  // gitStatusLoaded 处理状态片段的结果：只有成功（非 .empty-note）才请求
+  // 差异并显示；失败时错误已由状态区呈现一次，差异区保持隐藏。
+  private gitStatusLoaded(xhr: { status?: number; responseText?: string } | undefined): void {
+    const diff = document.getElementById('git-diff');
+    if (!diff) return;
+    const failed = !xhr || xhr.status !== 200 || (xhr.responseText ?? '').includes('empty-note');
+    diff.hidden = failed;
+    if (!failed) void this.diff(this.cwd);
   }
   // diff 是「变更」面板的更新动作：同样走 htmx 声明式请求。
   private async diff(cwd: string): Promise<void> {

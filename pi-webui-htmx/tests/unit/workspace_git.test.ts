@@ -46,15 +46,44 @@ test('「上一级」写隐藏输入并触发片段刷新，而不是自己拼 U
   expect(triggers).toContain('files-refresh');
 });
 
-test('切换「变更」标签把路径交给两个声明式片段请求', async () => {
+test('切换「变更」标签先只请求状态片段', async () => {
   const { triggers } = mountWorkspace();
   workspace!.setCwd('/repo');
   document.querySelector<HTMLButtonElement>('[data-panel="git"]')!.click();
-  await vi.waitFor(() => expect(triggers).toContain('diff-refresh'));
-  // 状态列表与差异都由桥渲染，两块共用当前目录。
-  expect(triggers).toContain('git-status-refresh');
-  expect((document.getElementById('diff-path') as HTMLInputElement).value).toBe('/repo');
+  await vi.waitFor(() => expect(triggers).toContain('git-status-refresh'));
   expect((document.getElementById('git-path') as HTMLInputElement).value).toBe('/repo');
+  // 差异片段要等状态片段的结果：非 git 仓库时两个端点会渲染同一句错误，
+  // 同时触发会让「不是 Git 仓库」在界面上出现两次。
+  expect(triggers).not.toContain('diff-refresh');
+});
+
+test('状态片段失败（非 Git 仓库）时差异区不触发且隐藏', async () => {
+  const { triggers } = mountWorkspace();
+  workspace!.setCwd('/not-a-repo');
+  document.querySelector<HTMLButtonElement>('[data-panel="git"]')!.click();
+  await vi.waitFor(() => expect(triggers).toContain('git-status-refresh'));
+  // fragmentIssue 的失败输出是 .empty-note；status 200 但内容是错误提示。
+  document.dispatchEvent(new CustomEvent('htmx:afterRequest', { detail: {
+    elt: document.getElementById('git-status'),
+    xhr: { status: 200, responseText: '<p class="empty-note">目标不是可用的 Git 仓库</p>' },
+  } }));
+  await Promise.resolve();
+  expect(triggers).not.toContain('diff-refresh');
+  expect(document.getElementById('git-diff')!.hidden).toBe(true);
+});
+
+test('状态片段成功后差异区才请求并显示', async () => {
+  const { triggers } = mountWorkspace();
+  workspace!.setCwd('/repo');
+  document.querySelector<HTMLButtonElement>('[data-panel="git"]')!.click();
+  await vi.waitFor(() => expect(triggers).toContain('git-status-refresh'));
+  document.dispatchEvent(new CustomEvent('htmx:afterRequest', { detail: {
+    elt: document.getElementById('git-status'),
+    xhr: { status: 200, responseText: '<p>main · 工作区干净</p>' },
+  } }));
+  await vi.waitFor(() => expect(triggers).toContain('diff-refresh'));
+  expect((document.getElementById('diff-path') as HTMLInputElement).value).toBe('/repo');
+  expect(document.getElementById('git-diff')!.hidden).toBe(false);
 });
 
 test('迟到的文件列表响应被拒绝交换（按当前根目录判定）', async () => {

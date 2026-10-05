@@ -122,23 +122,46 @@ for(const [name,relative] of Object.entries(manifest.templates??{})){
  if(!/text-align\s*:\s*right/.test(body('.stats-token .stats-rows dd')))fail('Token 组的值需在窄列内右对齐');
  if(!/grid-template-columns\s*:\s*auto minmax\(0,\s*1fr\) auto/.test(body('.stats-info .stats-rows')))fail('会话事实组需要标签/值/复制按钮三列');
 }
-// 深色主题有两处入口：「显式选深色」与「跟随系统」。两者必须给出完全相同的
-// 令牌集合，否则在深色系统上看到的界面会和手动选深色不一致——这类分叉不会
-// 报错，只会让某个主题路径静默变样（历史上 app.css 就重复写过一份深色值）。
+// 主题契约（2026-10 模型）：主题 id 由 layout.ts 解析后写 data-theme，
+// 因此这里核对三件事，全部是「静默分叉」型故障的入口：
+//   1. layout.ts 声明的主题 id 与 tokens.css 的块一一对应（light 用 :root）；
+//   2. 深色主题（dark/obsidian）必须定义**完整**的深色调色板——漏一个令牌
+//      就会在深色页面上露出对应的浅色 fallback（例如工具块白底）；
+//   3. tokens.css 不得再出现 prefers-color-scheme 深色块：换主题的唯一入口
+//      是 JS 解析（system 模式由 matchMedia 监听重解析），两份入口会分叉。
 {
- const extract=(css,pattern)=>{
-  const match=new RegExp(`${pattern}\\s*\\{([^}]*)\\}`,'m').exec(css);
-  if(!match)return null;
-  return match[1].split(';').map(part=>part.split(':')[0].trim()).filter(Boolean).sort();
+ const layout=readFileSync(resolve(root,'src/modules/theme.ts'),'utf8');
+ const list=(name)=>{
+  const match=new RegExp(`${name}\\s*=\\s*\\[([^\\]]+)\\]`).exec(layout);
+  if(!match)fail(`theme.ts 缺少 ${name} 数组`);
+  return [...(match?.[1]??'').matchAll(/'([a-z-]+)'/g)].map(m=>m[1]);
  };
- for(const file of ['src/styles/tokens.css','src/styles/code.css']){
-  const css=readFileSync(resolve(root,file),'utf8').replace(/\/\*[\s\S]*?\*\//g,'');
-  const explicit=extract(css,'\\[data-theme="dark"\\]');
-  const system=extract(css,':root:not\\(\\[data-theme\\]\\)');
-  if(!explicit||!system){fail(`${file} 缺少深色主题的某个入口（显式选择 / 跟随系统）`);continue;}
-  if(JSON.stringify(explicit)!==JSON.stringify(system))fail(`${file} 的深色两处入口令牌不一致：显式 ${explicit.join(',')} / 系统 ${system.join(',')}`);
-  else ok(`${file} 深色两处入口一致（${explicit.length} 个令牌）`);
+ const lightThemes=list('LIGHT_THEMES'),darkThemes=list('DARK_THEMES');
+ if(!lightThemes.length||!darkThemes.length)fail('主题清单为空');
+ const css=readFileSync(resolve(root,'src/styles/tokens.css'),'utf8').replace(/\/\*[\s\S]*?\*\//g,'');
+ if(/prefers-color-scheme/.test(css))fail('tokens.css 又出现了 prefers-color-scheme 深色块（主题只有 JS 解析一个入口）');
+ const block=(id)=>new RegExp(`\\[data-theme="${id}"\\]\\s*\\{([^}]*)\\}`).exec(css)?.[1];
+ // 深色调色板的必需令牌：与 :root（light）那批同名，覆盖到 theme 的一切。
+ const required=['--bg','--bg-panel','--bg-hover','--bg-selected','--border','--text','--text-muted','--text-dim','--accent','--accent-hover','--accent-contrast','--user-bg','--assistant-bg','--tool-bg','--bg-subtle','--danger','--success','--thinking-active','--shadow-color'];
+ for(const id of darkThemes){
+  const body=block(id);
+  if(!body){fail(`夜间主题 "${id}" 在 tokens.css 里没有块（运行时整页回退亮色）`);continue;}
+  const keys=new Set(body.split(';').map(part=>part.split(':')[0].trim()).filter(Boolean));
+  const missing=required.filter(k=>!keys.has(k));
+  if(missing.length)fail(`夜间主题 "${id}" 缺少令牌：${missing.join(', ')}`);
+  else ok(`夜间主题 "${id}" 完整（${required.length} 个令牌）`);
  }
+ for(const id of lightThemes){
+  if(id==='light')continue; // 默认调色板就是 :root
+  if(!block(id))fail(`白天主题 "${id}" 在 tokens.css 里没有块`);
+ }
+ ok(`主题清单与 CSS 对齐（白天 ${lightThemes.join('/')}；夜间 ${darkThemes.join('/')}）`);
+ const code=readFileSync(resolve(root,'src/styles/code.css'),'utf8').replace(/\/\*[\s\S]*?\*\//g,'');
+ for(const id of darkThemes){
+  if(!new RegExp(`\\[data-theme="${id}"\\]`).test(code))fail(`code.css 未覆盖夜间主题 "${id}"（代码块会回退浅色配色）`);
+ }
+ const darkSwitch=code.includes('prefers-color-scheme');
+ if(darkSwitch)fail('code.css 又出现了 prefers-color-scheme 深色块');
 }
 // 主题色值只能出现在 tokens.css / code.css：app.css 里写死颜色会让
 // 「跟随系统」与显式主题在某些组件上不同步。

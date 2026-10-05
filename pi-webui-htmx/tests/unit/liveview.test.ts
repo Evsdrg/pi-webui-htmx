@@ -100,17 +100,75 @@ describe('实时过程摘要与时间线', () => {
     root.remove();
   });
 
-  it('实时工具只显示安全的文件路径，不显示命令正文', () => {
+  it('实时工具行显示命令与文件路径，长命令截断', () => {
     const root = mount();
     const view = new LiveView(root);
     view.begin();
-    view.event({ type: 'tool_execution_start', toolName: 'bash', args: { command: 'curl -H "Authorization: Bearer secret" https://example.test' } });
+    view.event({ type: 'tool_execution_start', toolName: 'bash', toolCallId: 'c1', args: { command: 'curl -fsSL https://example.test/install.sh | sh' } });
     expect(root.querySelector('.live-tool')?.textContent).toContain('bash');
-    expect(root.querySelector('.live-tool')?.textContent).not.toContain('secret');
-    expect(root.querySelector('.live-tool')?.textContent).not.toContain('example.test');
-    view.event({ type: 'tool_execution_start', toolName: 'read', args: { path: '/workspace/src/main.go' } });
+    // 运行期间必须能看到 bash 在跑什么（此前对 bash 一律返回空预览）。
+    expect(root.querySelector('.live-tool')?.textContent).toContain('curl -fsSL https://example.test/install.sh');
+    const long = 'x'.repeat(300);
+    view.event({ type: 'tool_execution_start', toolName: 'bash', toolCallId: 'c2', args: { command: long + ' --tail' } });
     const rows = root.querySelectorAll('.live-tool');
-    expect(rows[1]?.textContent).toContain('/workspace/src/main.go');
+    const preview = rows[1]?.querySelector('.tool-preview')?.textContent ?? '';
+    expect(preview.length).toBeLessThanOrEqual(121); // 120 + 省略号
+    expect(preview.endsWith('…')).toBe(true);
+    // 多行命令只取第一行进预览。
+    view.event({ type: 'tool_execution_start', toolName: 'bash', toolCallId: 'c3', args: { command: 'cd /tmp\nrm -rf nothing' } });
+    expect(root.querySelectorAll('.live-tool')[2]?.querySelector('.tool-preview')?.textContent).toBe('cd /tmp');
+    view.event({ type: 'tool_execution_start', toolName: 'read', toolCallId: 'c4', args: { path: '/workspace/src/main.go' } });
+    expect(root.querySelectorAll('.live-tool')[3]?.textContent).toContain('/workspace/src/main.go');
+    root.remove();
+  });
+
+  it('bash 输出随 partialResult 流式显示，按 toolCallId 归属到对应行', () => {
+    stubSyncRaf();
+    const root = mount();
+    const view = new LiveView(root);
+    view.begin();
+    view.event({ type: 'tool_execution_start', toolName: 'bash', toolCallId: 'a', args: { command: 'ls' } });
+    view.event({ type: 'tool_execution_start', toolName: 'bash', toolCallId: 'b', args: { command: 'pwd' } });
+    view.event({ type: 'tool_execution_update', toolCallId: 'a', partialResult: { content: [{ type: 'text', text: '第一行\n' }] } });
+    view.event({ type: 'tool_execution_update', toolCallId: 'a', partialResult: { content: [{ type: 'text', text: '第一行\n第二行' }] } });
+    view.event({ type: 'tool_execution_update', toolCallId: 'b', partialResult: { content: [{ type: 'text', text: '/workspace' }] } });
+    const rows = root.querySelectorAll('.live-tool');
+    // partialResult 是累积输出：直接整体替换，不逐块追加（追加会重复）。
+    expect(rows[0]?.querySelector('.tool-detail')?.textContent).toBe('第一行\n第二行');
+    expect(rows[1]?.querySelector('.tool-detail')?.textContent).toBe('/workspace');
+    root.remove();
+  });
+
+  it('tool_execution_end 收尾：结果文本、错误配色与状态', () => {
+    stubSyncRaf();
+    const root = mount();
+    const view = new LiveView(root);
+    view.begin();
+    view.event({ type: 'tool_execution_start', toolName: 'bash', toolCallId: 'a', args: { command: 'make' } });
+    view.event({ type: 'tool_execution_end', toolCallId: 'a', isError: true, result: { content: [{ type: 'text', text: 'make: *** [all] Error 2' }] } });
+    const row = root.querySelector<HTMLElement>('.live-tool')!;
+    expect(row.dataset.state).toBe('done');
+    expect(row.dataset.ok).toBe('false');
+    expect(row.querySelector('.tool-detail')?.textContent).toBe('make: *** [all] Error 2');
+    // 成功路径 data-ok=true（历史配色同一套选择器）。
+    view.event({ type: 'tool_execution_start', toolName: 'bash', toolCallId: 'b', args: { command: 'true' } });
+    view.event({ type: 'tool_execution_end', toolCallId: 'b', isError: false, result: { content: [{ type: 'text', text: '' }] } });
+    expect(root.querySelectorAll<HTMLElement>('.live-tool')[1]?.dataset.ok).toBe('true');
+    root.remove();
+  });
+
+  it('超长 bash 输出只保留尾部并标明省略', () => {
+    stubSyncRaf();
+    const root = mount();
+    const view = new LiveView(root);
+    view.begin();
+    view.event({ type: 'tool_execution_start', toolName: 'bash', toolCallId: 'a', args: { command: 'cat big' } });
+    const huge = 'A'.repeat(30_000) + 'TAIL';
+    view.event({ type: 'tool_execution_update', toolCallId: 'a', partialResult: { content: [{ type: 'text', text: huge }] } });
+    const body = root.querySelector('.tool-detail')?.textContent ?? '';
+    expect(body.length).toBeLessThan(25_000);
+    expect(body).toContain('TAIL');
+    expect(body).toContain('已省略');
     root.remove();
   });
 

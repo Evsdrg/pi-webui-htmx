@@ -1,6 +1,7 @@
 import { afterEach, expect, it, vi } from 'vitest';
 import { EventCursor, LiveView, messageText, runStateAfter, hasVisibleText, stripDroppedMarker } from '../../src/modules/stream';
-import { clampSidebar, readDraft, saveDraft, applyTheme } from '../../src/modules/layout';
+import { clampSidebar, readDraft, saveDraft } from '../../src/modules/layout';
+import { applyTheme, readTheme } from '../../src/modules/theme';
 
 afterEach(() => { localStorage.clear(); document.body.replaceChildren(); vi.unstubAllGlobals(); });
 it('不可见字符-only 的消息被视为空', () => {
@@ -49,7 +50,16 @@ it('迟到确认不让同 epoch 的游标倒退', () => {
 });
 it('消息正文只读取文本块', () => { expect(messageText({content:[{type:'text',text:'正文'},{type:'toolCall',text:'不显示'}]})).toBe('正文'); expect(messageText({content:'用户文字'})).toBe('用户文字'); });
 it('草稿按会话隔离，数量和大小均有上限', () => { for (let i=0;i<12;i++) saveDraft(String(i),'x'.repeat(30_000)); expect(readDraft('0')).toBe(''); expect(readDraft('11')).toHaveLength(20_000); expect(JSON.parse(localStorage.getItem('pi-ui:drafts')!)).toHaveLength(8); saveDraft('11',''); expect(readDraft('11')).toBe(''); });
-it('损坏草稿与无效主题安全回退', () => { localStorage.setItem('pi-ui:drafts','{'); expect(readDraft('x')).toBe(''); applyTheme('unknown'); expect(document.documentElement.dataset.theme).toBeUndefined(); });
+it('损坏草稿与无效主题安全回退', () => {
+  localStorage.setItem('pi-ui:drafts','{'); expect(readDraft('x')).toBe('');
+  // 无效的调色板偏好回退到默认（light/dark）；applyTheme 永远写出有效的调色板。
+  localStorage.setItem('pi-ui:theme-light','bogus'); localStorage.setItem('pi-ui:theme-dark','bogus');
+  expect(readTheme()).toEqual({ mode: 'system', light: 'light', dark: 'dark' });
+  localStorage.setItem('pi-ui:theme-mode','dark');
+  applyTheme();
+  expect(document.documentElement.dataset.theme).toBe('dark');
+  expect(document.documentElement.dataset.mode).toBe('dark');
+});
 it('侧栏宽度钳制且拒绝非数值', () => { expect(clampSidebar(999)).toBe(380); expect(clampSidebar(1)).toBe(200); expect(clampSidebar(NaN)).toBe(260); });
 it('大量增量仅使用一个文本节点，正文按文本处理', () => {
   vi.stubGlobal('requestAnimationFrame',vi.fn(() => 1)); vi.stubGlobal('cancelAnimationFrame',vi.fn());

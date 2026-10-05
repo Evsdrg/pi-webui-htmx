@@ -5,8 +5,9 @@
    （它决定表单控件、滚动条等 UA 内建部件的明暗）。 */
 /* ==== 基础与主题（色值见 tokens.css） ================================================== */
 :root { color-scheme: light; --sidebar-width: 260px; --panel-width: 390px; }
-[data-theme=dark] { color-scheme: dark; }
-@media (prefers-color-scheme: dark) { :root:not([data-theme]) { color-scheme: dark; } }
+/* color-scheme 决定表单控件与滚动条的明暗，由 JS 解析后的 data-mode 驱动
+   （tokens.css 的注释说明了为什么不再有媒体查询入口）。 */
+[data-mode=dark] { color-scheme: dark; }
 * { box-sizing:border-box; scrollbar-width:thin; scrollbar-color:var(--border) transparent; }
 html,body { margin:0; height:100%; overflow:hidden; }
 body { background:var(--bg); color:var(--text); font:14px/1.6 system-ui,"Noto Sans CJK SC",sans-serif; -webkit-font-smoothing:antialiased; }
@@ -91,13 +92,22 @@ kbd { font-size:10px; color:var(--text-dim); margin-left:auto; }
 #cwd-filter-wrap[hidden] { display:none; }
 .section-label { display:flex; align-items:center; padding:0 8px 8px; font-size:11px; color:var(--text-muted); }
 .section-label .icon-btn { margin-left:auto; }
-.session-item { display:flex; flex-direction:column; width:100%; padding:9px 10px; margin-bottom:3px; border:0; border-radius:8px; text-align:left; text-decoration:none; color:var(--text); background:transparent; }
+/* 会话行：容器 + 行内链接 + 悬停操作。操作按钮不能放进 <a>（非法嵌套），
+   所以行是容器；data-session 留在容器上，选中样式与点击委托都不变。 */
+.session-item { position:relative; display:flex; align-items:center; width:100%; margin-bottom:3px; border-radius:8px; }
 .session-item:hover { background:var(--bg-hover); }
 .session-item.selected { background:var(--bg-selected); box-shadow:inset 2px 0 var(--accent); }
+.session-link { display:flex; flex-direction:column; flex:1 1 auto; min-width:0; padding:9px 10px; text-decoration:none; color:var(--text); }
+.session-ops { position:absolute; right:6px; top:50%; transform:translateY(-50%); display:none; gap:2px; padding:2px; border-radius:7px; background:var(--bg-panel); box-shadow:0 2px 8px var(--shadow-color); }
+.session-item:hover .session-ops, .session-item:focus-within .session-ops { display:flex; }
+.session-op { display:grid; place-items:center; width:22px; height:22px; border:0; border-radius:5px; background:transparent; color:var(--text-dim); cursor:pointer; }
+.session-op:hover { background:var(--bg-hover); color:var(--text); }
+.session-op-danger:hover { color:var(--danger); }
 .session-title { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:13px; }
 .session-meta { font-size:10px; color:var(--text-muted); display:flex; gap:6px; overflow:hidden; white-space:nowrap; }
 .search-snippet { font-size:11px; color:var(--text-muted); overflow:hidden; overflow-wrap:anywhere; display:-webkit-box; -webkit-box-orient:vertical; -webkit-line-clamp:2; }
-.sidebar-footer { display:flex; align-items:center; justify-content:space-between; border-top:1px solid var(--border); padding-top:12px; margin-top:8px; gap:4px; }
+.sidebar-footer { display:flex; align-items:center; flex-wrap:wrap; border-top:1px solid var(--border); padding-top:12px; margin-top:8px; gap:4px; }
+.sidebar-footer #conn-state { margin-left:auto; }
 /* ==== 对话区：顶栏与状态 ============================================================== */
 .conversation { display:flex; flex-direction:column; min-height:0; min-width:0; position:relative; overflow:hidden; --topbar-h:40px; --chat-width:820px; --chat-font-offset:0px; }
 .topbar { display:flex; align-items:stretch; min-height:40px; padding:0 8px 0 0; border-bottom:1px solid var(--border); background:var(--bg-panel); }
@@ -243,16 +253,18 @@ kbd { font-size:10px; color:var(--text-dim); margin-left:auto; }
 #send-button { flex:none; align-self:flex-end; min-width:74px; min-height:34px; padding:7px 12px; border:0; border-radius:8px; font-size:13px; font-weight:600; line-height:20px; box-shadow:0 1px 3px color-mix(in srgb,var(--accent) 25%,transparent); }
 #send-button span { font-size:16px; line-height:1; }
 #send-button:disabled { opacity:1; color:var(--text-dim); background:var(--bg-panel); box-shadow:none; }
-.composer-actions { display:flex; align-items:center; gap:4px; min-height:32px; margin-top:8px; flex-wrap:wrap; }
+.composer-actions { display:flex; align-items:center; gap:4px; min-height:32px; margin-top:8px; }
 .composer-actions .icon-btn { width:32px; height:32px; padding:0; border-radius:9px; }
-#abort-button { margin-left:auto; }
+.composer-tools { display:flex; align-items:center; gap:4px; min-width:0; flex-wrap:wrap; }
+/* 右侧元信息组：mc 状态行与用量收进同一行右端（原来单独占一行）。 */
+.composer-meta { display:flex; align-items:center; gap:8px; margin-left:auto; min-width:0; padding-left:8px; color:var(--text-dim); font-size:10px; }
+.composer-meta #ext-status-slot { max-width:min(320px,32vw); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.composer-meta #usage { white-space:nowrap; }
+#abort-button { flex:0 0 auto; }
 .composer-actions .select-label { min-width:0; }
 .composer-actions .select-label select { field-sizing:content; max-width:280px; height:32px; border:0; border-radius:9px; background:transparent; padding:4px 8px; font-size:12px; cursor:pointer; }
 .composer-actions .select-label select:hover { background:var(--bg-hover); }
 .composer-actions .select-label select:disabled { cursor:not-allowed; }
-.composer-footnote { display:flex; align-items:center; justify-content:space-between; width:100%; max-width:var(--chat-width); margin:0 auto; gap:10px; color:var(--text-dim); font-size:10px; padding:4px 5px 0; }
-.composer-footnote:has(#ext-status-slot:empty):has(#usage:empty) { display:none; }
-#ext-status-slot { flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .ext-widgets { font-size:12px; max-height:160px; overflow:auto; }
 .ext-widget { white-space:pre-wrap; border:1px solid var(--border); padding:8px; margin:6px 0; border-radius:8px; }
 /* ── 新建会话：目录选择器（对齐 Pi Web 的 DirectoryPicker）── */
@@ -286,7 +298,6 @@ kbd { font-size:10px; color:var(--text-dim); margin-left:auto; }
 .btn-primary:hover { background:var(--accent-hover); }
 .btn-quiet { border:0; background:transparent; font-size:11px; padding:4px; }
 .danger,.form-error { color:var(--danger); }
-.spacer { flex:1; }
 .muted,.empty-note { color:var(--text-muted); }
 .empty-note { font-size:12px; padding:14px; }
 input,select,textarea { background:var(--bg); border:1px solid var(--border); border-radius:6px; padding:7px 9px; }
@@ -317,7 +328,6 @@ input,select,textarea { background:var(--bg); border:1px solid var(--border); bo
 [role=tabpanel] { flex:1; min-height:0; overflow:auto; padding:12px; }
 .workspace-panel section[role=tabpanel][aria-labelledby="tab-terminal"] { display:flex; flex-direction:column; }
 #terminal-mount { flex:1; min-height:240px; background:var(--terminal-bg); border-radius:6px; padding:5px; }
-.path-bar { display:flex; align-items:center; gap:6px; font-size:11px; margin-bottom:8px; }
 #file-path { flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 #file-preview pre,#git-diff pre { margin:0; font:11px/1.7 ui-monospace,monospace; overflow:auto; tab-size:2; }
 #file-name { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
@@ -362,7 +372,6 @@ input,select,textarea { background:var(--bg); border:1px solid var(--border); bo
 .mobile-only,.sidebar-backdrop { display:none; }
 /* 开关与单选：会话对话框内的排队/压缩设置。 */
 /* ==== 会话设置对话框（排队 / 压缩） ======================================================= */
-.switch-grid { display:grid; gap:8px; margin:10px 0 6px; }
 .switch { display:flex; align-items:center; gap:8px; font-size:12px; color:var(--text-muted); cursor:pointer; }
 .switch input { accent-color:var(--accent); width:15px; height:15px; cursor:pointer; }
 .switch span { color:var(--text); }
@@ -552,7 +561,6 @@ input,select,textarea { background:var(--bg); border:1px solid var(--border); bo
 .config-detail-stack { display:flex; flex-direction:column; gap:16px; }
 .config-detail-header { display:flex; align-items:center; justify-content:space-between; gap:12px; min-width:0; }
 .config-detail-title { margin:0; font-size:13px; font-weight:600; }
-.config-section-title { color:var(--text-muted); font-size:12px; font-weight:600; }
 .config-field { display:flex; flex-direction:column; gap:5px; }
 .config-field > label,.config-field > .config-label { color:var(--text-muted); font-size:11px; }
 .config-field .hint { color:var(--text-dim); font-size:10px; }
@@ -686,8 +694,9 @@ input,select,textarea { background:var(--bg); border:1px solid var(--border); bo
   #prompt { font-size:16px; }
   .composer-actions .model-control { flex:0 1 auto; }
   .composer-actions #model-select { max-width:min(220px,calc(100vw - 198px)); }
-  .composer-actions:has(#abort-button:not([hidden])) { flex-wrap:wrap; }
-  .composer-footnote { flex-wrap:wrap; }
+  .composer-tools { flex-wrap:wrap; }
+  .composer-meta { flex-wrap:wrap; }
+  .composer-meta #ext-status-slot { max-width:40vw; }
   .workspace-panel { position:fixed; inset:0 0 0 auto; width:100%; z-index:25; }
   .welcome h2 { font-size:23px; } .jump-latest { margin-right:16px; }
   .stats-grid { grid-template-columns:1fr; gap:16px; }

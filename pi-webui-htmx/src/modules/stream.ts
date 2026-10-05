@@ -65,9 +65,34 @@ const LIVE_MARKDOWN_INTERVAL_MS = 350;
 // 结算后历史路径仍会完整渲染。
 const LIVE_MARKDOWN_LIMIT = 60_000;
 
+// 实时工具行的预览：bash 显示命令首行，文件工具显示路径。
+// 运行期间用户必须能看到工具在做什么——此前对 bash 一律返回空，
+// 整个运行期只见「bash + 工具已开始执行」，结算重读历史后才看到命令与输出。
+const TOOL_PREVIEW_CHARS = 120;
 function toolPreview(toolName: string, args: Record<string, unknown>): string {
+  if (toolName === 'bash') {
+    // 多行命令（heredoc、脚本）只取第一行进预览，全文在展开详情里。
+    const first = text(args.command).split('\n')[0] ?? '';
+    return first.length > TOOL_PREVIEW_CHARS ? first.slice(0, TOOL_PREVIEW_CHARS) + '…' : first;
+  }
   const fileTools = new Set(['read', 'edit', 'write', 'grep', 'find', 'ls']);
   return fileTools.has(toolName) ? text(args.path).slice(0, 240) : '';
+}
+
+// 实时工具输出的保留上限：只留尾部（命令输出的错误通常在末尾），
+// 超限时前缀标明省略。结算后的历史视图仍会显示全部。
+const TOOL_OUTPUT_LIMIT = 20_000;
+function toolOutput(body: string): string {
+  if (body.length <= TOOL_OUTPUT_LIMIT) return body;
+  return `[…前文已省略]\n${body.slice(-TOOL_OUTPUT_LIMIT)}`;
+}
+
+// toolDetailSeed 是工具行刚创建时展开详情的初始内容：展开即可看到完整调用
+// （bash 全文命令 / 文件路径），而不是一句占位符。
+function toolDetailSeed(toolName: string, args: Record<string, unknown>): string {
+  if (toolName === 'bash') return text(args.command) || '工具已开始执行';
+  const path = text(args.path);
+  return path || '工具已开始执行';
 }
 
 // droppedMarker 是提供商把模型文本丢弃后留下的占位标记（实测只有 "[dropped ]"）。
@@ -108,6 +133,11 @@ export class LiveView {
   // mdRenderedFor 是「最近一次成功渲染时的源长度」，-1 表示尚未渲染。
   private mdRenderedFor = -1;
   private mdTimer: ReturnType<typeof setTimeout> | undefined;
+  // 工具输出的 rAF 合帧：partialResult 可能每个输出块来一次，
+  // 逐条写 DOM 在长输出下会造成持续的布局抖动。
+  private pendingToolOutput = new Map<HTMLElement, string>();
+  private toolFlushScheduled = false;
+  private toolFrame = 0;
   constructor(private readonly root: HTMLElement) {}
   begin(userText?: string): void {
     this.clear(); this.root.hidden = false; this.root.dataset.running = 'true';
@@ -127,6 +157,8 @@ export class LiveView {
       if (delta.type === 'thinking_delta') this.appendThinking(text(delta.delta));
     }
     if (event.type === 'tool_execution_start') this.startTool(event);
+    if (event.type === 'tool_execution_update') this.updateTool(event);
+    if (event.type === 'tool_execution_end') this.endTool(event);
     if (event.type === 'message_end') {
       const message = record(event.message);
       if (message.stopReason === 'error') {
@@ -160,6 +192,7 @@ export class LiveView {
   }
   dispose(): void {
     cancelAnimationFrame(this.frame); this.frame = 0; this.scheduled = false; this.chunks = '';
+    cancelAnimationFrame(this.toolFrame); this.toolFrame = 0; this.toolFlushScheduled = false; this.pendingToolOutput.clear();
     clearTimeout(this.mdTimer); this.mdTimer = undefined;
     this.resetPreview();
   }
@@ -237,6 +270,9 @@ export class LiveView {
     this.status(`正在调用 ${name}`);
     if (work.tools > 100) return;
     const row = document.createElement('details'); row.className = 'tool-call live-tool'; row.dataset.state = 'running';
+    // toolCallId 是 update/end 的归属键：并行工具各自的行必须精确对应，
+    // 不能靠「最后一个运行中的行」猜（并行 bash 的输出会串行）。
+    row.dataset.toolCallId = text(event.toolCallId);
     const summary = document.createElement('summary');
     const label = document.createElement('span'); label.className = 'tool-name'; label.textContent = name;
     const preview = document.createElement('span'); preview.className = 'tool-preview';
@@ -244,8 +280,54 @@ export class LiveView {
     preview.textContent = toolPreview(name, args);
     summary.append(label, preview); row.append(summary);
     const detail = document.createElement('pre'); detail.className = 'tool-detail';
-    detail.textContent = preview.textContent || '工具已开始执行';
+    // 初始详情给命令/路径本身，展开就能看到完整调用；输出到达后由
+    // update/end 替换为累积输出。
+    detail.textContent = toolDetailSeed(name, args);
     row.append(detail); work.items.append(row);
+  }
+  // findToolRow 按 toolCallId 定位工具行；缺 ID 时退回最后一个运行中的行。
+  private findToolRow(callId: string): HTMLElement | null {
+    const rows = this.flowEl().querySelectorAll<HTMLElement>('.live-tool');
+    let fallback: HTMLElement | null = null;
+    for (const row of rows) {
+      if (row.dataset.state !== 'running') continue;
+      fallback = row;
+      if (callId && row.dataset.toolCallId === callId) return row;
+    }
+    return callId ? null : fallback;
+  }
+  // updateTool 处理累积输出的流式增量。partialResult 是累计文本（不是 delta），
+  // 因此整体替换而不是追加；按 rAF 合帧写入，避免每个输出块都触发一次布局。
+  private updateTool(event: Record<string, unknown>): void {
+    const row = this.findToolRow(text(event.toolCallId));
+    if (!row) return;
+    const body = messageText(record(event.partialResult));
+    if (!body) return;
+    this.pendingToolOutput.set(row, toolOutput(body));
+    if (this.toolFlushScheduled) return;
+    this.toolFlushScheduled = true;
+    this.toolFrame = requestAnimationFrame(() => {
+      this.toolFlushScheduled = false;
+      for (const [target, content] of this.pendingToolOutput) {
+        const pre = target.querySelector('.tool-detail');
+        if (pre) pre.textContent = content;
+      }
+      this.pendingToolOutput.clear();
+    });
+  }
+  // endTool 收尾：写入最终输出、按 isError 切成功/失败配色（复用历史
+  // tool-call[data-ok] 的同一套选择器）并清除运行态。
+  private endTool(event: Record<string, unknown>): void {
+    const row = this.findToolRow(text(event.toolCallId));
+    if (!row) return;
+    this.pendingToolOutput.delete(row);
+    const body = messageText(record(event.result));
+    if (body) {
+      const pre = row.querySelector('.tool-detail');
+      if (pre) pre.textContent = toolOutput(body);
+    }
+    row.dataset.state = 'done';
+    row.dataset.ok = event.isError === true ? 'false' : 'true';
   }
   private append(delta: string): void {
     if (!delta || this.truncated) return;

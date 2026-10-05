@@ -19,7 +19,7 @@ let workbench: Workbench;
 let pending: string[];
 let busy: boolean;
 let sequence: number;
-const methods = ['session.start','session.prompt','session.abort','session.fork','session.navigate','sessions.delete','session.subscribe','session.set_model','sessions.search','worker.list','session.state','session.thinking_levels','session.pending_dialogs','session.ext_status','session.ui_response','session.stats','session.set_queue_mode','session.set_thinking','session.stop','session.set_auto_compaction','session.set_auto_retry','session.abort_retry','session.export_html','session.compact','session.bash','config.models.raw','config.models.write','config.models.discover','config.models.test'];
+const methods = ['session.start','session.prompt','session.abort','session.fork','session.navigate','sessions.delete','session.subscribe','session.set_model','sessions.search','worker.list','session.set_name','session.state','session.thinking_levels','session.pending_dialogs','session.ext_status','session.ui_response','session.stats','session.set_queue_mode','session.set_thinking','session.stop','session.set_auto_compaction','session.set_auto_retry','session.abort_retry','session.export_html','session.compact','session.bash','config.models.raw','config.models.write','config.models.discover','config.models.test'];
 function emit(type: string, extra: Record<string, unknown> = {}) {
  fake.instance!.dispatchEvent(new CustomEvent('message', { detail: { version:1,kind:'event',event:'pi.event',sessionId:'s1',epoch:'test',seq:++sequence,data:{type,...extra} } }));
 }
@@ -36,10 +36,9 @@ function mount() {
  <form id=composer><textarea id=prompt></textarea><div id=attachments hidden></div><p id=composer-drop hidden></p><input id=attach-input type=file><button id=send-button></button><button id=abort-button></button><select id=model-select><option value="">Pi 默认模型</option></select><select id=thinking-select></select><select id=tool-preset-quick><option value=chat-only>仅聊天</option><option value=read-only>只读</option><option value=default selected>默认</option><option value=full>完整</option></select></form>
  <div id=history-scope hidden><button type=button data-action=branch-current>返回最新</button></div><div id=edit-scope hidden><span>正在编辑较早的消息</span></div><div id=unsaved-branch hidden>会话尚未写盘；首条回复前关闭工作进程会丢失这个临时分支。</div>
  <form id=new-form><input id=cwd-input></form><dialog id=new-dialog></dialog><datalist id=workspace-roots></datalist><input id=session-search>
- <button class=icon-btn data-action=session-menu aria-label=会话操作>···</button><dialog id=session-dialog><input id=session-name><div class=session-action-grid><button data-action=rename>保存名称</button><button data-action=compact>压缩</button><button data-action=clone>克隆</button><button data-action=export>导出</button><button data-action=stop>释放</button><button data-action=delete>删除</button></div>
- <label class=switch><input type=checkbox id=auto-compaction><span>自动压缩</span></label><label class=switch><input type=checkbox id=auto-retry><span>自动重试</span></label>
- <button data-action=abort-retry>中止重试</button>
- <fieldset class=queue-modes><label class=switch><input type=radio name=queue-kind value=steering checked><span>插入指令</span></label><label class=switch><input type=radio name=queue-kind value=followUp><span>完成后追加</span></label></fieldset></dialog>
+ <button class=icon-btn data-action=session-menu aria-label=会话操作>···</button><dialog id=session-dialog><div class=session-action-grid><button data-action=compact>压缩</button><button data-action=clone>克隆</button><button data-action=export>导出</button><button data-action=stop>释放</button><button data-action=abort-retry>中止重试</button></div></dialog>
+ <dialog id=rename-dialog><input id=rename-input><button data-action=rename-cancel>取消</button><button data-action=rename-save>保存</button></dialog>
+ <section data-settings-panel=general><label class=switch><input type=checkbox id=default-auto-compaction checked><span>自动压缩</span></label><label class=switch><input type=checkbox id=default-auto-retry><span>自动重试</span></label><fieldset class=queue-modes><label class=switch><input type=radio name=default-queue-kind value=steering checked><span>插入指令</span></label><label class=switch><input type=radio name=default-queue-kind value=followUp><span>完成后追加</span></label></fieldset></section>
  <div class=queue-hint id=queue-hint hidden></div>
  <header class=topbar><nav class=topbar-tools aria-label=功能区><button data-action=full-history>完整历史</button><button data-action=panel-title aria-controls=panel-title aria-expanded=false>生成标题</button><button data-action=panel-system aria-controls=panel-system aria-expanded=false>系统</button><button data-action=panel-tools aria-controls=panel-tools aria-expanded=false>工具</button></nav><button id=context-usage data-action=panel-info aria-controls=panel-info aria-expanded=false hidden></button><span id=session-state class=state>就绪</span></header>
  <section id=panel-info hidden><button data-action=panel-info-close></button><dl id=session-facts></dl></section>
@@ -80,6 +79,9 @@ beforeAll(async () => { await import('../../src/modules/topbar'); });
 const waitFor = (cond: () => unknown) => vi.waitFor(cond, { interval: 1 });
 
 beforeEach(async () => {
+ // 全局默认（自动压缩/重试/排队方式）现在是 localStorage 偏好：
+ // 不清掉会把上一用例的选择带进下一用例，导致「默认值」断言假失败。
+ localStorage.clear();
  vi.useFakeTimers(); pending=[];busy=false;sequence=0;mount();
  vi.stubGlobal('fetch',vi.fn(async () => new Response(JSON.stringify({version:1,methods}),{status:200})));
  fake.request.mockImplementation(async (method:string) => {
@@ -96,6 +98,10 @@ beforeEach(async () => {
   return{};
  });
  workbench=new Workbench(vi.fn());workbench.start();
+ // 目录选择器与「新建会话」在按需分块里接线：预载模块并冲刷微任务，
+ // 让 start() 里的动态 import().then 完成注册，后续用例才能派发 dir-list 事件。
+ await import('../../src/modules/new-session');
+ for(let i=0;i<5;i++) await Promise.resolve();
  await waitFor(()=>expect(fake.request).toHaveBeenCalledWith('session.state','s1',undefined,30_000));
 });
 afterEach(()=>{workbench?.dispose();vi.useRealTimers();vi.unstubAllGlobals();document.body.replaceChildren();});
@@ -134,28 +140,13 @@ describe('目录浏览的提交边界', () => {
   });
 });
 
-describe('排队与压缩设置', () => {
-  it('用户选择队列种类后不被旧 Pi 模式覆盖', async () => {
-    const steering = document.querySelector<HTMLInputElement>('input[name="queue-kind"][value="steering"]')!;
-    const followUp = document.querySelector<HTMLInputElement>('input[name="queue-kind"][value="followUp"]')!;
-    fake.request.mockImplementation(async (method: string) => {
-      if (method === 'session.state') return { sessionId: 's1', isStreaming: false, followUpMode: 'one-at-a-time' };
-      if (method === 'session.thinking_levels') return ['off', 'high'];
-      return {};
-    });
-    await workbench.refreshState();
-    expect(followUp.checked).toBe(true);
-    steering.click();
-    expect(steering.checked).toBe(true);
-    await workbench.refreshState();
-    expect(steering.checked).toBe(true);
-  });
-
-  it('运行中发送前先把模式同步给桥，再带 streamingBehavior 提交', async () => {
+describe('排队与压缩设置（全局默认）', () => {
+  it('运行中发送前先把默认模式同步给桥，再带 streamingBehavior 提交', async () => {
     // send() 读的是 this.run，所以要先让界面认定在运行。
     busy = true; emit('agent_start');
     expect(document.getElementById('session-state')?.textContent).toBe('运行中');
-    document.querySelector<HTMLInputElement>('input[name="queue-kind"][value="followUp"]')!.click();
+    // 全局默认改为「完成后追加」（设置面板里的 radio）。
+    document.querySelector<HTMLInputElement>('input[name="default-queue-kind"][value="followUp"]')!.click();
     (document.getElementById('prompt') as HTMLTextAreaElement).value = '排队消息';
     document.querySelector<HTMLFormElement>('#composer')!.requestSubmit();
     await waitFor(() => expect(vi.mocked(fake.request).mock.calls.some((c) => c[0] === 'session.prompt')).toBe(true));
@@ -165,33 +156,23 @@ describe('排队与压缩设置', () => {
     expect(order.lastIndexOf('session.set_queue_mode')).toBeLessThan(order.lastIndexOf('session.prompt'));
   });
 
-  it('自动压缩勾选发送 set_auto_compaction，失败时还原勾选', async () => {
-    const box = document.getElementById('auto-compaction') as HTMLInputElement;
+  it('自动压缩默认设置对当前会话即时下发并回读', async () => {
+    const box = document.getElementById('default-auto-compaction') as HTMLInputElement;
     expect(box.checked).toBe(true);
     box.checked = false; box.dispatchEvent(new Event('change'));
     await waitFor(() => expect(fake.request).toHaveBeenCalledWith('session.set_auto_compaction', 's1', { enabled: false }, 30_000));
-    // 成功后必须回读：ensureWorker 的预取状态刷新发生在 set 之前，
-    // 不重读就会把勾选重置成旧值。
-    box.checked = false; box.dispatchEvent(new Event('change'));
-    await waitFor(() => expect(fake.request).toHaveBeenCalledWith('session.set_auto_compaction', 's1', { enabled: false }, 30_000));
+    // 成功后回读：command() 的预取状态刷新发生在 set 之前，不回读会停在旧值。
     const states = vi.mocked(fake.request).mock.calls.filter((c) => c[0] === 'session.state');
     expect(states.length).toBeGreaterThan(1);
-    // 失败路径：有读回字段，必须恢复成 Pi 的真实状态，不停在假状态。
-    fake.request.mockRejectedValueOnce(new Error('Pi 拒绝'));
-    box.checked = false; box.dispatchEvent(new Event('change'));
-    await waitFor(() => expect(box.checked).toBe(true));
   });
 
-  it('自动重试没有读回字段，失败时同样还原勾选', async () => {
-    const box = document.getElementById('auto-retry') as HTMLInputElement;
+  it('自动重试默认设置对当前会话即时下发', async () => {
+    const box = document.getElementById('default-auto-retry') as HTMLInputElement;
     box.checked = true; box.dispatchEvent(new Event('change'));
     await waitFor(() => expect(fake.request).toHaveBeenCalledWith('session.set_auto_retry', 's1', { enabled: true }, 30_000));
-    fake.request.mockRejectedValueOnce(new Error('Pi 拒绝'));
-    box.checked = false; box.dispatchEvent(new Event('change'));
-    await waitFor(() => expect(box.checked).toBe(true));
   });
 
-  it('排队提示只在运行中出现，并随模式变化', async () => {
+  it('排队提示只在运行中出现，并随默认模式变化', async () => {
     const hint = document.getElementById('queue-hint')!;
     expect(hint.hidden).toBe(true);
     busy = true; emit('agent_start');
@@ -199,7 +180,7 @@ describe('排队与压缩设置', () => {
     expect(hint.hidden).toBe(false);
     expect(hint.textContent).toContain('插入指令');
     const steerText = hint.textContent;
-    document.querySelector<HTMLInputElement>('input[name="queue-kind"][value="followUp"]')!.click();
+    document.querySelector<HTMLInputElement>('input[name="default-queue-kind"][value="followUp"]')!.click();
     document.getElementById('prompt')!.dispatchEvent(new Event('input'));
     // 只断言文案随模式变化，不锁死具体措辞——那是实现细节。
     expect(hint.textContent).not.toBe(steerText);
@@ -414,7 +395,7 @@ it('默认排队模式用协议一致的 steering，不是 steer', async () => {
   // B03：前端曾经发送 kind=steer，桥只接受 steering/followUp，
   // 运行中的「插入指令」因此被整体拒绝。这里锁定默认取值。
   busy = true; emit('agent_start');
-  expect(document.querySelector<HTMLInputElement>('input[name="queue-kind"]:checked')!.value).toBe('steering');
+  expect(document.querySelector<HTMLInputElement>('input[name="default-queue-kind"]:checked')!.value).toBe('steering');
   (document.getElementById('prompt') as HTMLTextAreaElement).value = '插入一条';
   document.querySelector<HTMLFormElement>('#composer')!.requestSubmit();
   await waitFor(() => expect(fake.request).toHaveBeenCalledWith('session.set_queue_mode', 's1', { kind: 'steering', mode: 'all' }, 30_000));
@@ -423,22 +404,6 @@ it('默认排队模式用协议一致的 steering，不是 steer', async () => {
   for (const call of vi.mocked(fake.request).mock.calls) {
     expect((call[2] as { kind?: string } | undefined)?.kind).not.toBe('steer');
   }
-  // 读回状态时必须能按协议值定位到对应 radio；模板值若与协议不一致，
-  // refreshQueueState 会静默失选，用户看到的勾选与实际发送的模式脱节。
-  // 打开会话对话框会触发 refreshState，从而走到 refreshQueueState。
-  fake.request.mockResolvedValueOnce({ sessionId: 's1', isStreaming: true, steeringMode: 'all', followUpMode: 'one-at-a-time' });
-  document.querySelector<HTMLElement>('[data-action="session-menu"]')!.click();
-  await waitFor(() => {
-    const steering = document.querySelector<HTMLInputElement>('input[name="queue-kind"][value="steering"]');
-    expect(steering).not.toBeNull();
-    expect(steering!.checked).toBe(true);
-  });
-  // 反向：Pi 报 one-at-a-time 时必须选中 followUp。
-  fake.request.mockResolvedValueOnce({ sessionId: 's1', isStreaming: true, steeringMode: 'one-at-a-time', followUpMode: 'one-at-a-time' });
-  document.querySelector<HTMLElement>('[data-action="session-menu"]')!.click();
-  await waitFor(() => {
-    expect(document.querySelector<HTMLInputElement>('input[name="queue-kind"][value="followUp"]')!.checked).toBe(true);
-  });
 });
 
 describe('搜索结果归属与定位', () => {
@@ -485,7 +450,7 @@ describe('搜索结果归属与定位', () => {
 });
 
 describe('新会话首次发送', () => {
-  it('首次选择目录不丢掉已输入的草稿和模型', () => {
+  it('首次选择目录不丢掉已输入的草稿和模型', async () => {
     saveDraft('new:', ''); saveDraft('new:/fixture', '');
     workbench.selectSession('', '', '新会话', false);
     const model = document.getElementById('model-select') as HTMLSelectElement;
@@ -496,12 +461,15 @@ describe('新会话首次发送', () => {
     const input = document.getElementById('prompt') as HTMLTextAreaElement;
     input.value = '选择目录前写下的草稿';
     input.dispatchEvent(new Event('input', { bubbles: true }));
-    document.querySelector<HTMLInputElement>('input[name="queue-kind"][value="followUp"]')!.click();
+    document.querySelector<HTMLInputElement>('input[name="default-queue-kind"][value="followUp"]')!.click();
     (document.getElementById('cwd-input') as HTMLInputElement).value = '/fixture';
     document.getElementById('new-form')!.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+    // 提交走动态分块（new-session）：模块已预载，推进宏任务让 import 链完成。
+    await vi.advanceTimersByTimeAsync(0);
     expect(input.value).toBe('选择目录前写下的草稿');
     expect(model.value).toBe('CPA-Responses/deepseek-flash');
-    expect(document.querySelector<HTMLInputElement>('input[name="queue-kind"]:checked')?.value).toBe('followUp');
+    // 排队方式是全局默认：新建会话不改变它。
+    expect(document.querySelector<HTMLInputElement>('input[name="default-queue-kind"]:checked')?.value).toBe('followUp');
     expect(readDraft('new:/fixture')).toBe(input.value);
     saveDraft('new:', ''); saveDraft('new:/fixture', '');
   });
@@ -660,9 +628,12 @@ describe('从此处编辑（会话内跳转）与删除会话', () => {
     expect(input.value).toBe('用户正在写的内容');
   });
 
-  it('删除会话总是带 force，运行中也删得掉', async () => {
+  it('侧栏行删除会话带 force，运行中也删得掉', async () => {
     vi.stubGlobal('confirm', vi.fn(() => true));
-    document.querySelector<HTMLElement>('[data-action=delete]')!.click();
+    // 删除/改名已移到会话行：构造一行并点它的删除按钮。
+    document.getElementById('session-list')!.innerHTML =
+      '<div class="session-item" data-session="s1" data-cwd="/fixture" data-title="会话一"><a class="session-link" href="?session=s1"><span class="session-title">会话一</span></a><span class="session-ops"><button data-action="session-rename"></button><button data-action="session-delete"></button></span></div>';
+    document.querySelector<HTMLElement>('[data-action=session-delete]')!.click();
     await waitFor(() => expect(fake.request.mock.calls.some((call) => call[0] === 'sessions.delete')).toBe(true));
     expect(fake.request).toHaveBeenCalledWith('sessions.delete', '', { sessionId: 's1', force: true }, 30_000);
   });
@@ -670,10 +641,35 @@ describe('从此处编辑（会话内跳转）与删除会话', () => {
   it('删除前的确认文案说明会强制停止工作进程', async () => {
     const confirmSpy = vi.fn(() => false);
     vi.stubGlobal('confirm', confirmSpy);
-    document.querySelector<HTMLElement>('[data-action=delete]')!.click();
+    document.getElementById('session-list')!.innerHTML =
+      '<div class="session-item" data-session="s1" data-cwd="/fixture"><a class="session-link" href="?session=s1"><span class="session-title">会话一</span></a><span class="session-ops"><button data-action="session-delete"></button></span></div>';
+    document.querySelector<HTMLElement>('[data-action=session-delete]')!.click();
     await waitFor(() => expect(confirmSpy).toHaveBeenCalled());
     expect(String(confirmSpy.mock.calls[0]?.[0])).toContain('会被强制停止');
     expect(fake.request.mock.calls.some((call) => call[0] === 'sessions.delete')).toBe(false);
+  });
+
+  it('重命名非当前会话：先拉起 worker，改完立即释放', async () => {
+    fake.request.mockImplementation(async (method: string) => {
+      if (method === 'worker.list') return []; // 目标会话没有活动 worker
+      if (method === 'session.state') return { sessionId: 'other', isStreaming: false };
+      if (method === 'session.thinking_levels') return ['off'];
+      if (method === 'session.pending_dialogs') return { ids: [] };
+      if (method === 'session.start') return { sessionId: 'other', cwd: '/tmp/other' };
+      return {};
+    });
+    document.getElementById('session-list')!.innerHTML =
+      '<div class="session-item" data-session="other" data-cwd="/tmp/other" data-title="旧名"><a class="session-link" href="?session=other"><span class="session-title">旧名</span></a><span class="session-ops"><button data-action="session-rename"></button></span></div>';
+    document.querySelector<HTMLElement>('[data-action=session-rename]')!.click();
+    const input = document.getElementById('rename-input') as HTMLInputElement;
+    expect(input.value).toBe('旧名');
+    input.value = '新名字';
+    document.querySelector<HTMLElement>('[data-action=rename-save]')!.click();
+    await waitFor(() => expect(fake.request.mock.calls.some((call) => call[0] === 'session.set_name')).toBe(true));
+    expect(fake.request).toHaveBeenCalledWith('session.set_name', 'other', { name: '新名字' }, 30_000);
+    // 改名依赖活动进程：本次为改名拉起的那一个，改完立即释放。
+    expect(fake.request.mock.calls.some((call) => call[0] === 'session.start' && call[1] === 'other')).toBe(true);
+    expect(fake.request).toHaveBeenCalledWith('session.stop', 'other', { force: false }, 30_000);
   });
 });
 
@@ -775,18 +771,20 @@ describe('等待期间切换会话的归属', () => {
   });
 
   it('状态刷新期间切会话，command 仍发往原会话', async () => {
-    // 这一条让流程真正走到命令发送：切换发生在 ensureWorker 内部，
-    // 早于它的守卫会先返回，测不到目标那一行。
+    // 让流程真正经过 ensureWorker 内部的状态刷新后仍按发起时的会话归属发送。
+    // 自动压缩默认项走的就是 command()（U03 的同一路径）。
     let release!: () => void;
     const gate = new Promise<void>((resolve) => { release = resolve; });
+    let gated = false;
     fake.request.mockImplementation(async (method: string) => {
-      if (method === 'session.state') await gate;
+      // command() 内部会先 ensureWorker → session.subscribe → refreshState。
+      // 只让「首次」状态刷新挂起，避免后续 selectSession('s2') 自己的刷新也卡住。
+      if (method === 'session.state' && !gated) { gated = true; await gate; }
       if (method === 'session.thinking_levels') return ['off', 'high'];
       if (method === 'session.start') return { sessionId: 's1', cwd: '/fixture' };
       return {};
     });
-    // auto-compaction 的 change 处理器走的就是 command()（U03 的同一路径）。
-    const box = document.getElementById('auto-compaction') as HTMLInputElement;
+    const box = document.getElementById('default-auto-compaction') as HTMLInputElement;
     box.checked = false;
     box.dispatchEvent(new Event('change', { bubbles: true }));
     // 等它进入 ensureWorker 内部的状态刷新。
@@ -795,9 +793,11 @@ describe('等待期间切换会话的归属', () => {
     release();
     await vi.advanceTimersByTimeAsync(10);
     await waitFor(() => expect(fake.request.mock.calls.some((c) => c[0] === 'session.set_auto_compaction')).toBe(true));
-    const call = fake.request.mock.calls.find((c) => c[0] === 'session.set_auto_compaction');
-    // 必须是发起时归属的 s1，不能被改成 s2。
-    expect(call?.[1]).toBe('s1');
+    // 用户那次改动必须发往发起时的 s1；selectSession('s2') 自身的默认对齐
+    // 会另外发一条到 s2（那是新会话的启动对齐，不是用户的这次操作）。
+    const userCalls = fake.request.mock.calls.filter((c) => c[0] === 'session.set_auto_compaction' && c[1] === 's1');
+    expect(userCalls.length).toBeGreaterThan(0);
+    expect(fake.request.mock.calls.every((c) => !(c[0] === 'session.set_name' && c[1] === 's2'))).toBe(true);
   });
 });
 
@@ -828,43 +828,24 @@ describe('附件按会话隔离', () => {
   });
 });
 
-describe('排队模式回读', () => {
-  // U11：选「完成后追加」时桥调 set_follow_up_mode，改的是 followUpMode；
-  // 旧实现读 steeringMode，界面被弹回「插入指令」。
-  it('followUpMode 为 one-at-a-time 时选中完成后追加', async () => {
+describe('自动压缩从 Pi 读回', () => {
+  // 自动压缩是 Pi 的实时状态（有读回字段）：状态刷新时把它回显到设置面板。
+  // 排队发送方式已改为全局默认，不再从 Pi 读回（见「排队与压缩设置」一组）。
+  it('autoCompactionEnabled=false 时设置里的开关取消勾选', async () => {
     fake.request.mockImplementation(async (method: string) => {
       if (method === 'worker.list') return [{ sessionId: 's1', cwd: '/fixture', busy: false }];
       if (method === 'session.thinking_levels') return ['off', 'high'];
       if (method === 'session.pending_dialogs') return { ids: [] };
       if (method === 'session.state') return {
         sessionId: 's1', isStreaming: false, isCompacting: false, thinkingLevel: 'high',
-        steeringMode: 'all', followUpMode: 'one-at-a-time', autoCompactionEnabled: true,
+        steeringMode: 'all', followUpMode: 'all', autoCompactionEnabled: false,
       };
       return {};
     });
+    const box = document.getElementById('default-auto-compaction') as HTMLInputElement;
+    box.checked = true;
     await workbench.reconcile();
-    await waitFor(() => {
-      const followUp = document.querySelector<HTMLInputElement>('input[name="queue-kind"][value="followUp"]');
-      expect(followUp?.checked).toBe(true);
-    });
-  });
-
-  it('followUpMode 为 all 时选中插入指令', async () => {
-    fake.request.mockImplementation(async (method: string) => {
-      if (method === 'worker.list') return [{ sessionId: 's1', cwd: '/fixture', busy: false }];
-      if (method === 'session.thinking_levels') return ['off', 'high'];
-      if (method === 'session.pending_dialogs') return { ids: [] };
-      if (method === 'session.state') return {
-        sessionId: 's1', isStreaming: false, isCompacting: false, thinkingLevel: 'high',
-        steeringMode: 'all', followUpMode: 'all', autoCompactionEnabled: true,
-      };
-      return {};
-    });
-    await workbench.reconcile();
-    await waitFor(() => {
-      const steering = document.querySelector<HTMLInputElement>('input[name="queue-kind"][value="steering"]');
-      expect(steering?.checked).toBe(true);
-    });
+    await waitFor(() => expect(box.checked).toBe(false));
   });
 });
 
@@ -911,26 +892,20 @@ describe('历史响应的代次守卫', () => {
   });
 });
 
-describe('自动重试偏好按会话隔离', () => {
-  // U14：Pi 没有 auto-retry 读回字段，跨会话共用一个 DOM 状态
-  // 会把上一会话的选择带到新会话。
-  it('切换会话后套用该会话的偏好，默认关闭', async () => {
-    const box = document.getElementById('auto-retry') as HTMLInputElement;
-    // 在 s1 打开自动重试。
+describe('会话默认是全局偏好', () => {
+  // 自动重试/自动压缩/排队方式都是全局默认（本机浏览器），不再按会话隔离：
+  // 换会话不改动它们，新会话在启动 worker 时按默认对齐。
+  it('修改后写入偏好，换会话保持同一份全局默认', async () => {
+    const box = document.getElementById('default-auto-retry') as HTMLInputElement;
     workbench.selectSession('s1', '/tmp/a', 'A');
     await waitFor(() => expect(document.body.dataset.sessionId).toBe('s1'));
     box.checked = true;
     box.dispatchEvent(new Event('change', { bubbles: true }));
-    await waitFor(() => expect(box.checked).toBe(true));
+    await waitFor(() => expect(localStorage.getItem('pi-ui:auto-retry')).toBe('1'));
 
-    // 切到 s2：没有记录过，必须是默认关闭。
+    // 换到另一个会话：全局默认不受影响（开关保持勾选）。
     workbench.selectSession('s2', '/tmp/b', 'B');
     await waitFor(() => expect(document.body.dataset.sessionId).toBe('s2'));
-    expect(box.checked).toBe(false);
-
-    // 切回 s1：应恢复上一次的选择。
-    workbench.selectSession('s1', '/tmp/a', 'A');
-    await waitFor(() => expect(document.body.dataset.sessionId).toBe('s1'));
     expect(box.checked).toBe(true);
   });
 });
@@ -1470,6 +1445,8 @@ describe('实时流重同步与迟到回执的会话归属', () => {
     const starts = () => fake.request.mock.calls.filter(([m]) => m === 'session.start').length;
     const before = starts();
     await internal.action('export', document.createElement('button'));
+    // 导出走动态分块（session-actions），等它完成；期间不得拉起工作进程。
+    await waitFor(() => expect(fake.request.mock.calls.some(([m]) => m === 'session.export_html')).toBe(true));
     expect(starts()).toBe(before);
     expect(fake.request).toHaveBeenCalledWith('session.export_html', 's1', { fileName: 'session-s1.html' }, 120_000);
   });
@@ -1527,15 +1504,18 @@ describe('命令等待上限', () => {
   it('长任务按桥的标注放宽，其余仍是默认', async () => {
     // 桥 protocol/methods.go 给压缩与用户 bash 标注了 5 分钟，导出 2 分钟；
     // 前端先放弃只会让用户以为失败（B66）。这里锁定两侧的上限对应关系。
+    // 用「按方法找调用」而不是 at(-1)：ensureWorker 会顺带发 session.stats，
+    // 最后一条未必是目标方法。
+    const timeouts = (method: string) => fake.request.mock.calls.filter((c) => c[0] === method).map((c) => c[3]);
     const call = (method: string) => (workbench as unknown as { command(m: string): Promise<unknown> }).command(method);
     await call('session.compact');
-    expect(fake.request.mock.calls.at(-1)?.[3]).toBe(300_000);
+    expect(timeouts('session.compact')).toContain(300_000);
     await call('session.bash');
-    expect(fake.request.mock.calls.at(-1)?.[3]).toBe(300_000);
+    expect(timeouts('session.bash')).toContain(300_000);
     await call('session.export_html');
-    expect(fake.request.mock.calls.at(-1)?.[3]).toBe(120_000);
+    expect(timeouts('session.export_html')).toContain(120_000);
     await call('session.state');
-    expect(fake.request.mock.calls.at(-1)?.[3]).toBe(30_000);
+    expect(timeouts('session.state')).toContain(30_000);
   });
 });
 

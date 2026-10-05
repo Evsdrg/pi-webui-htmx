@@ -9,6 +9,13 @@
      下面所有相对 URL（含前端脚本里的）都相对它解析，因此同一份产物
      在两种形态下都指向正确的前缀（B54）。 */}}
 <base href="{{.Base}}">
+{{/* 主题防闪烁：首帧之前按偏好解析出生效的调色板写进 data-theme / data-mode。
+     这段必须内联在样式表之前——等模块加载再应用会先闪一帧默认亮色。
+     键名与 layout.ts 的解析一致（pi-ui:theme-mode / theme-light / theme-dark）。 */}}
+<script>(function(){try{var r=function(k){return localStorage.getItem('pi-ui:'+k)||''};var L=['light','mist','rose','pine'],D=['dark','obsidian'];var l=r('theme-light'),d=r('theme-dark');l=L.indexOf(l)<0?'light':l;d=D.indexOf(d)<0?'dark':d;var m=r('theme-mode');var dark=m==='dark'||(m!=='light'&&matchMedia('(prefers-color-scheme: dark)').matches);var e=document.documentElement;e.dataset.theme=dark?d:l;e.dataset.mode=dark?'dark':'light'}catch(_){}})();</script>
+{{/* 行内操作图标以 symbol 定义一次，会话列表片段用 <use> 引用：
+     每行两个 svg 直接把 path 写进片段会让列表响应成倍变大。 */}}
+<svg width="0" height="0" style="position:absolute" aria-hidden="true"><symbol id="icon-pencil" viewBox="0 0 14 14"><path d="M9.6 2.2l2.2 2.2L5.2 11 2.6 11.4 3 8.8z" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/></symbol><symbol id="icon-trash" viewBox="0 0 14 14"><path d="M2.5 4h9M5.5 4V2.8h3V4M4.2 4l.6 7.4h4.4L9.8 4M6 6v3.6M8 6v3.6" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></symbol><symbol id="icon-sun" viewBox="0 0 14 14"><circle cx="7" cy="7" r="2.6" fill="none" stroke="currentColor" stroke-width="1.3"/><path d="M7 .9v1.8M7 11.3v1.8M.9 7h1.8M11.3 7h1.8M2.7 2.7l1.3 1.3M10 10l1.3 1.3M11.3 2.7L10 4M4 10l-1.3 1.3" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></symbol><symbol id="icon-moon" viewBox="0 0 14 14"><path d="M11.8 8.6A5 5 0 1 1 5.4 2.2a4.2 4.2 0 0 0 6.4 6.4z" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/></symbol></svg>
 {{range .CSS}}<link rel="stylesheet" href="assets/{{.}}">{{end}}
 {{/* 拆出去的供应商分块（htmx）与入口并行拉取，避免多一个往返。 */}}
 {{range .Preload}}<link rel="modulepreload" href="assets/{{.}}">{{end}}
@@ -66,7 +73,7 @@
         <nav id="file-list" hx-sync="this:replace" aria-label="文件列表" hx-get="ui/files" hx-trigger="files-refresh from:body" hx-include="#files-path" hx-swap="innerHTML"><p class="empty-note">连接后显示工作区文件</p></nav>
       </div>
     </section>
-    <footer class="sidebar-footer"><button class="btn btn-quiet" data-action="settings">⚙ 设置与扩展</button><span id="conn-state" class="state state-offline" role="status">连接中</span></footer>
+    <footer class="sidebar-footer"><button class="btn btn-quiet" data-action="settings">⚙ 设置与扩展</button><button class="btn btn-quiet" data-action="models-edit">模型与供应商</button><span id="conn-state" class="state state-offline" role="status">连接中</span></footer>
   </aside>
   <div class="sidebar-resizer" role="separator" aria-label="调整侧栏宽度" aria-orientation="vertical" tabindex="0"></div>
   </div>
@@ -91,6 +98,7 @@
       <div class="topbar-right">
       <button class="topbar-btn topbar-info" type="button" id="context-usage" data-action="panel-info" aria-controls="panel-info" aria-expanded="false" hidden></button>
       <span id="session-state" class="state topbar-state" role="status">就绪</span>
+      <button class="icon-btn" id="theme-toggle" data-action="theme-toggle" aria-label="切换夜间/白天主题" title="切换夜间/白天"><svg width="14" height="14" aria-hidden="true"><use href="#icon-sun" id="theme-toggle-icon"/></svg></button>
       <button class="icon-btn" data-action="session-menu" aria-label="会话操作">···</button>
       <button class="icon-btn" data-action="workspace" aria-label="打开工作区面板" aria-controls="workspace-panel" aria-expanded="false">▤</button>
       </div>
@@ -162,19 +170,22 @@
           <button id="send-button" type="submit" class="btn btn-primary" disabled><span aria-hidden="true">→</span>发送</button>
         </div>
         <div class="composer-actions">
-          <button class="icon-btn" type="button" data-action="attach" aria-label="添加图片附件" title="添加图片附件">＋</button><input id="attach-input" type="file" accept="image/png,image/jpeg,image/gif,image/webp" multiple hidden>
-          <label class="select-label model-control"><span class="sr-only">模型</span><select id="model-select" name="model" aria-label="模型" hx-get="ui/models" hx-trigger="models-refresh from:body"><option value="">Pi 默认模型</option></select></label>
-          {{/* 模型配置的入口。它刻意不在「设置与扩展」里：那里面是本机外观与已装扩展，
-               模型是随会话切换的东西，放在选它的地方旁边才不会找错地方。 */}}
-          <button class="icon-btn" type="button" data-action="models-edit" aria-label="编辑模型配置" title="编辑模型配置（models.json）"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M16 18l6-6-6-6M8 6l-6 6 6 6"/></svg></button>
-          <div class="spacer"></div>
-          <label class="select-label"><span class="sr-only">思考强度</span><select id="thinking-select" aria-label="思考强度" disabled><option value="">自动</option></select></label>
-          <button class="icon-btn" type="button" data-action="commands" aria-label="查看斜杠命令" title="查看斜杠命令">/</button>
-          <label class="select-label" title="工具预设：启动工作进程时生效"><span class="sr-only">工具预设</span><select id="tool-preset-quick" aria-label="工具预设"><option value="chat-only">仅聊天</option><option value="read-only">只读</option><option value="default" selected>默认</option><option value="full">完整</option></select></label>
-          <button id="abort-button" type="button" class="btn" data-action="abort" hidden>■ 中止</button>
+          {{/* 左组：输入相关的选择器（附件、模型、思考强度、工具预设、命令）。
+               右组：运行元信息（mc 状态行、用量）与中止——元信息不再单独占一行。 */}}
+          <div class="composer-tools">
+            <button class="icon-btn" type="button" data-action="attach" aria-label="添加图片附件" title="添加图片附件">＋</button><input id="attach-input" type="file" accept="image/png,image/jpeg,image/gif,image/webp" multiple hidden>
+            <label class="select-label model-control"><span class="sr-only">模型</span><select id="model-select" name="model" aria-label="模型" hx-get="ui/models" hx-trigger="models-refresh from:body"><option value="">Pi 默认模型</option></select></label>
+            <label class="select-label"><span class="sr-only">思考强度</span><select id="thinking-select" aria-label="思考强度" disabled><option value="">自动</option></select></label>
+            <label class="select-label" title="工具预设：启动工作进程时生效"><span class="sr-only">工具预设</span><select id="tool-preset-quick" aria-label="工具预设"><option value="chat-only">仅聊天</option><option value="read-only">只读</option><option value="default" selected>默认</option><option value="full">完整</option></select></label>
+            <button class="icon-btn" type="button" data-action="commands" aria-label="查看斜杠命令" title="查看斜杠命令">/</button>
+          </div>
+          <div class="composer-meta">
+            <span id="ext-status-slot"></span>
+            <span id="usage"></span>
+            <button id="abort-button" type="button" class="btn" data-action="abort" hidden>■ 中止</button>
+          </div>
         </div>
       </form>
-      <div class="composer-footnote"><span id="ext-status-slot"></span><span id="usage"></span></div>
       <div id="ext-widgets-after" class="ext-widgets"></div>
     </div>
   </main>
@@ -226,9 +237,15 @@
           {{/* 常规 */}}
           <section class="config-detail-stack" data-settings-panel="general">
             <div class="config-detail-header"><h3 class="config-detail-title">外观</h3></div>
-            <div class="config-field"><label for="theme-select">主题</label>
-              <select id="theme-select"><option value="system">跟随系统</option><option value="light">浅色</option><option value="dark">深色</option><option value="mist">雾蓝</option><option value="rose">蔷薇</option><option value="pine">松绿</option></select>
-              <span class="hint">深色为深蓝基调；「跟随系统」在系统切换明暗时同步。</span>
+            <div class="config-field"><label>显示模式</label>
+              <div class="segmented" id="theme-mode" role="group" aria-label="显示模式"><button type="button" class="seg-btn" data-theme-mode="system">跟随系统</button><button type="button" class="seg-btn" data-theme-mode="light">白天</button><button type="button" class="seg-btn" data-theme-mode="dark">夜间</button></div>
+              <span class="hint">顶栏的 ☀/🌙 可在白天与夜间之间快捷切换；「跟随系统」随系统明暗自动选择。</span>
+            </div>
+            <div class="config-field"><label>白天主题</label>
+              <div class="segmented" id="theme-light-group" role="group" aria-label="白天主题"><button type="button" class="seg-btn" data-theme-pick="light">明亮</button><button type="button" class="seg-btn" data-theme-pick="mist">雾蓝</button><button type="button" class="seg-btn" data-theme-pick="rose">蔷薇</button><button type="button" class="seg-btn" data-theme-pick="pine">松绿</button></div>
+            </div>
+            <div class="config-field"><label>夜间主题</label>
+              <div class="segmented" id="theme-dark-group" role="group" aria-label="夜间主题"><button type="button" class="seg-btn" data-theme-pick="dark">深夜蓝</button><button type="button" class="seg-btn" data-theme-pick="obsidian">纯黑</button></div>
             </div>
             <div class="config-detail-header"><h3 class="config-detail-title">对话</h3></div>
             <div class="config-field"><label for="chat-font-size">正文字号 <span id="chat-font-size-value"></span></label>
@@ -241,6 +258,10 @@
             </div>
             <div class="config-field"><label class="switch"><input id="chat-width-full" type="checkbox"><span>顶满可用宽度</span></label><span class="hint">忽略上面的行宽限制，正文与输入框铺满对话区的可用空间。仅保存在本机浏览器。</span></div>
             <div class="config-field"><label class="switch"><input id="process-collapsed" type="checkbox" checked><span>完成后默认折叠过程</span></label><span class="hint">控制已完成回合的工具与思考过程；运行中始终显示当前动作。仅保存在本机浏览器。</span></div>
+            <div class="config-detail-header"><h3 class="config-detail-title">会话默认</h3></div>
+            <div class="config-field"><label class="switch"><input id="default-auto-compaction" type="checkbox" checked><span>自动压缩上下文</span></label><span class="hint">新会话的工作进程按此设置启动；修改时对当前会话立即生效。仅保存在本机浏览器。</span></div>
+            <div class="config-field"><label class="switch"><input id="default-auto-retry" type="checkbox"><span>自动重试</span></label><span class="hint">模型请求失败时自动重试；工作进程启动时按此设置。仅保存在本机浏览器。</span></div>
+            <fieldset class="queue-modes"><legend>运行中发送方式</legend><label class="switch"><input type="radio" name="default-queue-kind" value="steering" checked><span>插入指令（本轮结束后立即执行）</span></label><label class="switch"><input type="radio" name="default-queue-kind" value="followUp"><span>完成后追加（排到队列末尾）</span></label></fieldset>
           </section>
           {{/* 扩展 */}}
           <section class="config-detail-stack" data-settings-panel="extensions" hidden>
@@ -253,7 +274,8 @@
         </div>
       </div>
     </dialog>
-<dialog id="session-dialog" class="app-dialog"><header class="panel-header"><h2>会话操作</h2><button class="icon-btn" data-close-dialog aria-label="关闭会话操作">×</button></header><label for="session-name">会话名称</label><input id="session-name" type="text" maxlength="200"><div class="session-action-grid"><button class="btn" data-action="rename">保存名称</button><button class="btn" data-action="compact">压缩上下文</button><button class="btn" data-action="clone">克隆会话</button><button class="btn" data-action="export">导出 HTML</button><button class="btn" data-action="branch">分支导航…</button><button class="btn" data-action="stop">释放工作进程</button><button class="btn danger" data-action="delete">删除会话…</button></div><h3>排队与压缩</h3><div class="switch-grid"><label class="switch"><input type="checkbox" id="auto-compaction"><span>自动压缩上下文</span></label><label class="switch"><input type="checkbox" id="auto-retry"><span>自动重试</span></label></div><p class="muted">自动压缩状态由 Pi 读回；自动重试没有对应的读回字段，这里是按会话记住的本机偏好，不代表 Pi 的实时状态。</p><div class="session-action-grid"><button class="btn" data-action="abort-retry">中止重试</button></div><fieldset class="queue-modes"><legend>运行中发送方式</legend><label class="switch"><input type="radio" name="queue-kind" value="steering" checked><span>插入指令（本轮结束后立即执行）</span></label><label class="switch"><input type="radio" name="queue-kind" value="followUp"><span>完成后追加（排到队列末尾）</span></label></fieldset></dialog>
+<dialog id="session-dialog" class="app-dialog"><header class="panel-header"><h2>会话操作</h2><button class="icon-btn" data-close-dialog aria-label="关闭会话操作">×</button></header><div class="session-action-grid"><button class="btn" data-action="compact">压缩上下文</button><button class="btn" data-action="clone">克隆会话</button><button class="btn" data-action="export">导出 HTML</button><button class="btn" data-action="branch">分支导航…</button><button class="btn" data-action="stop">释放工作进程</button><button class="btn" data-action="abort-retry">中止重试</button></div></dialog>
+<dialog id="rename-dialog" class="app-dialog"><header class="panel-header"><h2>重命名会话</h2><button class="icon-btn" data-close-dialog aria-label="关闭重命名">×</button></header><label for="rename-input">会话名称</label><input id="rename-input" type="text" maxlength="200"><div class="session-action-grid"><button class="btn" data-action="rename-cancel">取消</button><button class="btn btn-primary" data-action="rename-save">保存</button></div></dialog>
 <dialog id="models-dialog" class="app-dialog config-panel">
       <header class="config-panel-head"><h2>模型配置</h2><code class="config-panel-sub" id="models-sub">models.json</code><button class="config-close" type="button" data-close-dialog aria-label="关闭模型配置">×</button></header>
       <div class="config-split">
