@@ -259,7 +259,12 @@ func (s *Server) runCommand(c connSink, req protocol.Request) {
 	if err != nil {
 		s.metrics.CommandFailed(req.Method, errorCodeOf(err))
 	}
-	c.send(protocol.Reply(req.RequestID, data, err))
+	// 终态回执必须在**发送响应之前**落盘并释放 claim。
+	// 否则会出现这样的窗口：客户端收到响应后立刻用同一 requestId 重发，
+	// 此时 intent 已写、终态未落，admit 会把一条**已经成功**的命令判成
+	// outcome_unknown（那是崩溃恢复才该有的结论）。顺序改了以后，只要客户端
+	// 收到响应，回执就一定已经落盘——unknown 只会在真正的崩溃恢复里出现。
 	s.recordReceipt(req, err)
 	s.claims.finish(req.RequestID)
+	c.send(protocol.Reply(req.RequestID, data, err))
 }

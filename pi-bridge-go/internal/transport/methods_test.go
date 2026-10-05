@@ -307,3 +307,37 @@ func Test只读命令不写intent(t *testing.T) {
 		t.Fatal("只读命令不应写回执")
 	}
 }
+
+// Test响应到达时终态回执已落盘 覆盖回执与响应的先后顺序（真缺陷，不是抖动）。
+//
+// 客户端收到响应后可能**立刻**用同一 requestId 重发（重试或误重发）。
+// admit 对「intent 已写、终态未落」的回答是 outcome_unknown——那是崩溃恢复
+// 才该有的结论。因此只要响应已经发出，终态回执就必须已经在盘上；否则一条
+// **已经成功**的命令会被判成「结果未知」，客户端据此对账/告警全是错的。
+//
+// 判据是确定性的：在 send 被调用的那一刻读回执，而不是靠并发撞窗口。
+func Test响应到达时终态回执已落盘(t *testing.T) {
+	s, _, _ := newTestServer(t)
+	var seen bool
+	var outcome storage.Outcome
+	sink := &blockingSink{
+		release: make(chan struct{}),
+		entered: make(chan struct{}),
+		reply: func(protocol.Message) {
+			// 响应发出的这一刻：终态回执必须已经落盘。
+			rec, ok := s.receipts.Lookup("order-1")
+			seen, outcome = ok, rec.Outcome
+		},
+	}
+	close(sink.release)
+	s.runCommand(sink, protocol.Request{
+		Version: 1, Kind: "command", RequestID: "order-1",
+		Method: "session.prompt", Params: []byte(`{"text":"hi"}`),
+	})
+	if !seen {
+		t.Fatal("响应发出时回执尚未落盘，客户端重发会撞上 outcome_unknown 的窗口")
+	}
+	if outcome != storage.OutcomeOK {
+		t.Fatalf("响应发出时应已是终态 ok，实际 %q", outcome)
+	}
+}
