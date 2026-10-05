@@ -7,6 +7,9 @@
 import type { BridgeClient } from './bridge';
 import { record, text } from './stream';
 import { el, elOrNull } from './dom';
+// 模型对话框专用样式随本分块按需加载（本模块本来就是动态 import 的），
+// 不占首屏预算，与 code.css 同一思路。
+import '@/styles/models.css';
 
 // 文档形状。providers 是唯一顶层键，其余自定义键原样保留——
 // 保存时整份写回，所以这里只读不写的字段不会丢。

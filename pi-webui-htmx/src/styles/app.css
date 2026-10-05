@@ -297,7 +297,7 @@ kbd { font-size:10px; color:var(--text-dim); margin-left:auto; }
 .btn-primary { background:var(--accent); border-color:var(--accent); color:var(--accent-contrast); }
 .btn-primary:hover { background:var(--accent-hover); }
 .btn-quiet { border:0; background:transparent; font-size:11px; padding:4px; }
-.danger,.form-error { color:var(--danger); }
+.form-error { color:var(--danger); }
 .muted,.empty-note { color:var(--text-muted); }
 .empty-note { font-size:12px; padding:14px; }
 input,select,textarea { background:var(--bg); border:1px solid var(--border); border-radius:6px; padding:7px 9px; }
@@ -313,7 +313,6 @@ input,select,textarea { background:var(--bg); border:1px solid var(--border); bo
 .app-dialog input { width:100%; }
 .dialog-actions,.ext-dialog-actions { display:flex; justify-content:flex-end; gap:8px; margin-top:18px; }
 .ext-dialog textarea,.ext-dialog select,.ext-dialog input { width:100%; }
-.settings-dialog { width:min(620px,calc(100vw - 32px)); }
 /* ==== 工作区面板：文件 / 变更 / 终端 ===================================================== */
 .workspace-panel { min-width:0; display:flex; flex-direction:column; overflow:hidden; border-left:1px solid var(--border); background:var(--bg-panel); }
 .panel-header { display:flex; justify-content:space-between; align-items:center; gap:10px; padding:12px; font-size:12px; }
@@ -381,19 +380,8 @@ input,select,textarea { background:var(--bg); border:1px solid var(--border); bo
 .session-action-grid { display:flex; flex-wrap:wrap; gap:6px; margin:10px 0; }
 .session-action-grid .btn { font-size:12px; }
 
-/* 模型配置编辑器。 */
-/* ==== 模型配置与发现 ================================================================ */
-.config-editor { width:100%; min-height:280px; font-family:var(--font-mono, ui-monospace, monospace); font-size:12px; line-height:1.5; padding:10px; border:1px solid var(--border); border-radius:8px; background:var(--bg-subtle); color:var(--text); resize:vertical; }
-.discover-result { font-size:12px; color:var(--text-muted); max-height:220px; overflow:auto; border:1px solid var(--border); border-radius:8px; padding:8px 10px; }
-.discover-list { margin:6px 0 0; padding-left:18px; }
-.discover-list li { font-size:12px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-/* 模型目录候选（B70）：整行可点，点击后由前端把参数填进表单。 */
-.catalog-list { list-style:none; margin:6px 0 0; padding:0; display:grid; gap:2px; }
-.catalog-item { display:flex; gap:8px; align-items:baseline; width:100%; padding:3px 6px; border:1px solid transparent; border-radius:5px; background:transparent; color:inherit; font:inherit; text-align:left; cursor:pointer; }
-.catalog-item:hover { background:var(--bg-selected); }
-.catalog-id { font-family:var(--font-mono); font-size:11px; flex:0 0 auto; }
-.catalog-meta { font-size:11px; color:var(--text-muted); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-.catalog-empty { font-size:12px; color:var(--text-muted); }
+/* 模型配置编辑器与模型发现的样式已拆到 src/styles/models.css（按需加载，
+   只在打开模型对话框时下载）。这里曾内联它们，白占首屏预算。 */
 
 /* 附件：缩略图 + 移除按钮，拖拽时整块 composer 高亮。 */
 /* ==== 附件 ===================================================================== */
@@ -582,56 +570,33 @@ input,select,textarea { background:var(--bg); border:1px solid var(--border); bo
 .config-actions { display:flex; flex-wrap:wrap; gap:8px; }
 .config-note { color:var(--text-dim); font-size:11px; line-height:1.6; }
 
-/* ==== 模型配置：provider/model 两级树与字段表单（对齐 Pi Web ModelsConfig）── */
-/* 模型行比 provider 行缩进一级；Pi Web 用 padding-left:26px。 */
-.models-indent { padding-left:26px; }
-.models-tag { font-size:9px; font-weight:600; color:var(--accent); border:1px solid var(--border); border-radius:3px; padding:0 3px; }
-.is-grow { flex:1; }
-.tl-row[data-thinking-level=off] { --tl-color:var(--tl-off); }
-.tl-row[data-thinking-level=minimal] { --tl-color:var(--tl-minimal); }
-.tl-row[data-thinking-level=low] { --tl-color:var(--tl-low); }
-.tl-row[data-thinking-level=medium] { --tl-color:var(--tl-medium); }
-.tl-row[data-thinking-level=high] { --tl-color:var(--tl-high); }
-.tl-row[data-thinking-level=xhigh] { --tl-color:var(--tl-xhigh); }
-.tl-row[data-thinking-level=max] { --tl-color:var(--tl-max); }
-.models-add { color:var(--text-dim); }
-.models-add:not(:disabled):hover,.models-add:not(:disabled):focus-visible { color:var(--accent); }
-.config-two-col { display:grid; grid-template-columns:1fr 1fr; gap:10px; }
-.config-checks { display:flex; flex-wrap:wrap; gap:20px; }
-.config-check { display:flex; align-items:center; gap:6px; color:var(--text-muted); cursor:pointer; font-size:12px; }
-.config-check input { width:13px; height:13px; accent-color:var(--accent); cursor:pointer; }
-/* 密钥输入框与「显示」按钮并排；Pi Web 的 SecretTextInput 同形。 */
-.config-secret { display:flex; align-items:center; gap:6px; }
-.config-secret input { flex:1 1 auto; min-width:0; }
-/* provider 表单里的「发现模型」与上面的字段分开：Pi Web 用一条上边框隔开。 */
-.config-section-sep { display:flex; flex-direction:column; gap:10px; padding-top:14px; border-top:1px solid var(--border); }
+/* 设置面板的内容分组：每个分组是一张卡片，让「外观 / 对话 / 会话默认」
+   在视觉上彼此分开，而不是一段接一段平铺。
+   注意 .config-detail-title 的 margin 必须用更高权重压过 .app-dialog h3
+   （0,1,1）——否则每个分组标题都会多出 24px 上边距，整页显得松散。 */
+.config-detail .config-detail-title { margin:0; }
+.config-group { display:flex; flex-direction:column; gap:12px; padding:14px 16px; border:1px solid var(--border); border-radius:10px; background:var(--bg-panel); }
+/* 设置面板限宽：980px 面板减掉 240px 侧栏后文字行过长、控件拉伸，
+   限一个舒适阅读宽度；模型对话框不受影响（它需要宽度放两列表单）。 */
+[data-settings-panel] .config-detail-stack { max-width:680px; }
 
-/* ==== 思考等级映射：一行一个等级，三态（默认 / 禁用 / 自定义）──
-   对齐 Pi Web 的 ThinkingLevelMapEditor。三态是必须的：
-   「默认」= 映射表里没有这个键，「禁用」= 键存在但值为 null，
-   「自定义」= 一个字符串。只用文本框会把前两者混成一谈。 */
-/* 尺寸刻意比 Pi Web 紧一档：七个等级连成七行，按它的原尺寸在 1280x720 下
-   会把详情面板顶出滚动区。行高压到 26px 左右，控件仍可点击。 */
-.tl-row { display:flex; align-items:center; gap:6px; padding:2px 3px; border:1px solid transparent; border-radius:5px; }
-.tl-id { display:flex; align-items:center; gap:4px; flex:0 0 56px; }
-.tl-dot { width:5px; height:5px; border-radius:50%; background:var(--tl-color,var(--text-dim)); flex:0 0 auto; }
-/* 禁用态：点变暗、名字加删除线——和 Pi Web 一致，让人一眼看出这一级被关掉了。 */
-.tl-row[data-state=null] .tl-dot { opacity:.3; }
-.tl-row[data-state=null] .tl-name { color:var(--text-dim); text-decoration:line-through; }
-.tl-name { color:var(--text-muted); font-family:var(--font-mono); font-size:10px; }
-/* 分段按钮与自定义输入共用一套外形：5px 圆角、细边框、10px 字。 */
-.tl-seg,.tl-custom { display:flex; flex:0 0 auto; border:1px solid var(--border); border-radius:5px; overflow:hidden; }
-.tl-custom { transition:border-color .1s; }
-.tl-row[data-state=string] .tl-custom { border-color:var(--accent); }
-.tl-btn { padding:2px 7px; border:0; background:var(--bg-panel); color:var(--text-dim); cursor:pointer; font-size:10px; line-height:1.5; white-space:nowrap; transition:background .1s,color .1s; }
-.tl-btn + .tl-btn { border-left:1px solid var(--border); }
-.tl-row[data-state=omit] .tl-btn[data-tl=omit],
-.tl-row[data-state=null] .tl-btn[data-tl=null],
-.tl-row[data-state=string] .tl-btn[data-tl=string] { background:var(--accent); color:var(--accent-contrast); font-weight:600; }
-.tl-row[data-state=null] .tl-btn[data-tl=null] { background:var(--danger); color:var(--accent-contrast); }
-/* 通用字段规则用 :where 降低权重，紧凑控件无需叠加祖先选择器。 */
-.tl-custom input { width:9ch; box-sizing:border-box; border:0; outline:none; background:var(--bg-panel); color:var(--text-dim); font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:10px; padding:2px 6px; line-height:1.5; transition:background .1s,color .1s; }
-.tl-row[data-state=string] .tl-custom input { background:var(--bg); color:var(--text); }
+/* ==== 已安装资源清单（设置 → 扩展）====
+   表格此前没有任何样式，表头被浏览器默认居中、长路径硬折行，看起来零乱。 */
+.packages { width:100%; border-collapse:collapse; }
+.packages th { padding:6px 10px; border-bottom:1px solid var(--border); color:var(--text-dim); font-size:10px; font-weight:600; text-align:left; text-transform:uppercase; white-space:nowrap; }
+.packages td { padding:7px 10px; border-bottom:1px solid var(--border); font-size:12px; vertical-align:top; }
+.packages tr:last-child td { border-bottom:0; }
+/* 来源/路径是机器标识：等宽、可断行，避免把其它列挤窄。 */
+.packages td.wrap-key { color:var(--text-dim); font-family:var(--font-mono); font-size:11px; overflow-wrap:anywhere; }
+.packages td.nowrap { white-space:nowrap; }
+.packages td .tag { white-space:nowrap; }
+.packages td .tag + .tag { margin-left:4px; }
+.tag-warn { border-color:color-mix(in srgb,var(--accent) 40%,transparent); color:var(--accent); }
+.tag-err { border-color:var(--danger-border); background:var(--danger-bg); color:var(--danger); }
+.packages-subtitle { margin:18px 0 0; font-size:13px; font-weight:600; }
+
+/* 模型树缩进、思考等级映射编辑器、provider/model 字段表单与模型发现
+   的样式已拆到 src/styles/models.css（按需加载）。 */
 
 /* ==== magic-context 只读面板 ──
    数据来自本机 magic-context 的 SQLite 库，与 Pi 会话文件无关。
@@ -640,7 +605,6 @@ input,select,textarea { background:var(--bg); border:1px solid var(--border); bo
 .mc-head { display:flex; align-items:baseline; gap:10px; }
 .mc-title { color:var(--text); font-size:12px; font-weight:600; }
 .mc-source { min-width:0; overflow:hidden; color:var(--text-dim); font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:10px; text-overflow:ellipsis; white-space:nowrap; }
-.mc-source.is-off { color:var(--danger); }
 .mc-empty { margin:0; padding:10px 0; color:var(--text-dim); font-size:11px; line-height:1.6; }
 .mc-kinds { display:flex; flex-wrap:wrap; gap:4px; }
 .mc-kind { padding:3px 9px; border:1px solid var(--border); border-radius:5px; background:var(--bg-panel); color:var(--text-dim); cursor:pointer; font-size:10px; transition:background .12s,color .12s; }
@@ -711,7 +675,6 @@ input,select,textarea { background:var(--bg); border:1px solid var(--border); bo
   .config-split { flex-direction:column; }
   .config-side { width:100%; height:190px; border-right:0; border-bottom:1px solid var(--border); }
   .config-detail { padding:14px; }
-  .config-two-col { grid-template-columns:1fr; }
 }
 /* ==== 无障碍 ==== */
 @media (hover:none) { .turn-actions { opacity:1; } }

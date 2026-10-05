@@ -236,32 +236,38 @@
         <div class="config-detail" id="settings-detail">
           {{/* 常规 */}}
           <section class="config-detail-stack" data-settings-panel="general">
-            <div class="config-detail-header"><h3 class="config-detail-title">外观</h3></div>
-            <div class="config-field"><label>显示模式</label>
-              <div class="view-switch" role="group" aria-label="显示模式"><button type="button" class="view-btn" data-theme-mode="system">跟随系统</button><button type="button" class="view-btn" data-theme-mode="light">白天</button><button type="button" class="view-btn" data-theme-mode="dark">夜间</button></div>
-              <span class="hint">顶栏的 ☀/🌙 可在白天与夜间之间快捷切换；「跟随系统」随系统明暗自动选择。</span>
+            <div class="config-group">
+              <div class="config-detail-header"><h3 class="config-detail-title">外观</h3></div>
+              <div class="config-field"><label>显示模式</label>
+                <div class="view-switch" role="group" aria-label="显示模式"><button type="button" class="view-btn" data-theme-mode="system">跟随系统</button><button type="button" class="view-btn" data-theme-mode="light">白天</button><button type="button" class="view-btn" data-theme-mode="dark">夜间</button></div>
+                <span class="hint">顶栏的 ☀/🌙 可在白天与夜间之间快捷切换；「跟随系统」随系统明暗自动选择。</span>
+              </div>
+              <div class="config-field"><label>白天主题</label>
+                <div class="view-switch" role="group" aria-label="白天主题"><button type="button" class="view-btn" data-theme-pick="light">明亮</button><button type="button" class="view-btn" data-theme-pick="mist">雾蓝</button><button type="button" class="view-btn" data-theme-pick="rose">蔷薇</button><button type="button" class="view-btn" data-theme-pick="pine">松绿</button></div>
+              </div>
+              <div class="config-field"><label>夜间主题</label>
+                <div class="view-switch" role="group" aria-label="夜间主题"><button type="button" class="view-btn" data-theme-pick="dark">深夜蓝</button><button type="button" class="view-btn" data-theme-pick="obsidian">纯黑</button></div>
+              </div>
             </div>
-            <div class="config-field"><label>白天主题</label>
-              <div class="view-switch" role="group" aria-label="白天主题"><button type="button" class="view-btn" data-theme-pick="light">明亮</button><button type="button" class="view-btn" data-theme-pick="mist">雾蓝</button><button type="button" class="view-btn" data-theme-pick="rose">蔷薇</button><button type="button" class="view-btn" data-theme-pick="pine">松绿</button></div>
+            <div class="config-group">
+              <div class="config-detail-header"><h3 class="config-detail-title">对话</h3></div>
+              <div class="config-field"><label for="chat-font-size">正文字号 <span id="chat-font-size-value"></span></label>
+                <input id="chat-font-size" type="range" min="-1" max="4" step="1" value="0">
+                <span class="hint">在基准字号上增减，代码块与工具块一起跟随。</span>
+              </div>
+              <div class="config-field"><label for="chat-width">内容宽度 <span id="chat-width-value"></span></label>
+                <input id="chat-width" type="range" min="640" max="1400" step="20" value="820">
+                <span class="hint">限制对话正文的行宽，宽屏下更容易阅读。</span>
+              </div>
+              <div class="config-field"><label class="switch"><input id="chat-width-full" type="checkbox"><span>顶满可用宽度</span></label><span class="hint">忽略上面的行宽限制，正文与输入框铺满对话区的可用空间。仅保存在本机浏览器。</span></div>
+              <div class="config-field"><label class="switch"><input id="process-collapsed" type="checkbox" checked><span>完成后默认折叠过程</span></label><span class="hint">控制已完成回合的工具与思考过程；运行中始终显示当前动作。仅保存在本机浏览器。</span></div>
             </div>
-            <div class="config-field"><label>夜间主题</label>
-              <div class="view-switch" role="group" aria-label="夜间主题"><button type="button" class="view-btn" data-theme-pick="dark">深夜蓝</button><button type="button" class="view-btn" data-theme-pick="obsidian">纯黑</button></div>
+            <div class="config-group">
+              <div class="config-detail-header"><h3 class="config-detail-title">会话默认</h3></div>
+              <div class="config-field"><label class="switch"><input id="default-auto-compaction" type="checkbox" checked><span>自动压缩上下文</span></label><span class="hint">新会话的工作进程按此设置启动；修改时对当前会话立即生效。仅保存在本机浏览器。</span></div>
+              <div class="config-field"><label class="switch"><input id="default-auto-retry" type="checkbox"><span>自动重试</span></label><span class="hint">模型请求失败时自动重试；工作进程启动时按此设置。仅保存在本机浏览器。</span></div>
+              <fieldset class="queue-modes"><legend>运行中发送方式</legend><label class="switch"><input type="radio" name="default-queue-kind" value="steering" checked><span>插入指令（本轮结束后立即执行）</span></label><label class="switch"><input type="radio" name="default-queue-kind" value="followUp"><span>完成后追加（排到队列末尾）</span></label></fieldset>
             </div>
-            <div class="config-detail-header"><h3 class="config-detail-title">对话</h3></div>
-            <div class="config-field"><label for="chat-font-size">正文字号 <span id="chat-font-size-value"></span></label>
-              <input id="chat-font-size" type="range" min="-1" max="4" step="1" value="0">
-              <span class="hint">在基准字号上增减，代码块与工具块一起跟随。</span>
-            </div>
-            <div class="config-field"><label for="chat-width">内容宽度 <span id="chat-width-value"></span></label>
-              <input id="chat-width" type="range" min="640" max="1400" step="20" value="820">
-              <span class="hint">限制对话正文的行宽，宽屏下更容易阅读。</span>
-            </div>
-            <div class="config-field"><label class="switch"><input id="chat-width-full" type="checkbox"><span>顶满可用宽度</span></label><span class="hint">忽略上面的行宽限制，正文与输入框铺满对话区的可用空间。仅保存在本机浏览器。</span></div>
-            <div class="config-field"><label class="switch"><input id="process-collapsed" type="checkbox" checked><span>完成后默认折叠过程</span></label><span class="hint">控制已完成回合的工具与思考过程；运行中始终显示当前动作。仅保存在本机浏览器。</span></div>
-            <div class="config-detail-header"><h3 class="config-detail-title">会话默认</h3></div>
-            <div class="config-field"><label class="switch"><input id="default-auto-compaction" type="checkbox" checked><span>自动压缩上下文</span></label><span class="hint">新会话的工作进程按此设置启动；修改时对当前会话立即生效。仅保存在本机浏览器。</span></div>
-            <div class="config-field"><label class="switch"><input id="default-auto-retry" type="checkbox"><span>自动重试</span></label><span class="hint">模型请求失败时自动重试；工作进程启动时按此设置。仅保存在本机浏览器。</span></div>
-            <fieldset class="queue-modes"><legend>运行中发送方式</legend><label class="switch"><input type="radio" name="default-queue-kind" value="steering" checked><span>插入指令（本轮结束后立即执行）</span></label><label class="switch"><input type="radio" name="default-queue-kind" value="followUp"><span>完成后追加（排到队列末尾）</span></label></fieldset>
           </section>
           {{/* 扩展 */}}
           <section class="config-detail-stack" data-settings-panel="extensions" hidden>

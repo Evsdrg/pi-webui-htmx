@@ -122,6 +122,21 @@ for(const [name,relative] of Object.entries(manifest.templates??{})){
  if(!/text-align\s*:\s*right/.test(body('.stats-token .stats-rows dd')))fail('Token 组的值需在窄列内右对齐');
  if(!/grid-template-columns\s*:\s*auto minmax\(0,\s*1fr\) auto/.test(body('.stats-info .stats-rows')))fail('会话事实组需要标签/值/复制按钮三列');
 }
+// 片段里的表格 class 必须有样式。踩过的坑：.packages 被模板引用，却从未在任何
+// CSS 里定义——表格以浏览器默认外观渲染（表头居中、长值硬折行、状态标签挤成
+// 两行），看起来零乱。表格是必须成形的组件，这类「引用了却没定义」要拦住。
+{
+ const css=['tokens.css','app.css','code.css','models.css'].map((f)=>readFileSync(resolve(root,'src/styles',f),'utf8')).join('\n').replace(/\/\*[\s\S]*?\*\//g,'');
+ const dir=resolve(root,'src/templates');
+ const bodies=[];
+ const walk=(d)=>{for(const e of readdirSync(d,{withFileTypes:true})){const p=resolve(d,e.name);e.isDirectory()?walk(p):e.name.endsWith('.html')&&bodies.push(readFileSync(p,'utf8'));}};
+ walk(dir);
+ const names=new Set();
+ for(const body of bodies)for(const mm of body.matchAll(/<table[^>]*\bclass="([^"]*)"/g))for(const tok of mm[1].split(/\s+/).filter(Boolean))if(!/[{}]/.test(tok))names.add(tok);
+ const missing=[...names].filter((name)=>!new RegExp(`(?<![\\w-])\\.${name.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')}(?![\\w-])`).test(css));
+ if(missing.length)fail(`这些表格 class 被模板引用却没有任何样式：${missing.join('、')}`);
+ else ok('片段表格 class 都有样式定义');
+}
 // 主题契约（2026-10 模型）：主题 id 由 layout.ts 解析后写 data-theme，
 // 因此这里核对三件事，全部是「静默分叉」型故障的入口：
 //   1. layout.ts 声明的主题 id 与 tokens.css 的块一一对应（light 用 :root）；

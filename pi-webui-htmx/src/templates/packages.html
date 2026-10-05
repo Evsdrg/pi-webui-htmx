@@ -6,10 +6,10 @@
   <tbody>
   {{range .Packages}}
   <tr>
-    <td>{{.Name}}</td>
-    <td class="muted">{{.Source}}</td>
-    <td>{{.Version}}</td>
-    <td>{{.Latest}}</td>
+    <td class="nowrap">{{.Name}}</td>
+    <td class="wrap-key">{{.Source}}</td>
+    <td class="nowrap">{{.Version}}</td>
+    <td class="nowrap">{{.Latest}}</td>
     <td>
       {{if .Disabled}}<span class="tag">已禁用</span>{{end}}
       {{if .HasUpdate}}<span class="tag tag-warn">有新版本</span>{{end}}
@@ -22,13 +22,13 @@
   </tbody>
 </table>
 {{if .Extensions}}
-<h4 class="config-detail-title">自动加载的扩展文件</h4>
+<h4 class="packages-subtitle">自动加载的扩展文件</h4>
 <p class="config-note">来自 Pi 的 <code>extensions/</code> 目录，随工作进程自动加载，不在 <code>settings.json</code> 的 <code>packages</code> 里。</p>
 <table class="packages" data-extensions-loaded>
   <thead><tr><th>名称</th><th>路径</th></tr></thead>
   <tbody>
   {{range .Extensions}}
-  <tr><td>{{.Name}}</td><td class="muted"><code>{{.Path}}</code></td></tr>
+  <tr><td class="nowrap">{{.Name}}</td><td class="wrap-key">{{.Path}}</td></tr>
   {{end}}
   </tbody>
 </table>
