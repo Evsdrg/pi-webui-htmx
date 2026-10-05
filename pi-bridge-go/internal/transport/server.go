@@ -22,7 +22,6 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -669,15 +668,6 @@ func (s *Server) serveUIFragments(w http.ResponseWriter, r *http.Request, encodi
 			return s.ui.RenderStats(meta, stats, statsErr)
 		})
 
-	case path == "/ui/extensions/status":
-		html, rerr := s.ui.RenderExtensionStatus(s.extensionStatuses(r.URL.Query().Get("sessionId")))
-		if rerr != nil {
-			writeError(w, encoding, 500, rerr)
-			return true
-		}
-		writeHTML(w, encoding, html)
-		return true
-
 	case strings.HasPrefix(path, "/ui/extensions/dialog/"):
 		// GET：渲染某个待回复对话。对话不存在时返回 204，
 		// 让 htmx 移除占位而不是显示错误。
@@ -755,30 +745,6 @@ func (s *Server) pendingDialogsFor(sessionID string) ([]json.RawMessage, error) 
 		return nil, nil // 没有活 worker 就没有待回复对话，不是错误。
 	}
 	return w.PendingDialogPayloads(), nil
-}
-
-// extensionStatuses 取指定会话当前 worker 的扩展状态行。
-// 快照挂在 worker 上（B36），所以这里必须点名会话：worker 不存在时为空，
-// 而不是回退到某份全局状态。
-func (s *Server) extensionStatuses(sessionID string) []presentation.StatusItem {
-	if sessionID == "" {
-		return []presentation.StatusItem{}
-	}
-	worker, err := s.manager.Get(sessionID)
-	if err != nil {
-		return []presentation.StatusItem{}
-	}
-	_, statuses := worker.ExtensionStatuses()
-	keys := make([]string, 0, len(statuses))
-	for k := range statuses {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	out := make([]presentation.StatusItem, 0, len(keys))
-	for _, k := range keys {
-		out = append(out, presentation.StatusItem{Key: k, Text: statuses[k]})
-	}
-	return out
 }
 
 // dialogID 从 extension_ui_request 载荷里取 id。

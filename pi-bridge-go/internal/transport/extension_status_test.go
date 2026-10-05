@@ -79,25 +79,4 @@ func Test扩展状态快照不依赖订阅且按会话取(t *testing.T) {
 	if other := read(); other["ok"] != false {
 		t.Fatalf("未启动的会话应被拒绝: %v", other)
 	}
-
-	if s.ui == nil {
-		t.Skip("跳过：未找到 UI 包（设 PI_WEBUI_DIR，或把 pi-webui-htmx 检出放在仓库根）")
-	}
-	get := func(query string) string {
-		rec := httptest.NewRecorder()
-		req := httptest.NewRequest(http.MethodGet, "/ui/extensions/status?sessionId="+query, nil)
-		req.Host = s.host
-		req.Header.Set("Authorization", "Bearer "+testToken)
-		s.ServeHTTP(rec, req)
-		if rec.Code != http.StatusOK {
-			t.Fatalf("片段应 200: %d %s", rec.Code, rec.Body.String())
-		}
-		return rec.Body.String()
-	}
-	if get("sess-other") != "" && strings.Contains(get("sess-other"), "mc: 3") {
-		t.Fatalf("别的会话不应看到该状态: %s", get("sess-other"))
-	}
-	if page := get(sessionID); !strings.Contains(page, "mc: 3") {
-		t.Fatalf("本会话应看到状态行: %s", page)
-	}
 }

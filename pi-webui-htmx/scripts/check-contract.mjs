@@ -122,20 +122,50 @@ for(const [name,relative] of Object.entries(manifest.templates??{})){
  if(!/text-align\s*:\s*right/.test(body('.stats-token .stats-rows dd')))fail('Token 组的值需在窄列内右对齐');
  if(!/grid-template-columns\s*:\s*auto minmax\(0,\s*1fr\) auto/.test(body('.stats-info .stats-rows')))fail('会话事实组需要标签/值/复制按钮三列');
 }
-// 片段里的表格 class 必须有样式。踩过的坑：.packages 被模板引用，却从未在任何
-// CSS 里定义——表格以浏览器默认外观渲染（表头居中、长值硬折行、状态标签挤成
-// 两行），看起来零乱。表格是必须成形的组件，这类「引用了却没定义」要拦住。
+// 片段里的组件 class 必须有样式。踩过的坑：`.packages` 表格、`.tag-warn`/
+// `.tag-err`/`.tag-add`/`.tag-del` 状态标签、`.mono` 输入框都被模板引用，却
+// 从未在任何 CSS 里定义——表格以默认外观渲染，标签丢失配色，输入框不等宽。
+// 这类「引用了却没定义」在功能测试里不报错，只有肉眼才发现，必须拦住。
+//
+// 规则：模板 class="…" 里的每个类，要么在样式表（含模板内联 <style>）里有定义，
+// 要么显式登记在 UNSTYLED_HOOKS 里（纯 JS 选择器钩子，或纯粹的分组容器，视觉上
+// 无需样式）。这样新增一个「以为有样式、其实没有」的类会立刻失败。
 {
- const css=['tokens.css','app.css','code.css','models.css'].map((f)=>readFileSync(resolve(root,'src/styles',f),'utf8')).join('\n').replace(/\/\*[\s\S]*?\*\//g,'');
+ const styleFiles=['tokens.css','app.css','code.css','models.css'];
+ const styled=new Set();
+ for(const f of styleFiles){
+  const css=readFileSync(resolve(root,'src/styles',f),'utf8').replace(/\/\*[\s\S]*?\*\//g,'');
+  for(const mm of css.matchAll(/\.([a-zA-Z_][\w-]*)/g))styled.add(mm[1]);
+ }
  const dir=resolve(root,'src/templates');
  const bodies=[];
  const walk=(d)=>{for(const e of readdirSync(d,{withFileTypes:true})){const p=resolve(d,e.name);e.isDirectory()?walk(p):e.name.endsWith('.html')&&bodies.push(readFileSync(p,'utf8'));}};
  walk(dir);
- const names=new Set();
- for(const body of bodies)for(const mm of body.matchAll(/<table[^>]*\bclass="([^"]*)"/g))for(const tok of mm[1].split(/\s+/).filter(Boolean))if(!/[{}]/.test(tok))names.add(tok);
- const missing=[...names].filter((name)=>!new RegExp(`(?<![\\w-])\\.${name.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')}(?![\\w-])`).test(css));
- if(missing.length)fail(`这些表格 class 被模板引用却没有任何样式：${missing.join('、')}`);
- else ok('片段表格 class 都有样式定义');
+ // 模板内联 <style> 里的定义同样算已定义（export.html 用它自带给导出文档的样式）。
+ for(const body of bodies)for(const sm of body.matchAll(/<style[^>]*>([\s\S]*?)<\/style>/g))
+  for(const cm of sm[1].matchAll(/\.([a-zA-Z_][\w-]*)/g))styled.add(cm[1]);
+ // 有意不做样式的类：纯 JS 选择器钩子，或只是给子元素分组的容器。
+ // 每个都要写清理由，避免这里变成「随手加一行就绕过守卫」的后门。
+ const UNSTYLED_HOOKS=new Set([
+  'diff',            // 变更片段的根容器，仅作定位
+  'diff-line',       // 行级 JS/结构钩子；配色由 diff-add/diff-del 给
+  'diff-no-new','diff-no-old', // 新旧行号列，样式走共享的 .diff-no
+  'file-node',       // 目录行容器，样式在 .file-item/.file-children
+  'stats-copy',      // 会话详情里放复制按钮的网格列
+ ]);
+ const missing=new Set();
+ for(const body of bodies)for(const mm of body.matchAll(/class="([^"]*)"/g)){
+  const cleaned=mm[1].replace(/\{\{[^}]*\}\}/g,' ');
+  for(const tok of cleaned.split(/\s+/).filter(Boolean)){
+   if(/[{}]/.test(tok))continue;
+   // 去掉模板插值后可能留下的残缺标记（如 `diff-{{.Kind}}` → `diff-`）。
+   if(tok.endsWith('-')||tok==='is')continue;
+   if(styled.has(tok)||UNSTYLED_HOOKS.has(tok))continue;
+   missing.add(tok);
+  }
+ }
+ if(missing.size)fail(`这些 class 被模板引用，却既无样式定义、也未登记为钩子：${[...missing].sort().join('、')}（如确为纯钩子，请加入 check-contract.mjs 的 UNSTYLED_HOOKS 并写明理由）`);
+ else ok('模板组件类都有样式定义或已登记为钩子');
 }
 // 主题契约（2026-10 模型）：主题 id 由 layout.ts 解析后写 data-theme，
 // 因此这里核对三件事，全部是「静默分叉」型故障的入口：

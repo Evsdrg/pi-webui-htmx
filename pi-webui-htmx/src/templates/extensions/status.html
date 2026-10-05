@@ -1,9 +1,0 @@
-{{/* 通用扩展状态行：多插件按 key 去重，同 key 后者覆盖。
-     渲染顺序按 key 排序，保证多次渲染间稳定不跳动。 */}}
-{{if .Statuses}}
-<div class="ext-status" role="status">
-  {{range .Statuses}}
-  <span class="ext-status-item" data-key="{{.Key}}">{{.Text}}</span>
-  {{end}}
-</div>
-{{end}}

@@ -39,7 +39,7 @@
 | POST `/ui/models/discover`、`/ui/models/test` | management + presentation | 复用出站策略与全局操作槽；64KiB表单，认证/Host/Origin先于路由，拒绝打码/命令型凭据 |
 | GET `/ui/dirs`、`/ui/mc`、`/ui/mc/content` | workspace / magiccontext + presentation | 目录沙箱；记忆只读、正文65536字符上限、分页动作服务端生成 |
 | GET `/ui/files`、`/ui/file-image`、`/ui/diff` | workspace + presentation | 文件沙箱、实际 reader 上限、Git runner |
-| GET `/ui/extensions/status`、`/ui/extensions/dialog/{id}`、`/ui/extensions/dialogs` | worker 展示投影 | worker/session/epoch 隔离，不因渲染消耗 pending |
+| GET `/ui/extensions/dialog/{id}`、`/ui/extensions/dialogs` | worker 展示投影 | worker/session/epoch 隔离，不因渲染消耗 pending |
 | POST `/ui/sessions/{id}/ui-response` | 对话服务 | 与 WS session.ui_response 相同 claim/验证/写入确认 |
 | GET `/ui/exports/{name}` | 受控产物下载 | 授权、名称限制、完成/取消/TTL 清理 |
 | GET `/api/v1/ws` | 本地接入 | 升级鉴权、每连接/全局准入与唯一 writer |

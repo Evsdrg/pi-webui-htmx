@@ -363,6 +363,8 @@ input,select,textarea { background:var(--bg); border:1px solid var(--border); bo
 .markdown a { text-decoration:underline; }
 .diff-file { border:1px solid var(--border); border-radius:7px; overflow:auto; margin:12px 0; }
 .diff-file-head { padding:8px; font-size:12px; background:var(--bg-panel); }
+/* 文件路径是机器标识，用等宽并允许断行，避免长路径撑破头部。 */
+.diff-path { font-family:var(--font-mono); overflow-wrap:anywhere; }
 .diff-table { font:11px/1.7 ui-monospace,monospace; width:100%; border-collapse:collapse; }
 .diff-no { width:24px; padding:0 4px; text-align:right; color:var(--text-muted); user-select:none; }
 .diff-text { white-space:pre-wrap; overflow-wrap:anywhere; padding:0 8px; }
@@ -593,6 +595,9 @@ input,select,textarea { background:var(--bg); border:1px solid var(--border); bo
 .packages td .tag + .tag { margin-left:4px; }
 .tag-warn { border-color:color-mix(in srgb,var(--accent) 40%,transparent); color:var(--accent); }
 .tag-err { border-color:var(--danger-border); background:var(--danger-bg); color:var(--danger); }
+/* diff 头部的新增/删除标签：与 tag-warn/tag-err 同族，绿/红区分增删。 */
+.tag-add { border-color:var(--success-border); color:var(--success); }
+.tag-del { border-color:var(--danger-border); color:var(--danger); }
 .packages-subtitle { margin:18px 0 0; font-size:13px; font-weight:600; }
 
 /* 模型树缩进、思考等级映射编辑器、provider/model 字段表单与模型发现

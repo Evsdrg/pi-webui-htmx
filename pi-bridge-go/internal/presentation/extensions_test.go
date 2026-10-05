@@ -3,8 +3,6 @@ package presentation
 import (
 	"strings"
 	"testing"
-
-	"pi-bridge-go/internal/testutil"
 )
 
 func TestDialogFromPi四类方法(t *testing.T) {
@@ -85,31 +83,5 @@ func TestDialogFromPi限制选项数量(t *testing.T) {
 func TestDialogFromPi拒绝坏JSON(t *testing.T) {
 	if _, err := DialogFromPi("", "s", []byte("坏")); err == nil {
 		t.Fatal("坏 JSON 应报错")
-	}
-}
-
-func TestRenderExtensionStatus去重排序(t *testing.T) {
-	dir := testutil.RequireWebUIDir(t)
-	r, err := LoadFromDir(dir)
-	if err != nil {
-		t.Fatalf("UI 包在 %s 但加载失败（若缺 dist/assets，先执行 pnpm build）：%v", dir, err)
-	}
-	html, err := r.RenderExtensionStatus([]StatusItem{
-		{Key: "zz", Text: "second"},
-		{Key: "aa", Text: "first"},
-		{Key: "zz", Text: "override"},
-		{Key: "", Text: "ignored"},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if strings.Index(html, "aa") > strings.Index(html, "zz") {
-		t.Fatalf("应按 key 排序: %s", html)
-	}
-	if !strings.Contains(html, "override") || strings.Contains(html, "second") {
-		t.Fatalf("同 key 应后者覆盖: %s", html)
-	}
-	if strings.Contains(html, "ignored") {
-		t.Fatal("空 key 应被忽略")
 	}
 }

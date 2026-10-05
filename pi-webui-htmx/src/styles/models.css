@@ -12,6 +12,9 @@
 .models-indent { padding-left:26px; }
 .models-tag { font-size:9px; font-weight:600; color:var(--accent); border:1px solid var(--border); border-radius:3px; padding:0 3px; }
 .is-grow { flex:1; }
+/* 标识类输入（provider 名、Base URL、密钥、model id、上下文窗口等）用等宽，
+   便于逐字符核对。此前这个类被引用却无定义，输入框一直不是等宽。 */
+.mono { font-family:var(--font-mono); }
 .models-add { color:var(--text-dim); }
 .models-add:not(:disabled):hover,.models-add:not(:disabled):focus-visible { color:var(--accent); }
 

@@ -38,7 +38,6 @@ func Test片段端点状态类失败仍是200(t *testing.T) {
 		{"目录选择器越界路径", "/ui/dirs?path=/etc"},
 		{"记忆面板未安装", "/ui/mc?kind=memories"},
 		{"搜索空词", "/ui/search"},
-		{"扩展状态", "/ui/extensions/status"},
 	}
 	for _, f := range fragments {
 		t.Run(f.name, func(t *testing.T) {
