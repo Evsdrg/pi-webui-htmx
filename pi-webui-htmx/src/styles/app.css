@@ -380,7 +380,7 @@ input,select,textarea { background:var(--bg); border:1px solid var(--border); bo
 .switch { display:flex; align-items:center; gap:8px; font-size:12px; color:var(--text-muted); cursor:pointer; }
 .switch input { accent-color:var(--accent); width:15px; height:15px; cursor:pointer; }
 .switch span { color:var(--text); }
-.queue-modes { border:1px solid var(--border); border-radius:0; padding:10px 12px; margin:12px 0 0; display:grid; gap:8px; }
+.queue-modes { border:1px solid var(--border); border-radius:5px; padding:10px 12px; margin:12px 0 0; display:grid; gap:8px; }
 .queue-modes legend { font-size:11px; color:var(--text-muted); padding:0 4px; }
 .queue-hint { font-size:11px; color:var(--text-muted); padding:0 2px; }
 .session-action-grid { display:flex; flex-wrap:wrap; gap:6px; margin:10px 0; }
@@ -534,18 +534,18 @@ input,select,textarea { background:var(--bg); border:1px solid var(--border); bo
    模型配置与「设置与扩展」共用这一套：左栏 240px 分类列表 + 右栏详情。
    尺寸逐项对齐 Pi Web——侧栏 240px、条目高 30px、组标签 10px 大写、
    弹层 min(900px, 100vw-16px) × 78vh。 */
-.config-panel { flex-direction:column; width:min(900px,calc(100vw - 16px)); height:min(78vh,calc(100dvh - 16px)); max-height:calc(100dvh - 16px); padding:0; overflow:hidden; border-radius:0; }
+.config-panel { flex-direction:column; width:min(900px,calc(100vw - 16px)); height:min(78vh,calc(100dvh - 16px)); max-height:calc(100dvh - 16px); padding:0; overflow:hidden; }
 .config-panel-head { display:flex; align-items:center; gap:10px; flex:0 0 auto; height:50px; padding:0 14px 0 18px; border-bottom:1px solid var(--border); }
 .config-panel-head h2 { margin:0; font-size:15px; font-weight:600; }
 .config-panel-sub { min-width:0; overflow:hidden; color:var(--text-dim); font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:11px; text-overflow:ellipsis; white-space:nowrap; }
-.config-close { display:grid; place-items:center; width:30px; height:30px; margin-left:auto; padding:0; border:0; border-radius:0; background:transparent; color:var(--text-muted); cursor:pointer; font-size:20px; line-height:1; }
+.config-close { display:grid; place-items:center; width:30px; height:30px; margin-left:auto; padding:0; border:0; border-radius:5px; background:transparent; color:var(--text-muted); cursor:pointer; font-size:20px; line-height:1; }
 .config-close:hover,.config-close:focus-visible { background:var(--bg-hover); color:var(--text); }
 .config-split { display:flex; flex:1 1 auto; flex-direction:row; min-height:0; overflow:hidden; }
 .config-side { display:flex; flex-direction:column; flex:0 0 auto; width:240px; min-height:0; border-right:1px solid var(--border); background:var(--bg-panel); }
 .config-side-list { flex:1 1 auto; min-height:0; padding:8px 6px; overflow-y:auto; }
 .config-side-group { margin-bottom:6px; }
 .config-side-group-label { padding:4px 8px 3px; color:var(--text-dim); font-size:10px; font-weight:600; text-transform:uppercase; }
-.config-side-item { display:flex; align-items:center; gap:8px; width:100%; min-width:0; height:30px; padding:0 8px; border:0; border-radius:0; background:transparent; color:var(--text); cursor:pointer; font-size:12px; text-align:left; transition:background-color .12s ease,color .12s ease; }
+.config-side-item { display:flex; align-items:center; gap:8px; width:100%; min-width:0; height:30px; padding:0 8px; border:0; border-radius:5px; background:transparent; color:var(--text); cursor:pointer; font-size:12px; text-align:left; transition:background-color .12s ease,color .12s ease; }
 .config-side-item:not(:disabled):hover,.config-side-item:not(:disabled):focus-visible { background:var(--bg-hover); }
 .config-side-item[aria-current="page"] { background:var(--bg-selected); font-weight:600; }
 .config-side-item:disabled { cursor:default; opacity:.5; }
@@ -565,10 +565,10 @@ input,select,textarea { background:var(--bg); border:1px solid var(--border); bo
 .config-empty { padding:24px 0; color:var(--text-dim); font-size:12px; }
 /* 表单控件统一成配置面板的形态：Pi Web 用 TextInput/SecretTextInput/ConfigSwitch，
    我们复用现有的 input/select，只把尺寸与间距对齐。 */
-.config-detail :where(input[type=text],input[type=url],input[type=password],select,textarea) { width:100%; min-width:0; padding:6px 9px; border:1px solid var(--border); border-radius:0; background:var(--bg); color:var(--text); font-size:12px; }
+.config-detail :where(input[type=text],input[type=url],input[type=password],select,textarea) { width:100%; min-width:0; padding:6px 9px; border:1px solid var(--border); border-radius:5px; background:var(--bg); color:var(--text); font-size:12px; }
 .config-detail input:focus-visible,.config-detail select:focus-visible,.config-detail textarea:focus-visible { outline:2px solid var(--accent); outline-offset:-1px; }
 .config-detail textarea { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:11px; line-height:1.6; resize:vertical; }
-.config-btn { display:inline-flex; align-items:center; gap:5px; height:28px; padding:0 11px; border:1px solid var(--border); border-radius:0; background:var(--bg-hover); color:var(--text-muted); cursor:pointer; font-size:11px; transition:background .12s,color .12s; }
+.config-btn { display:inline-flex; align-items:center; gap:5px; height:28px; padding:0 11px; border:1px solid var(--border); border-radius:5px; background:var(--bg-hover); color:var(--text-muted); cursor:pointer; font-size:11px; transition:background .12s,color .12s; }
 .config-btn:hover:not(:disabled) { background:var(--bg-selected); color:var(--text); }
 .config-btn:disabled { cursor:default; opacity:.5; }
 .config-btn.is-primary { border-color:transparent; background:var(--accent); color:var(--accent-contrast); }
@@ -585,10 +585,19 @@ input,select,textarea { background:var(--bg); border:1px solid var(--border); bo
 /* 设置面板限宽：980px 面板减掉 240px 侧栏后文字行过长、控件拉伸，
    限一个舒适阅读宽度；模型对话框不受影响（它需要宽度放两列表单）。 */
 [data-settings-panel] .config-detail-stack { gap:0; max-width:680px; }
-/* 面板内一律直角，不用胶囊式的分段控件与小标签（分段控件全站共用，
-   这里只覆盖配置面板内的实例，侧栏的视图切换保持原样）。 */
-.config-detail .view-btn,.config-detail .view-btn:first-child,.config-detail .view-btn:last-child { border-radius:0; }
-.config-detail .tag { border-radius:0; }
+/* 只在「设置与扩展」对话框里改直角，模型配置对话框保持原样。
+   分段控件（view-btn）全站共用，侧栏的「时间线/按工作区」保持圆角；
+   面板内的实例、标签、按钮、输入框与关闭按钮在这里统一改直角。 */
+#settings-dialog { border-radius:0; }
+#settings-dialog .config-close { border-radius:0; }
+#settings-dialog .config-side-item { border-radius:0; }
+#settings-dialog .config-detail :where(input[type=text],input[type=url],input[type=password],select,textarea),
+#settings-dialog .config-btn,
+#settings-dialog .queue-modes { border-radius:0; }
+#settings-dialog .config-detail .view-btn,
+#settings-dialog .config-detail .view-btn:first-child,
+#settings-dialog .config-detail .view-btn:last-child,
+#settings-dialog .config-detail .tag { border-radius:0; }
 
 /* ==== 已安装资源清单（设置 → 扩展）====
    表格此前没有任何样式，表头被浏览器默认居中、长路径硬折行，看起来零乱。 */
