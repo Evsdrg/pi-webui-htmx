@@ -46,7 +46,6 @@ a { color:var(--accent); }
 .sidebar-files-path { flex:1 1 auto; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--text-dim); font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:10px; }
 .sidebar-files-body { flex:1 1 auto; min-height:0; display:flex; flex-direction:column; overflow:hidden; }
 #file-list { flex:1 1 auto; min-height:0; overflow-y:auto; }
-#file-preview { flex:1 1 auto; min-height:0; overflow:auto; }
 .sidebar-splitter { flex:0 0 auto; height:6px; margin:2px 0; cursor:row-resize; background:transparent; touch-action:none; }
 .sidebar-splitter:hover,.sidebar-splitter:focus-visible { background:var(--accent); }
 /* 文件项：比右面板版更紧凑，侧栏宽度只有 260px 上下。 */
@@ -328,7 +327,12 @@ input,select,textarea { background:var(--bg); border:1px solid var(--border); bo
 .workspace-panel section[role=tabpanel][aria-labelledby="tab-terminal"] { display:flex; flex-direction:column; }
 #terminal-mount { flex:1; min-height:240px; background:var(--terminal-bg); border-radius:6px; padding:5px; }
 #file-path { flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-#file-preview pre,#git-diff pre { margin:0; font:11px/1.7 ui-monospace,monospace; overflow:auto; tab-size:2; }
+/* 预览区的 <pre>：代码默认横向滚动（长行不折断）。选择器必须是 #panel-preview
+   ——旧写法 #file-preview 早已不存在，规则一直是死的（预览因此连 overflow 都没有）。 */
+#panel-preview pre { margin:0; font:11px/1.7 ui-monospace,monospace; overflow:auto; tab-size:2; }
+/* 散文类文件（Markdown / 纯文本）改为软换行：右栏很窄，长行横向滚动没法读。
+   代码与数据仍保持横向滚动，避免折断缩进与结构化内容。 */
+#panel-preview pre.wrap { white-space:pre-wrap; overflow-wrap:anywhere; }
 #file-name { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .terminal-actions { display:flex; gap:8px; margin-bottom:12px; }
 .notice { padding:7px 20px; font-size:12px; border-bottom:1px solid var(--border); color:var(--text-muted); background:var(--bg-subtle); }

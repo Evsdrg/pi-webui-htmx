@@ -297,11 +297,15 @@ export class Workspace {
     // 含 ANSI 转义时挂 .ansi，入口会用 ansi_up 着色；
     // 不挂就会被当成普通代码，转义序列原样显示。
     if (text.includes('\u001b[')) code.classList.add('ansi');
-    this.showPreview(code);
+    // 散文（Markdown / 纯文本 / 扩展名未收录的文本）软换行；代码与数据横向滚动。
+    // languageFor 对 .md 返回 "markdown"、对未收录扩展名返回空串。
+    const lang = languageFor(path);
+    const wrap = lang === '' || lang === 'markdown';
+    this.showPreview(code, undefined, wrap);
     // ANSI 与语法高亮互斥：ansi_up 要按转义序列重新生成带色 span，
     // hljs 又会把同一段文本当代码再包一层。ANSI 文件只走前者。
     if (code.classList.contains('ansi')) { void this.mountAnsi(); return; }
-    mountHighlight(el('panel-preview'), languageFor(path));
+    mountHighlight(el('panel-preview'), lang);
   }
 
   private note(message: string): HTMLElement {
@@ -340,13 +344,15 @@ export class Workspace {
   //
   // imageUrl 是这张图对应的 blob URL：换预览时旧的要释放，否则每看一张图
   // 都留一份解码后的位图。释放放在旧节点已从 DOM 摘除之后。
-  private showPreview(node: HTMLElement, imageUrl?: string): void {
+  // wrap 为真时给 <pre> 挂 .wrap，用软换行替代横向滚动（散文类文件）。
+  private showPreview(node: HTMLElement, imageUrl?: string, wrap = false): void {
     const box = el('panel-preview');
     const existing = box.querySelector('pre');
     if (existing) existing.remove();
     if (this.imageUrl && this.imageUrl !== imageUrl) this.releaseImageUrl();
     this.imageUrl = imageUrl;
     const pre = document.createElement('pre');
+    if (wrap) pre.className = 'wrap';
     pre.append(node);
     box.append(pre);
     box.hidden = false;
