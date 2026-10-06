@@ -137,6 +137,13 @@ func (x *Index) build(ctx context.Context) error {
 	defer x.mu.Unlock()
 	if len(x.entries) > 0 && time.Since(x.builtAt) <= x.ttl {
 		if got, err := x.computeFingerprint(ctx); err == nil && got == x.fingerprint {
+			// 指纹一致说明内容没变，可以沿用它。但必须把轻量戳与时间一并
+			// 刷新：否则 fresh() 因顶层戳是旧值而持续失配，每次列表都会
+			// 再进一次 build、白算一遍整树指纹——正是 B29 要消除的开销。
+			x.builtAt = time.Now()
+			if files, mod, serr := x.topLevelStamp(); serr == nil {
+				x.stampFiles, x.stampMod = files, mod
+			}
 			return nil
 		}
 	}

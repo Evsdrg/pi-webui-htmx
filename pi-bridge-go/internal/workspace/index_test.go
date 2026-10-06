@@ -80,6 +80,18 @@ func TestIndex带目录前缀只在对应目录找(t *testing.T) {
 	}
 }
 
+// 前缀目录不存在时应返回空结果，而不是把它当成「无前缀」退化成全库扫描。
+func TestIndex不存在的前缀目录返回空(t *testing.T) {
+	f, root := newIndexTest(t)
+	got, err := f.Index(context.Background(), root, "不存在目录/main")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Matches) != 0 {
+		t.Fatalf("不存在的前缀目录不应命中任何文件: %v", got.Matches)
+	}
+}
+
 func TestIndex拒绝越界与非目录(t *testing.T) {
 	f, root := newIndexTest(t)
 	outside := filepath.Join(filepath.Dir(root), "elsewhere")

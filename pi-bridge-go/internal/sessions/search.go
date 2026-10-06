@@ -325,6 +325,12 @@ func snippet(text, needle string, max int) string {
 		return text
 	}
 	lower := strings.ToLower(text)
+	// ToLower 对个别码位会改变字节长度（如 İ → i̇），此时 len(lower) 上的
+	// 字节下标无法映射回原文，用它切 text 会错位甚至切在 rune 中间。
+	// 退回「取开头」，别冒切断 UTF-8 的风险。
+	if len(lower) != len(text) {
+		return string(runes[:max]) + "…"
+	}
 	idx := strings.Index(lower, needle)
 	if idx < 0 || idx > len(text) {
 		return string(runes[:max]) + "…"

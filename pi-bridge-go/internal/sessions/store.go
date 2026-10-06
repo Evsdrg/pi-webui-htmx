@@ -610,10 +610,11 @@ func (s *Store) historyPage(ctx context.Context, f *os.File, id, leaf, before st
 			// 走到窗口边界：页还没取够，交给全扫重来。
 			return Page{}, false, nil
 		}
-		if total+node.size > s.limits.PageBytes {
-			if len(selected) == 0 {
-				return Page{}, false, protocol.E("limit_exceeded", "单条历史记录超过单页体积上限")
-			}
+		// PageBytes 是**一页**的体积预算，不是单条记录的硬上限（单条由
+		// LineBytes 把关）。一页至少要装下一条：某条记录本身超过页面预算时，
+		// 仍把它作为这一页返回。否则这条记录若在中间，翻到它就报错、
+		// 更旧的历史被永久挡住；若它是叶子，整个会话在网页里根本打不开。
+		if total+node.size > s.limits.PageBytes && len(selected) > 0 {
 			break
 		}
 		total += node.size

@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
 func writeLazySession(t *testing.T, rows []map[string]any) (*Store, string) {
@@ -90,6 +91,29 @@ func TestThinking读取与校验(t *testing.T) {
 	}
 	if _, err := s.Thinking(context.Background(), id, "a1", -1); err == nil {
 		t.Error("负 blockIndex 应报错")
+	}
+}
+
+// 思考块超过上限时按 rune 边界截断，不能切出非法 UTF-8。
+func TestThinking超限按rune边界截断(t *testing.T) {
+	// 每个「中」是 3 字节；造出略超 MaxThinkingChars 的内容，且让边界落在
+	// 某个多字节字符中间（MaxThinkingChars 通常不是 3 的倍数）。
+	repeat := MaxThinkingChars/3 + 5
+	s, id := writeLazySession(t, []map[string]any{
+		{"type": "message", "id": "u1", "parentId": nil, "message": map[string]any{"role": "user", "content": "问"}},
+		{"type": "message", "id": "a1", "parentId": "u1", "message": map[string]any{"role": "assistant", "content": []map[string]any{
+			{"type": "thinking", "thinking": strings.Repeat("中", repeat)},
+		}}},
+	})
+	got, err := s.Thinking(context.Background(), id, "a1", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !utf8.ValidString(got) {
+		t.Fatalf("思考截断产生了非法 UTF-8，结尾字节 %x", got[len(got)-3:])
+	}
+	if len(got) > MaxThinkingChars {
+		t.Fatalf("截断后仍超过上限: %d", len(got))
 	}
 }
 

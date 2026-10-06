@@ -50,6 +50,13 @@ func (s *Store) scanFile(ctx context.Context, f *os.File, size int64, id, cwd st
 			offset += int64(n)
 			continue
 		}
+		// 头部之后的空行按「没有记录」跳过，与尾扫一致（tail.go 的反向切行
+		// 对空行直接 continue）。两条扫描路径必须等价，否则同一份文件会出现
+		// 「首页能开、翻页报错」这类难查的不一致。
+		if len(b) == 0 {
+			offset += int64(n)
+			continue
+		}
 		ref, err := parseRecordRef(b)
 		if err != nil {
 			return nil, "", err

@@ -266,7 +266,9 @@ func rankMatches(byParent map[string][]string, query string) []IndexMatch {
 	// query 含 '/' 时只在对应目录里找，否则扫全部桶。
 	var dir string
 	var scoped []string
+	scopedQuery := false
 	if i := strings.LastIndexByte(needle, '/'); i >= 0 {
+		scopedQuery = true
 		dir = needle[:i]
 		if dir == "" {
 			dir = "."
@@ -320,7 +322,9 @@ func rankMatches(byParent map[string][]string, query string) []IndexMatch {
 		score -= strings.Count(p, "/")
 		best = append(best, scored{path: p, score: score})
 	}
-	if scoped != nil {
+	if scopedQuery {
+		// 目录不存在时 scoped 为 nil：应返回空结果，而不是把「不存在的前缀」
+		// 退化成全库扫描（那会给出与用户输入无关的命中）。
 		base := needle[strings.LastIndexByte(needle, '/')+1:]
 		for _, p := range scoped {
 			if strings.Contains(pathBase(p), base) || strings.Contains(strings.ToLower(pathBase(p)), base) {

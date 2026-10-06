@@ -32,6 +32,34 @@ func Test正文损坏的完整记录被拒绝(t *testing.T) {
 	}
 }
 
+// 头部之后的空行必须被两条扫描路径一致地跳过：全扫报错、尾扫跳过会让
+// 同一份文件出现「首页能开、翻页报错」这类不一致。
+func Test空行两条扫描路径一致(t *testing.T) {
+	cwd := t.TempDir()
+	store, dir := newStore(t, cwd)
+	id := writeSession(t, dir, "blank", cwd,
+		entry("u1", ""),
+		"", // 空行
+		entry("u2", "u1"),
+	)
+	path := filepath.Join(dir, id+".jsonl")
+	st, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	if _, _, err := store.scanFile(context.Background(), f, st.Size(), id, cwd); err != nil {
+		t.Fatalf("全扫应跳过空行: %v", err)
+	}
+	if _, _, _, err := store.scanTail(context.Background(), f, st.Size(), id, cwd, 64); err != nil {
+		t.Fatalf("尾扫应跳过空行: %v", err)
+	}
+}
+
 // Test合法记录不被配平校验误伤 覆盖反向边界：
 // 含转义引号、嵌套对象与数组的正常记录必须照常通过。
 func Test合法记录不被配平校验误伤(t *testing.T) {

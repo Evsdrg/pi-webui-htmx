@@ -51,8 +51,9 @@ func (s *Store) scanTail(ctx context.Context, f *os.File, size int64, id, cwd st
 		return nil, "", false, protocol.E("invalid_history", "缺少完整的会话头部")
 	}
 	// 有效末尾：忽略末尾那段没有换行的半行。Pi 正在追加时这是正常状态，
-	// 与正向扫描遇到 jsonl.ErrIncomplete 就停的行为一致。
-	end, err := effectiveEnd(f, size)
+	// 与正向扫描遇到 jsonl.ErrIncomplete 就停的行为一致。回看上界取单行上限
+	// 加一点余量：末端那条不完整记录的合法长度不会超过单行上限。
+	end, err := effectiveEnd(f, size, int64(s.limits.LineBytes)+(1<<20))
 	if err != nil {
 		return nil, "", false, err
 	}
@@ -86,6 +87,11 @@ func (s *Store) scanTail(ctx context.Context, f *os.File, size int64, id, cwd st
 			break
 		}
 		window *= 4
+		// 翻倍后不能越过硬上限：定序是「先读、后判」，若不夹紧就会按
+		// 4→16→64 分配一次 64 MiB 的缓冲，超出常量声明的 32 MiB。
+		if window > tailMaxBytes {
+			window = tailMaxBytes
+		}
 	}
 	complete := lo == 0
 
@@ -169,17 +175,30 @@ func (s *Store) scanTail(ctx context.Context, f *os.File, size int64, id, cwd st
 		return nil, "", false, protocol.E("invalid_history", "缺少完整的会话头部")
 	}
 
-	// 按文件顺序正向重算 lastModelID。反向扫描本身算不出它：这个值是
-	// 「沿父链（更旧方向）最近的 model_change」，而反向遍历遇到的是相反方向。
-	// items 是逆序的，所以从末位（最旧）走向首位（最新）。
-	modelID := ""
+	// 按文件顺序正向重算 lastModelID。items 是逆序的，所以从末位（最旧）
+	// 走向首位（最新）；分支记录（parentId 指向更早的条目）因此总能先见到父亲。
+	//
+	// 这个值是**沿父链**（更旧方向）最近的 model_change，必须从父亲继承，
+	// 不能取「文件里上一个出现的 model_change」——分支会话里，兄弟分支的
+	// 切换会排在本条记录之前却不在它的祖先链上，那会显示成错误的模型
+	// （scanFile 走的正是父链语义，两边必须一致）。
 	for i := len(items) - 1; i >= 0; i-- {
 		it := items[i]
-		if it.isModelChange {
-			modelID = it.id
-		}
 		n := nodes[it.id]
-		n.lastModelID = modelID
+		switch {
+		case it.isModelChange:
+			n.lastModelID = it.id
+		case n.parent != "":
+			// 父亲在窗口内（正向扫描时父亲先出现）；窗口起点那条的父亲在
+			// 窗口外，此时退化为空，与既有「窗口最旧一段可能为空」一致。
+			if p, ok := nodes[n.parent]; ok {
+				n.lastModelID = p.lastModelID
+			} else {
+				n.lastModelID = ""
+			}
+		default:
+			n.lastModelID = ""
+		}
 		nodes[it.id] = n
 	}
 	return nodes, items[0].id, complete, nil
@@ -205,23 +224,40 @@ func countCompleteLines(buf []byte, atFileStart bool) int {
 
 // effectiveEnd 返回忽略末尾半行之后的有效长度。
 //
-// 只在最后一块内找最后一个换行；找不到说明末端有超长行，那属于损坏文件，
-// 由调用方按「缺少完整会话头部」处理。
-func effectiveEnd(f *os.File, size int64) (int64, error) {
-	const probe = 256 << 10
-	n := int64(probe)
-	if n > size {
-		n = size
+// 从末尾向前找最后一个换行，窗口不够就逐步扩大。末尾那条不完整的记录
+// 可能很长（Pi 正在追加一条大记录，或崩溃/截断留下大半行），其长度上限
+// 就是单行上限（LineBytes，默认 8 MiB），因此不能用固定小窗口找不到换行
+// 就判成「损坏」——那会把「忽略末尾半行」的契约反着做，且报出与实际
+// 不符的「缺少完整会话头部」。maxBack 是允许回看的上界：超过它仍未找到
+// 换行，说明末端半行比单行上限还长，确属损坏。
+func effectiveEnd(f *os.File, size int64, maxBack int64) (int64, error) {
+	if size <= 0 {
+		return 0, nil
 	}
-	start := size - n
-	buf := make([]byte, n)
-	if _, err := f.ReadAt(buf, start); err != nil {
-		return 0, err
+	if maxBack <= 0 {
+		maxBack = 256 << 10
 	}
-	for i := int(n) - 1; i >= 0; i-- {
-		if buf[i] == '\n' {
-			return start + int64(i) + 1, nil
+	window := int64(256 << 10)
+	if window > maxBack {
+		window = maxBack
+	}
+	for {
+		if window > size {
+			window = size
 		}
+		start := size - window
+		buf := make([]byte, window)
+		if _, err := f.ReadAt(buf, start); err != nil {
+			return 0, err
+		}
+		for i := int(window) - 1; i >= 0; i-- {
+			if buf[i] == '\n' {
+				return start + int64(i) + 1, nil
+			}
+		}
+		if window >= size || window >= maxBack {
+			return 0, nil
+		}
+		window *= 2
 	}
-	return 0, nil
 }

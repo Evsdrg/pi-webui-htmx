@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"strings"
+	"unicode/utf8"
 
 	"pi-bridge-go/internal/jsonl"
 	"pi-bridge-go/internal/protocol"
@@ -68,9 +69,22 @@ func (s *Store) Thinking(ctx context.Context, id, entryID string, blockIndex int
 		return "", protocol.E("not_found", "该内容块不是思考块")
 	}
 	if len(block.Thinking) > MaxThinkingChars {
-		return block.Thinking[:MaxThinkingChars], nil
+		// 按字节截断会切断多字节 UTF-8（中文/emoji 思考很常见），
+		// 产生非法字节序列。回退到 rune 边界，与导出的 clipText 一致。
+		return clipToRuneBoundary(block.Thinking, MaxThinkingChars), nil
 	}
 	return block.Thinking, nil
+}
+
+// clipToRuneBoundary 截到不超过 max 字节的最后一个完整 UTF-8 边界。
+func clipToRuneBoundary(s string, max int) string {
+	if len(s) <= max {
+		return s
+	}
+	for max > 0 && !utf8.RuneStart(s[max]) {
+		max--
+	}
+	return s[:max]
 }
 
 // ToolImage 取某条 toolResult 消息里指定下标的图片，返回字节与 MIME。

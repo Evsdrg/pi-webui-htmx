@@ -1,6 +1,7 @@
 package sessions
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -123,6 +124,69 @@ func TestHistory模型按所选分支且翻页不回退(t *testing.T) {
 		if page.HistoricalModel == nil || page.HistoricalModel.Provider != tc.provider || page.HistoricalModel.ID != tc.model {
 			t.Fatalf("leaf=%q before=%q: 历史模型错误: %+v", tc.leaf, tc.before, page.HistoricalModel)
 		}
+	}
+}
+
+// PageBytes 是一页的体积预算，不是单条记录的硬上限。叶子记录本身
+// 超过页面预算时（含截图的工具结果常见 2–7 MiB），会话仍必须能打开。
+func TestHistory单条超页预算仍可打开(t *testing.T) {
+	cwd := t.TempDir()
+	store, dir := newStore(t, cwd)
+	huge := strings.Repeat("x", 3<<20) // 3 MiB，大于 PageBytes(2MiB)、小于 LineBytes(8MiB)
+	id := writeSession(t, dir, "bigentry", cwd,
+		entry("u1", ""),
+		`{"type":"message","id":"a1","parentId":"u1","message":{"role":"assistant","content":"`+huge+`"}}`,
+	)
+	ctx := context.Background()
+	page, err := store.History(ctx, id, "", "", 10)
+	if err != nil {
+		t.Fatalf("叶子超过页预算不应让会话不可读: %v", err)
+	}
+	// 这一页至少含那条大记录（一页至少一条），并且仍能往回取到更旧的 u1。
+	if len(page.Entries) == 0 || !bytes.Contains(page.Entries[len(page.Entries)-1], []byte(`"a1"`)) {
+		t.Fatalf("大记录页应含叶子 a1: %d 条", len(page.Entries))
+	}
+	page, err = store.History(ctx, id, "", page.OldestEntryID, 10)
+	if err != nil {
+		t.Fatalf("大记录之后更旧的历史仍不可达: %v", err)
+	}
+	if len(page.Entries) == 0 {
+		t.Fatal("更旧的历史应可达")
+	}
+}
+
+// 中间某条超过页面预算时，以它为页首的那一页仍应返回，否则更旧的历史
+// 被永久挡住（翻页报错后就再也翻不过去）。
+func TestHistory大条目不挡住更旧历史(t *testing.T) {
+	cwd := t.TempDir()
+	store, dir := newStore(t, cwd)
+	huge := strings.Repeat("y", 3<<20)
+	id := writeSession(t, dir, "midbig", cwd,
+		entry("u1", ""),
+		entry("u2", "u1"),
+		`{"type":"message","id":"a2","parentId":"u2","message":{"role":"assistant","content":"`+huge+`"}}`,
+		entry("u3", "a2"),
+	)
+	ctx := context.Background()
+	// 第一页只够放最新的 u3；再往前翻，页首会落在那条大记录上。
+	page, err := store.History(ctx, id, "", "", 1)
+	if err != nil {
+		t.Fatalf("首页失败: %v", err)
+	}
+	page, err = store.History(ctx, id, "", page.OldestEntryID, 1)
+	if err != nil {
+		t.Fatalf("翻到大条目处不应报错: %v", err)
+	}
+	if len(page.Entries) == 0 {
+		t.Fatal("大条目页应至少返回一条")
+	}
+	// 继续往前应能取到更旧的历史。
+	page, err = store.History(ctx, id, "", page.OldestEntryID, 1)
+	if err != nil {
+		t.Fatalf("大条目之后更旧的历史仍不可达: %v", err)
+	}
+	if len(page.Entries) == 0 {
+		t.Fatal("更旧的历史应可达")
 	}
 }
 

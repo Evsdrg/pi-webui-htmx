@@ -249,3 +249,75 @@ func Test窗口内model_change之后逐条一致(t *testing.T) {
 		t.Fatal("窗口内应至少有一个节点带上 model_change 起点，否则这条用例什么都没验到")
 	}
 }
+
+// 分支会话里，lastModelID 必须沿父链取，不能取「文件里上一个 model_change」。
+//
+// 结构：u1 -> m1(模型 p1) -> c1，随后兄弟分支上写 m2(模型 p2)，叶子 x 挂在 c1 上。
+// x 的祖先链是 x->c1->m1->u1，最近的 model_change 是 m1；而文件顺序上 m2 排在 x
+// 之前。尾扫若按文件顺序取，会给 x 算成 p2，与全扫不一致，首页就显示错模型。
+func Test分支会话尾扫lastModelID沿父链(t *testing.T) {
+	ctx := context.Background()
+	cwd := t.TempDir()
+	store, dir := newStore(t, cwd)
+	id := writeSession(t, dir, "branch", cwd,
+		entry("u1", ""),
+		`{"type":"model_change","id":"m1","parentId":"u1","provider":"p1","modelId":"p1-model"}`,
+		entry("c1", "m1"),
+		`{"type":"model_change","id":"m2","parentId":"c1","provider":"p2","modelId":"p2-model"}`,
+		entry("x", "c1"),
+	)
+	path := filepath.Join(dir, id+".jsonl")
+	st, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+
+	full, _, err := store.scanFile(ctx, f, st.Size(), id, cwd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	partial, partialLast, _, err := store.scanTail(ctx, f, st.Size(), id, cwd, 64)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if partialLast != "x" {
+		t.Fatalf("叶子应为 x，实际 %q", partialLast)
+	}
+	if got, want := partial["x"].lastModelID, full["x"].lastModelID; got != want || got != "m1" {
+		t.Fatalf("尾扫 x.lastModelID=%q，全扫=%q，应沿父链取 m1", got, want)
+	}
+	// 首页的历史模型也必须来自祖先链上的 m1。
+	page, err := store.History(ctx, id, "", "", 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if page.HistoricalModel == nil || page.HistoricalModel.Provider != "p1" {
+		t.Fatalf("首页历史模型应来自祖先链 m1(p1): %+v", page.HistoricalModel)
+	}
+}
+
+// 末尾是一条超过 256 KiB、尚未写完的记录（无换行）时，应忽略这段半行、
+// 返回前面可读的历史；不能反过来报「缺少完整的会话头部」。
+func Test超长尾部半行被忽略(t *testing.T) {
+	cwd := t.TempDir()
+	store, dir := newStore(t, cwd)
+	header := `{"type":"session","version":3,"id":"tailbig","timestamp":"2026-01-01T00:00:00.000Z","cwd":"` + cwd + `"}`
+	small := entry("u1", "")
+	partial := `{"type":"message","id":"a1","parentId":"u1","message":{"role":"assistant","content":"` + strings.Repeat("y", 300<<10)
+	path := filepath.Join(dir, "tailbig.jsonl")
+	if err := os.WriteFile(path, []byte(header+"\n"+small+"\n"+partial), 0644); err != nil {
+		t.Fatal(err)
+	}
+	page, err := store.History(context.Background(), "tailbig", "", "", 10)
+	if err != nil {
+		t.Fatalf("尾部超长半行不应让历史不可读: %v", err)
+	}
+	if len(page.Entries) == 0 {
+		t.Fatal("应返回半行之前可读的历史")
+	}
+}
