@@ -277,6 +277,39 @@ func TestStop后进程真正退出(t *testing.T) {
 	t.Fatal("停止后进程表仍残留该会话")
 }
 
+// StopSession 与工作进程的启动/退出清理会在同一张进程表上并发：
+// 它必须持锁读取，否则 -race 会报数据竞争、非竞态构建下会直接
+// fatal error（concurrent map read and map write）。
+func TestStopSession与进程表更新并发安全(t *testing.T) {
+	m, cwd := newTestManager(t)
+	ctx := context.Background()
+	stop := make(chan struct{})
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			_, _ = m.StopSession("fake-session", false)
+		}
+	}()
+	for i := 0; i < 20; i++ {
+		w, err := m.Start(ctx, "", cwd)
+		if err != nil {
+			t.Fatalf("启动失败: %v", err)
+		}
+		if err := w.Stop(true); err != nil {
+			t.Fatalf("停止失败: %v", err)
+		}
+	}
+	close(stop)
+	wg.Wait()
+}
+
 func TestPi异常退出后状态可见(t *testing.T) {
 	m, cwd := newTestManager(t, func(c *Config) { c.Env = []string{"FAKE_PI_SCRIPT=crash"} })
 	w, err := m.Start(context.Background(), "", cwd)

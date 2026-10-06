@@ -245,6 +245,36 @@ func Test并发身份变更不产生双键(t *testing.T) {
 	}
 }
 
+// 已停止的 worker 不能再被重绑定：退出清理按当前映射删除，之后插入的新键
+// 再无删除者，会永久留在进程表、占住配额，Start 还会把它当运行中复用。
+func Test重绑定拒绝已停止工作进程(t *testing.T) {
+	m, cwd := newTestManager(t)
+	w, err := m.Start(context.Background(), "", cwd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	old := w.Info().SessionID
+	if err := w.Stop(true); err != nil {
+		t.Fatalf("停止失败: %v", err)
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		if _, err := m.Get(old); err != nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("worker 未被清理")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if err := m.Rebind(w, "resurrected"); err == nil {
+		t.Fatal("已停止的 worker 不应能被重绑定")
+	}
+	if _, err := m.Get("resurrected"); err == nil {
+		t.Fatal("死 worker 不应被重新登记进进程表")
+	}
+}
+
 func TestReplay环在身份变更后失效(t *testing.T) {
 	m, cwd := newTestManager(t)
 	ctx := context.Background()

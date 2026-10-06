@@ -362,6 +362,10 @@ func (w *Worker) Navigate(ctx context.Context, targetID string) (NavigateReply, 
 	if !validEntryID(targetID) {
 		return NavigateReply{}, protocol.E("invalid_params", "条目 ID 无效")
 	}
+	// 结果文件按 worker 共享、忙检查是 check-then-act：整段串行化，
+	// 否则两个并发跳转会互相覆盖结果文件，叶子归属可能串线。
+	w.navMu.Lock()
+	defer w.navMu.Unlock()
 	w.mu.Lock()
 	if w.closing {
 		w.mu.Unlock()

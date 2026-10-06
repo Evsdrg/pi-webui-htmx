@@ -183,7 +183,11 @@ func (m *Manager) CheckRebindTarget(w *Worker, targetID string) error {
 // force 透传给 Worker.Stop：忙中的 worker 只有 force 才会被强制停止。
 // 删除会话文件前必须调用：否则 Pi 仍持有写入路径，文件被删后它还会继续写。
 func (m *Manager) StopSession(id string, force bool) (bool, error) {
+	// 进程表的所有访问都必须在 m.mu 下：并发 Start/退出清理会改写它，
+	// 这里无锁读取会触发 fatal error（concurrent map read and map write）。
+	m.mu.Lock()
 	w := m.workers[id]
+	m.mu.Unlock()
 	if w == nil {
 		return false, nil
 	}
@@ -459,6 +463,9 @@ type Worker struct {
 	// navResultPath 是本 worker 的会话跳转结果文件（扩展写入、桥读取）。
 	// 为空表示 session.navigate 未启用。
 	navResultPath string
+	// navMu 串行化同一 worker 的 session.navigate：结果文件按 worker 共享，
+	// 忙检查又是 check-then-act，两个并发跳转会互相覆盖结果文件、串线归属。
+	navMu sync.Mutex
 	// captureResultDir 是本 worker 的运行时捕获结果目录（按会话 id 命名文件）。
 	// 为空表示未启用捕获，/ui/system 与 /ui/tools 回退到 export_html 基线。
 	captureResultDir string
@@ -1076,6 +1083,12 @@ func launch(cfg Config, cwd, file, preset string) (*Worker, error) {
 		w.uncertain = false
 		w.waitingInput = false
 		w.closing = true
+		// 退出协程自己置 closing 时也要给一个预算：否则并发进来的 Stop 看到
+		// closing=true 却拿着零值 stopDeadline，会立刻谎报 timeout——而进程
+		// 其实马上就要退出（done 就在下面几行关闭）。
+		if w.stopDeadline.IsZero() {
+			w.stopDeadline = time.Now().Add(cfg.StopGrace)
+		}
 		w.status = statusStopped
 		if exitErr != nil {
 			w.status = statusFailed

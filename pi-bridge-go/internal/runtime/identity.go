@@ -25,9 +25,16 @@ func (m *Manager) Rebind(w *Worker, newID string) error {
 	if m.closed {
 		return protocol.E("worker_exited", "桥正在关闭")
 	}
+	// 已停止（或正在停止）的 worker 不能再登记：退出清理按「当前映射」删除，
+	// 若在那之后又插入新键就再也没有删除者——死 worker 会永久留在进程表、
+	// 占住配额，Start 还会把它当运行中复用。
 	w.mu.Lock()
+	stopped := w.closing
 	old := w.id
 	w.mu.Unlock()
+	if stopped {
+		return protocol.E("worker_exited", "工作进程已停止，无法重绑定会话身份")
+	}
 	if old == newID {
 		return nil
 	}
@@ -50,6 +57,10 @@ func (m *Manager) Rebind(w *Worker, newID string) error {
 
 // NewSession 让 Pi 开启一个新会话，并把进程表重绑定到新 ID。
 func (w *Worker) NewSession(ctx context.Context, parentSession string) (string, error) {
+	// 身份变更与 session.start 串行：CheckRebindTarget 只查询、不预留，
+	// 与并发的 Start 交错时会出现「Pi 已切到目标、Rebind 才发现冲突」的双写。
+	w.owner.startMu.Lock()
+	defer w.owner.startMu.Unlock()
 	fields := map[string]any{}
 	if parentSession != "" {
 		fields["parentSession"] = parentSession
@@ -85,6 +96,9 @@ func (w *Worker) NewSession(ctx context.Context, parentSession string) (string, 
 // SwitchSession 切换到受管目录内的另一个会话文件。
 // 外部路径一律拒绝，避免借切换读取或改写未授权文件。
 func (w *Worker) SwitchSession(ctx context.Context, sessionPath string) (string, error) {
+	// 与 Start/其它身份命令串行，关闭 CheckRebindTarget 的 TOCTOU 窗口。
+	w.owner.startMu.Lock()
+	defer w.owner.startMu.Unlock()
 	if sessionPath == "" {
 		return "", protocol.E("invalid_params", "sessionPath 不能为空")
 	}
@@ -140,6 +154,8 @@ func (w *Worker) SwitchSession(ctx context.Context, sessionPath string) (string,
 
 // Fork 从指定条目分叉出新会话，并重绑定进程表。
 func (w *Worker) Fork(ctx context.Context, entryID string) (ForkReply, error) {
+	w.owner.startMu.Lock()
+	defer w.owner.startMu.Unlock()
 	if entryID == "" {
 		return ForkReply{}, protocol.E("invalid_params", "entryId 不能为空")
 	}
@@ -172,6 +188,8 @@ func (w *Worker) Fork(ctx context.Context, entryID string) (ForkReply, error) {
 
 // Clone 复制当前分支到新会话，并重绑定进程表。
 func (w *Worker) Clone(ctx context.Context) (string, error) {
+	w.owner.startMu.Lock()
+	defer w.owner.startMu.Unlock()
 	raw, err := w.call(ctx, "clone", nil, true)
 	if err != nil {
 		return "", err
