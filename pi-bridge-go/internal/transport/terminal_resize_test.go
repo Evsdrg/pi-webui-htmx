@@ -28,8 +28,7 @@ func Test终端尺寸上限对resize同样生效(t *testing.T) {
 		"method": "terminal.open", "params": map[string]any{"cwd": cwd, "cols": 80, "rows": 24},
 	})
 	bridge.HandleFrame(context.Background(), wrapFrom(t, "tab-1", open))
-	waitFrames(t, &mu, &sent, 1)
-	reply := decodeFrame(t, lastFrame(t, &mu, &sent))
+	reply := waitReply(t, &mu, &sent, "open")
 	data, _ := reply["data"].(map[string]any)
 	id, _ := data["terminalId"].(string)
 	if id == "" {
@@ -42,8 +41,7 @@ func Test终端尺寸上限对resize同样生效(t *testing.T) {
 		"params": map[string]any{"terminalId": id, "cols": 65535, "rows": 65535},
 	})
 	bridge.HandleFrame(context.Background(), wrapFrom(t, "tab-1", resize))
-	waitFrames(t, &mu, &sent, 2)
-	if reply := decodeFrame(t, lastFrame(t, &mu, &sent)); reply["ok"] != true {
+	if reply := waitReply(t, &mu, &sent, "resize"); reply["ok"] != true {
 		t.Fatalf("超限 resize 应当夹紧而不是报错: %v", reply)
 	}
 
@@ -51,8 +49,7 @@ func Test终端尺寸上限对resize同样生效(t *testing.T) {
 		"version": 1, "kind": "command", "requestId": "list", "method": "terminal.list",
 	})
 	bridge.HandleFrame(context.Background(), wrapFrom(t, "tab-1", list))
-	waitFrames(t, &mu, &sent, 3)
-	reply = decodeFrame(t, lastFrame(t, &mu, &sent))
+	reply = waitReply(t, &mu, &sent, "list")
 	data, _ = reply["data"].(map[string]any)
 	terms, _ := data["terminals"].([]any)
 	if len(terms) != 1 {

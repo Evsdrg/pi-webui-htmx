@@ -208,6 +208,41 @@ func waitFrames(t *testing.T, mu *sync.Mutex, sent *[][]byte, want int) {
 	t.Fatalf("等待 %d 帧超时", want)
 }
 
+// waitReply 等到指定 requestId 的响应帧并返回其业务载荷。
+//
+// 为什么要按 requestId 而不是「等第 N 帧再取最后一帧」：命令的响应与它触发的
+// 推送（例如终端 PTY 输出）都进同一条出站队列，入队先后由各自 goroutine 决定。
+// 只数帧数会在负载下拿到推送帧，把正常的响应判成缺失（终端用例曾因此在 CI 上以
+// 「终端未打开」约 1 秒即失败）。
+func waitReply(t *testing.T, mu *sync.Mutex, sent *[][]byte, requestID string) map[string]any {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		mu.Lock()
+		list := append([][]byte(nil), *sent...)
+		mu.Unlock()
+		for _, raw := range list {
+			var envelope struct {
+				To   string          `json:"to"`
+				Data json.RawMessage `json:"data"`
+			}
+			if json.Unmarshal(raw, &envelope) != nil || envelope.To != "tab-1" || len(envelope.Data) == 0 {
+				continue
+			}
+			var m map[string]any
+			if json.Unmarshal(envelope.Data, &m) != nil {
+				continue
+			}
+			if m["kind"] == "response" && m["requestId"] == requestID {
+				return m
+			}
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatalf("等待 requestId=%s 的响应超时", requestID)
+	return nil
+}
+
 // Test隧道发送失败后不再复用死连接 覆盖 B57：
 // pump 因发送失败退出后，连接以前仍留在映射里，同一 clientId 重连
 // 会复用它，响应入队却无人发送。
