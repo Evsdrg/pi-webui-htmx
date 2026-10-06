@@ -486,6 +486,12 @@ func (r *Renderer) RenderSessionsPage(list sessions.Listing, selected string, of
 	cwds := make([]CwdOption, 0, len(list.Cwds))
 	labels := cwdLabels(list.Cwds)
 	for i, c := range list.Cwds {
+		// 空 cwd 组在时间线下拉里没有独立可选项：它的值与「全部工作区」
+		// 同为 ""，两个 value 相同会让选中语义撞车；这些会话在「全部」下
+		// 仍会出现，分组视图也照常归到「未标注工作区」。
+		if strings.TrimSpace(c.Cwd) == "" {
+			continue
+		}
 		cwds = append(cwds, CwdOption{Cwd: c.Cwd, Count: c.Count, Selected: c.Cwd == list.Cwd, Label: labels[i]})
 	}
 	return r.execute("sessions.html", SessionsData{
@@ -510,7 +516,7 @@ func (r *Renderer) RenderSessionsGrouped(list sessions.Listing, selected string)
 	for i, g := range list.Groups {
 		label := labels[i]
 		if label == "" {
-			label = "未标注工作区"
+			label = unlabeledWorkspace
 		}
 		groups = append(groups, SessionGroup{Cwd: g.Cwd, Label: label, Total: g.Total, Items: sessionRows(g.Items)})
 	}
@@ -542,19 +548,34 @@ func cwdLabels(cwds []sessions.CwdCount) []string {
 	if len(cwds) == 0 {
 		return out
 	}
-	segs := make([][]string, len(cwds))
+	// 空 cwd（极老或手改过的会话）不参与公共前缀计算：它的路径段是 [""]，
+	// 会把公共前缀压成 0，让其它工作区的短名退化成去前导斜杠的长路径。
+	// 它自己给一个与分组视图一致的固定标签。
+	indexed := make([]int, 0, len(cwds))
 	for i, c := range cwds {
-		segs[i] = strings.Split(strings.Trim(c.Cwd, "/"), "/")
+		if strings.TrimSpace(c.Cwd) == "" {
+			out[i] = unlabeledWorkspace
+			continue
+		}
+		indexed = append(indexed, i)
 	}
+	if len(indexed) == 0 {
+		return out
+	}
+	segs := make(map[int][]string, len(indexed))
+	for _, i := range indexed {
+		segs[i] = strings.Split(strings.Trim(cwds[i].Cwd, "/"), "/")
+	}
+	first := segs[indexed[0]]
 	common := 0
 	for {
-		if common >= len(segs[0]) {
+		if common >= len(first) {
 			break
 		}
-		s := segs[0][common]
+		s := first[common]
 		same := true
-		for _, sg := range segs[1:] {
-			if common >= len(sg) || sg[common] != s {
+		for _, i := range indexed[1:] {
+			if sg := segs[i]; common >= len(sg) || sg[common] != s {
 				same = false
 				break
 			}
@@ -564,16 +585,20 @@ func cwdLabels(cwds []sessions.CwdCount) []string {
 		}
 		common++
 	}
-	for i := range segs {
+	for _, i := range indexed {
+		sg := segs[i]
 		// 至少保留末段：全部剪掉会得到空标签。
-		if common >= len(segs[i]) {
-			out[i] = segs[i][len(segs[i])-1]
+		if common >= len(sg) {
+			out[i] = sg[len(sg)-1]
 			continue
 		}
-		out[i] = strings.Join(segs[i][common:], "/")
+		out[i] = strings.Join(sg[common:], "/")
 	}
 	return out
 }
+
+// unlabeledWorkspace 是空 cwd 会话在两个视图里共用的标签。
+const unlabeledWorkspace = "未标注工作区"
 
 func sessionTitle(h sessions.Header) string {
 	if h.Name != "" {

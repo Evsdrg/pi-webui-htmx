@@ -153,10 +153,10 @@ func Test读取会话聚焦(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "sess.jsonl")
 	lines := []string{
-		`{"type":"message","message":{"role":"user"}}`,
-		`{"type":"custom","customType":"pi-goal-focus","data":{"version":1,"focusedGoalId":"g1","reason":"user"}}`,
-		`{"type":"custom","customType":"pi-goal-draft","data":{"version":1}}`,
-		`{"type":"custom","customType":"pi-goal-focus","data":{"version":1,"focusedGoalId":"g2","reason":"user"}}`,
+		`{"type":"message","id":"m1","parentId":null,"message":{"role":"user"}}`,
+		`{"type":"custom","id":"c1","parentId":"m1","customType":"pi-goal-focus","data":{"version":1,"focusedGoalId":"g1","reason":"user"}}`,
+		`{"type":"custom","id":"c2","parentId":"c1","customType":"pi-goal-draft","data":{"version":1}}`,
+		`{"type":"custom","id":"c3","parentId":"c2","customType":"pi-goal-focus","data":{"version":1,"focusedGoalId":"g2","reason":"user"}}`,
 	}
 	if err := os.WriteFile(path, []byte(strings.Join(lines, "\n")+"\n"), 0o600); err != nil {
 		t.Fatal(err)
@@ -168,6 +168,28 @@ func Test读取会话聚焦(t *testing.T) {
 	// 不存在的文件不报错、返回未找到。
 	if _, _, ok := ReadFocus(filepath.Join(dir, "没有这个文件")); ok {
 		t.Fatal("文件不存在应返回未找到")
+	}
+}
+
+// 聚焦必须跟随当前分支：被放弃的分支上后写的聚焦不能算数。
+// 形状取自真实 Pi 的 JSONL（custom 条目也带 id/parentId）。
+func Test聚焦跟随当前分支(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "branch.jsonl")
+	// m1 → c1(聚焦 g1) 组成旧链；随后在 c1 上另开分支写 c2(聚焦 g2)，
+	// 再回到旧链写叶子 m2（父仍是 c1）。当前分支的聚焦应是 g1。
+	lines := []string{
+		`{"type":"message","id":"m1","parentId":null,"message":{"role":"user"}}`,
+		`{"type":"custom","id":"c1","parentId":"m1","customType":"pi-goal-focus","data":{"version":1,"focusedGoalId":"g1"}}`,
+		`{"type":"custom","id":"c2","parentId":"c1","customType":"pi-goal-focus","data":{"version":1,"focusedGoalId":"g2"}}`,
+		`{"type":"message","id":"m2","parentId":"c1","message":{"role":"assistant"}}`,
+	}
+	if err := os.WriteFile(path, []byte(strings.Join(lines, "\n")+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	id, _, found := ReadFocus(path)
+	if !found || id != "g1" {
+		t.Fatalf("应取当前分支（叶子 m2 的祖先链）上的聚焦 g1，实际 found=%v id=%q", found, id)
 	}
 }
 

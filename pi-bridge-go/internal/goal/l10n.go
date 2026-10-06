@@ -179,6 +179,14 @@ func LocalizeUIRequest(raw []byte) ([]byte, bool) {
 	return out, true
 }
 
+// OptionLabel 把对话框选项的**显示文本**译成中文，返回 (显示文本, 是否命中)。
+//
+// 只用于展示：调用方必须保留原始选项字符串作为回传值。插件的 select 靠
+// 比较回传值判定用户选了什么，若把回传值也换成译文，选择会静默失效。
+func OptionLabel(option string) (string, bool) {
+	return translateText(option)
+}
+
 // translateText 应用精确表与模板规则。返回 (译文, 是否命中)。
 func translateText(text string) (string, bool) {
 	if v, ok := exactTranslations[text]; ok {
@@ -367,6 +375,48 @@ var templateRules = []templateRule{
 	rule(`^No open goals\. Use /goal to draft one.*$`, func(m []string) string {
 		return "没有进行中的目标。用 /goal 起草一个，或用 /goal-direct <objective> 立即启动。"
 	}),
+	// 目标选择框的一行：`{marker} {id} | {statusLabel} | {mode} | {title} {path}`
+	// （见 pi-goal-x goal-pool.ts 的 goalSelectorLabel）。marker/id/标题原样保留，
+	// 只把状态与模式译成中文；这串只作显示，回传值仍是原文。
+	rule(`^(.*?) \| ((?:sisyphus )?(?:running|paused \(agent\)|paused|blocked|budget limited|complete|active)) \| (sisyphus|goal) \| (.*)$`, func(m []string) string {
+		return m[1] + " | " + goalStatusCN(m[2]) + " | " + goalModeCN(m[3]) + " | " + m[4]
+	}),
+}
+
+// goalStatusCN 译目标状态标签（statusLabel 的取值形态）。
+func goalStatusCN(label string) string {
+	prefix := ""
+	rest := label
+	if strings.HasPrefix(label, "sisyphus ") {
+		prefix = "有序步骤 "
+		rest = strings.TrimPrefix(label, "sisyphus ")
+	}
+	switch rest {
+	case "running":
+		return prefix + "进行中"
+	case "paused (agent)":
+		return prefix + "已暂停（代理）"
+	case "paused":
+		return prefix + "已暂停"
+	case "blocked":
+		return prefix + "受阻"
+	case "budget limited":
+		return prefix + "预算受限"
+	case "complete":
+		return prefix + "已完成"
+	case "active":
+		return prefix + "进行中"
+	default:
+		return label
+	}
+}
+
+// goalModeCN 译目标模式。
+func goalModeCN(mode string) string {
+	if mode == "sisyphus" {
+		return "有序步骤"
+	}
+	return "普通目标"
 }
 
 func auditStateCN(v string) string {

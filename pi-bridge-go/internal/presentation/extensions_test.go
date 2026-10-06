@@ -29,6 +29,28 @@ func TestDialogFromPi四类方法(t *testing.T) {
 	}
 }
 
+// 目标选择框的选项应给出中文显示文本，但 value 必须保留原文——
+// 插件靠比较回传值判定用户选了什么，回传值换成译文会让选择静默失效。
+func TestDialogFromPi目标选项汉化但保留回传值(t *testing.T) {
+	body := `{"id":"d1","method":"select","title":"Focus open goal","options":["* g1 | running | goal | 整理仓库","Cancel"]}`
+	d, err := DialogFromPi("", "s", []byte(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(d.OptionLabels) != len(d.Options) {
+		t.Fatalf("显示文本应与选项一一对应: %+v", d)
+	}
+	if d.Options[0] != "* g1 | running | goal | 整理仓库" {
+		t.Fatalf("回传值必须保留原文: %q", d.Options[0])
+	}
+	if !strings.Contains(d.OptionLabels[0], "进行中") || !strings.Contains(d.OptionLabels[0], "普通目标") {
+		t.Fatalf("选项显示文本应汉化: %q", d.OptionLabels[0])
+	}
+	if d.Options[1] != "Cancel" || d.OptionLabels[1] != "取消" {
+		t.Fatalf("固定文案选项：value 保留 Cancel、显示为取消，实际 %q / %q", d.Options[1], d.OptionLabels[1])
+	}
+}
+
 func TestDialogFromPi拒绝无需回执的方法(t *testing.T) {
 	// fire-and-forget 的方法不该出现在待回复列表里，
 	// 否则前端会渲染一个永远等不到回执的对话框。

@@ -291,7 +291,9 @@ func buildModelsListURL(baseURL, api string) (string, error) {
 	return parsed.String(), nil
 }
 
-// hasVersionSuffix 判断路径是否已带 /v1、/v1beta 之类的版本段。
+// hasVersionSuffix 判断路径是否已带 /v1、/v1beta、/v1alpha 之类的版本段。
+// 只认「v + 纯数字」会把 Google 规范的 /v1beta 判成非版本段，导致
+// baseURL 已含 /v1beta 时被再拼一次，变成 .../v1beta/v1beta/models。
 func hasVersionSuffix(path string) bool {
 	segments := strings.Split(strings.Trim(path, "/"), "/")
 	if len(segments) == 0 {
@@ -301,8 +303,16 @@ func hasVersionSuffix(path string) bool {
 	if len(last) < 2 || last[0] != 'v' {
 		return false
 	}
-	for _, c := range last[1:] {
-		if c < '0' || c > '9' {
+	rest := last[1:]
+	i := 0
+	for i < len(rest) && rest[i] >= '0' && rest[i] <= '9' {
+		i++
+	}
+	if i == 0 {
+		return false
+	}
+	for ; i < len(rest); i++ {
+		if c := rest[i]; c < 'a' || c > 'z' {
 			return false
 		}
 	}

@@ -72,6 +72,15 @@ func isExtensionFile(name string) bool {
 	return strings.HasSuffix(name, ".ts") || strings.HasSuffix(name, ".js")
 }
 
+// withinDir 判断 path 是否落在 dir 之内（含相等）。
+func withinDir(dir, path string) bool {
+	rel, err := filepath.Rel(dir, path)
+	if err != nil || filepath.IsAbs(rel) {
+		return false
+	}
+	return rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
+}
+
 // resolveExtensionEntry 判断一个子目录是否构成 Pi 可加载的扩展入口。
 // 第二个返回值是入口文件路径（仅用于判定成功，不对外暴露）。
 func resolveExtensionEntry(dir string) (string, bool) {
@@ -85,6 +94,11 @@ func resolveExtensionEntry(dir string) (string, bool) {
 		if json.Unmarshal(raw, &manifest) == nil {
 			for _, rel := range manifest.Pi.Extensions {
 				path := filepath.Join(dir, filepath.FromSlash(rel))
+				// 清单里的相对路径不得逃出扩展目录：`../../..` 会让桥对
+				// 任意路径做存在性探测。
+				if !withinDir(dir, path) {
+					continue
+				}
 				if st, err := os.Stat(path); err == nil && st.Mode().IsRegular() {
 					return path, true
 				}

@@ -74,17 +74,25 @@ func NewStore() *Store {
 }
 
 // resolve 惰性解析库路径与 sqlite3 可执行文件。
+//
+// 只有在**找到库**时才锁定解析结果：插件首次运行前库还不存在，若这时就
+// 锁定，装好/首次运行之后必须重启桥才看得见——而界面文案说的是「等它
+// 首次运行后再看」。找不到就保持未锁定，下次查询重试。
 func (s *Store) resolve() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.checked {
 		return
 	}
-	s.checked = true
 	if path, err := exec.LookPath("sqlite3"); err == nil {
 		s.binary = path
 	}
-	s.dbPath, s.baseDir = findDB()
+	dbPath, baseDir := findDB()
+	if dbPath == "" {
+		return
+	}
+	s.dbPath, s.baseDir = dbPath, baseDir
+	s.checked = true
 }
 
 // findDB 按 dashboard 同规则找库：先看显式的 MAGIC_CONTEXT_STORAGE_DIR，

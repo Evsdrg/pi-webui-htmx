@@ -109,7 +109,9 @@ func (r *Renderer) RenderMC(ctx context.Context, kind magiccontext.Kind, offset,
 	data.Total = total
 	if offset+len(rows) < total && len(rows) > 0 {
 		q := url.Values{"kind": {string(kind)}, "offset": {strconv.Itoa(offset + len(rows))}, "limit": {strconv.Itoa(limit)}, "category": {category}, "project": {project}, "append": {"1"}}
-		data.MoreURL = "/ui/mc?" + q.Encode()
+		// 相对路径：云端外壳注入 <base href="/d/{id}/">，根绝对路径会被
+		// 解析到 relay 根而不是设备前缀，分页在云端静默失效。
+		data.MoreURL = "ui/mc?" + q.Encode()
 	}
 	for _, row := range rows {
 		data.Rows = append(data.Rows, r.mcRow(kind, row))

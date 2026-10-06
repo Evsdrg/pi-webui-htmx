@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"strings"
 
+	"pi-bridge-go/internal/goal"
 	"pi-bridge-go/internal/protocol"
 )
 
@@ -22,14 +23,18 @@ import (
 // DialogData 驱动对话框模板。
 // 覆盖 select/confirm/input/editor 四种，模板按 Method 分支渲染。
 type DialogData struct {
-	ID          string
-	SessionID   string
-	Method      string
-	Title       string
-	Message     string
-	Options     []string
-	Placeholder string
-	Prefill     string
+	ID        string
+	SessionID string
+	Method    string
+	Title     string
+	Message   string
+	Options   []string
+	// OptionLabels 与 Options 一一对应，是**显示文本**（可能已汉化）；
+	// 选项的 value 仍是 Options 里的原文——插件靠比较回传值判定用户选了
+	// 什么，把回传值也换成译文会让选择静默失效。
+	OptionLabels []string
+	Placeholder  string
+	Prefill      string
 }
 
 // RenderExtensionDialog 渲染扩展对话。
@@ -72,15 +77,26 @@ func DialogFromPi(id, sessionID string, raw json.RawMessage) (DialogData, error)
 	if len(v.Options) > 64 {
 		v.Options = v.Options[:64]
 	}
+	// 显示文本单独算一遍：命中的（如 goal 插件的选项）译成中文，
+	// 未命中的原样。value 始终用原文。
+	labels := make([]string, len(v.Options))
+	for i, option := range v.Options {
+		if label, ok := goal.OptionLabel(option); ok {
+			labels[i] = label
+		} else {
+			labels[i] = option
+		}
+	}
 	return DialogData{
-		ID:          v.ID,
-		SessionID:   sessionID,
-		Method:      v.Method,
-		Title:       v.Title,
-		Message:     v.Message,
-		Options:     v.Options,
-		Placeholder: v.Placeholder,
-		Prefill:     v.Prefill,
+		ID:           v.ID,
+		SessionID:    sessionID,
+		Method:       v.Method,
+		Title:        v.Title,
+		Message:      v.Message,
+		Options:      v.Options,
+		OptionLabels: labels,
+		Placeholder:  v.Placeholder,
+		Prefill:      v.Prefill,
 	}, nil
 }
 
