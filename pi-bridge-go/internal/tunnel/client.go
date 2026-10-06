@@ -81,12 +81,15 @@ func (c *Client) Run(ctx context.Context) {
 		if ctx.Err() != nil {
 			return
 		}
-		err := c.dialAndServe(ctx)
+		connected, err := c.dialAndServe(ctx)
 		if ctx.Err() != nil {
 			return
 		}
-		if err != nil {
-			// 退避重连，避免 relay 故障时疯狂重试。
+		// 退避只针对「连不上」。一旦连上过（哪怕随后掉线），立刻把退避
+		// 拉回 1 秒，否则 relay 重启后桥要等满 30 秒才重连，云端工作台
+		// 会出现数十秒不可用。早先 dialAndServe 只返回 err、成功分支不可达，
+		// 退避因此永不回落。
+		if !connected {
 			select {
 			case <-ctx.Done():
 				return
@@ -100,11 +103,14 @@ func (c *Client) Run(ctx context.Context) {
 			}
 			continue
 		}
+		_ = err
 		backoff = time.Second
 	}
 }
 
-func (c *Client) dialAndServe(ctx context.Context) error {
+// dialAndServe 建立连接并保持到断开。返回 connected 表示握手是否成功过：
+// 调用方据此区分「连不上」（需要退避）与「连上后掉线」（应尽快重连）。
+func (c *Client) dialAndServe(ctx context.Context) (connected bool, err error) {
 	dialctx, cancel := context.WithTimeout(ctx, c.cfg.DialTimeout)
 	defer cancel()
 	// 令牌走 Authorization 头，不进查询串：查询串会进入反向代理与
@@ -118,7 +124,7 @@ func (c *Client) dialAndServe(ctx context.Context) error {
 		},
 	})
 	if err != nil {
-		return err
+		return false, err
 	}
 	defer conn.CloseNow()
 	conn.SetReadLimit(maxFrame)
@@ -168,7 +174,7 @@ func (c *Client) dialAndServe(ctx context.Context) error {
 		if err != nil {
 			connCancel()
 			<-writeDone
-			return err
+			return true, err
 		}
 		if typ != websocket.MessageText && typ != websocket.MessageBinary {
 			continue

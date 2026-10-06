@@ -210,6 +210,36 @@ func Test断线后自动重连(t *testing.T) {
 	}
 }
 
+// 每次成功连上后退避必须回落：否则 relay 重启后桥会等满 30 秒才重连。
+// 连续踢 6 次，每次都要在很短时间内重连；退避不回落时第 6 次早已涨到
+// 30 秒上限，整轮必然超时。
+func Test重连退避在连上后回落(t *testing.T) {
+	srv, kick := fakeRelay(t)
+	cfg := Defaults()
+	cfg.RelayURL = "ws" + strings.TrimPrefix(srv.URL, "http")
+	cfg.DeviceID = "dev-1"
+	c := NewClient(cfg, &recordingHandler{})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go c.Run(ctx)
+	select {
+	case <-c.Ready():
+	case <-time.After(15 * time.Second):
+		t.Fatal("首次连接失败")
+	}
+	deadline := time.Now().Add(15 * time.Second)
+	for i := 0; i < 6; i++ {
+		before := statInt(c, "connects")
+		kick()
+		for statInt(c, "connects") <= before {
+			if time.Now().After(deadline) {
+				t.Fatalf("第 %d 次重连退避未回落（连上后应重置为 1 秒）", i+1)
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
+	}
+}
+
 func TestStats字段(t *testing.T) {
 	srv, _ := fakeRelay(t)
 	cfg := Defaults()

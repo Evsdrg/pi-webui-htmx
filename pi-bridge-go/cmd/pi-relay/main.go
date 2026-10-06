@@ -113,9 +113,12 @@ func serve() error {
 		Handler:           handler,
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       30 * time.Second,
-		WriteTimeout:      30 * time.Second,
-		IdleTimeout:       60 * time.Second,
-		MaxHeaderBytes:    16 << 10,
+		// WriteTimeout 从读完请求头起算，必须覆盖设备侧转发的整个等待窗口
+		// （httpProxyTimeout=60s）。小于它会让设备在 30–60 秒内才应答的
+		// 转发因写截止已过而失败，60 秒预算形同虚设。
+		WriteTimeout:   90 * time.Second,
+		IdleTimeout:    60 * time.Second,
+		MaxHeaderBytes: 16 << 10,
 	}
 	ln, err := net.Listen("tcp", *listen)
 	if err != nil {

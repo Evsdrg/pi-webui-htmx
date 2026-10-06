@@ -1,6 +1,7 @@
 package relay
 
 import (
+	"errors"
 	"io"
 	"net/http"
 	"net/url"
@@ -31,6 +32,11 @@ const (
 
 	// httpProxyTimeout 覆盖「请求发出 → 响应回来」的全过程。
 	httpProxyTimeout = 60 * time.Second
+
+	// maxPendingHTTPWaiters 是在途转发的上限。每条在途转发占一个 goroutine
+	// 与一个表项，最长 httpProxyTimeout（60s）；不设上限时，任何已认证用户
+	// 都能开无限并发把它撑爆。超限明确回 503，而不是无界增长。
+	maxPendingHTTPWaiters = 256
 )
 
 // HTTPEnvelope 是隧道里的一个 HTTP 请求或响应。
@@ -54,8 +60,12 @@ type HTTPEnvelope struct {
 }
 
 // pendingHTTP 是一次等待响应的转发。
+// deviceID 记录发起这次转发的设备：响应帧只能由同一台设备的隧道交回。
+// 否则 ID（http-N，全局自增、可枚举）可被任何持有合法设备令牌的其它设备
+// 用同键伪造一条响应，注入到别的浏览器（跨用户、跨设备）。
 type pendingHTTP struct {
-	ch chan HTTPEnvelope
+	deviceID string
+	ch       chan HTTPEnvelope
 }
 
 func (s *Server) httpWaitersInit() {
@@ -119,8 +129,14 @@ func (s *Server) serveDeviceHTTP(w http.ResponseWriter, r *http.Request) {
 
 	body, err := readLimited(r.Body, maxHTTPBody)
 	if err != nil {
-		writeRelayError(w, http.StatusRequestEntityTooLarge,
-			protocol.E("limit_exceeded", "云端转发暂不支持超过 4 MiB 的请求体"))
+		var pe *protocol.Error
+		if errors.As(err, &pe) && pe.Code == "limit_exceeded" {
+			writeRelayError(w, http.StatusRequestEntityTooLarge, pe)
+			return
+		}
+		// 读请求体失败多半是客户端超时或中断，不是体积超限——
+		// 一律回 413 会把慢上传误报成「超过 4 MiB」。
+		writeRelayError(w, http.StatusBadRequest, protocol.E("invalid_request", "读取请求体失败"))
 		return
 	}
 	envelope := HTTPEnvelope{
@@ -128,7 +144,7 @@ func (s *Server) serveDeviceHTTP(w http.ResponseWriter, r *http.Request) {
 		Mount:   devicePrefix + deviceID,
 		Method:  r.Method,
 		Path:    path,
-		Headers: collectHeaders(r),
+		Headers: s.collectHeaders(r),
 		Body:    body,
 	}
 	if raw := r.URL.RawQuery; raw != "" {
@@ -140,7 +156,13 @@ func (s *Server) serveDeviceHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	waiter := s.registerHTTPWaiter(envelope.ID)
+	waiter := s.registerHTTPWaiter(envelope.ID, deviceID)
+	if waiter == nil {
+		// 在途转发已达上限：每位已认证用户都能开无限并发请求，每条占用一个
+		// goroutine 与表项最多 60 秒，必须有上限并明确拒绝（WS 侧有连接上限）。
+		writeRelayError(w, http.StatusServiceUnavailable, protocol.E("busy", "云端转发并发已满，请稍后重试"))
+		return
+	}
 	defer s.dropHTTPWaiter(envelope.ID)
 	tunnel.out.send(frame, tunnel.cancel)
 
@@ -158,12 +180,16 @@ func (s *Server) serveDeviceHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (s *Server) registerHTTPWaiter(id string) *pendingHTTP {
-	waiter := &pendingHTTP{ch: make(chan HTTPEnvelope, 1)}
+// registerHTTPWaiter 登记一个等待响应的转发；在途数量达上限时返回 nil。
+func (s *Server) registerHTTPWaiter(id, deviceID string) *pendingHTTP {
+	waiter := &pendingHTTP{deviceID: deviceID, ch: make(chan HTTPEnvelope, 1)}
 	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.httpWaitersInit()
+	if len(s.httpWaiters) >= maxPendingHTTPWaiters {
+		return nil
+	}
 	s.httpWaiters[id] = waiter
-	s.mu.Unlock()
 	return waiter
 }
 
@@ -174,13 +200,16 @@ func (s *Server) dropHTTPWaiter(id string) {
 	delete(s.httpWaiters, id)
 }
 
-// deliverHTTP 把设备回的响应交给等待中的转发；没有等待者就丢弃。
-func (s *Server) deliverHTTP(envelope HTTPEnvelope) bool {
+// deliverHTTP 把设备回的响应交给等待中的转发。
+// deviceID 是交出这条响应的设备；只有与该转发发起设备一致时才投递——
+// 否则任何其它设备都能用可枚举的 ID 冒充目标设备回包。不一致或没有
+// 等待者时丢弃。
+func (s *Server) deliverHTTP(deviceID string, envelope HTTPEnvelope) bool {
 	s.mu.Lock()
 	s.httpWaitersInit()
 	waiter := s.httpWaiters[envelope.ID]
 	s.mu.Unlock()
-	if waiter == nil {
+	if waiter == nil || waiter.deviceID != deviceID {
 		return false
 	}
 	select {
@@ -207,14 +236,34 @@ func readLimited(r io.Reader, limit int64) ([]byte, error) {
 
 // collectHeaders 收集转发需要的头。逐跳头与 Host 不转发：
 // 它们是连接层面的，交给设备侧自己决定。
-func collectHeaders(r *http.Request) [][2]string {
+//
+// 另外剥掉 **relay 自己的账号凭据**：relay 会话 Cookie 与用户令牌只用于
+// relay 的登录，桥不认识也用不到它们。不剥离就会把它们随请求转发到设备，
+// 让设备主机拿到一个可 list/claim/revoke 该用户全部设备的账号级凭据——
+// 这与「桥只持有模型密钥、不持有 relay 账号凭据」的边界相悖。
+// 桥自己的 Cookie（pi_bridge_session）与桥令牌不是 relay 凭据，照常转发。
+func (s *Server) collectHeaders(r *http.Request) [][2]string {
 	out := make([][2]string, 0, len(r.Header))
 	for name, values := range r.Header {
-		switch strings.ToLower(name) {
+		lower := strings.ToLower(name)
+		switch lower {
 		case "host", "content-length", "connection", "upgrade", "keep-alive",
 			"proxy-authenticate", "proxy-authorization", "te", "trailer", "transfer-encoding",
 			// Origin/Host 的校验必须在设备侧完成，不把浏览器的来源伪装成 relay 的。
 			"origin", "referer", "x-forwarded-for", "x-forwarded-host", "x-forwarded-proto":
+			continue
+		case "authorization":
+			// 只剥 relay 用户令牌；桥令牌（relay 校验不过）原样转发。
+			token := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
+			if token != "" {
+				if _, ok := s.users.Check(token); ok {
+					continue
+				}
+			}
+		case "cookie":
+			if stripped := stripRelayCookie(values); stripped != "" {
+				out = append(out, [2]string{name, stripped})
+			}
 			continue
 		}
 		for _, value := range values {
@@ -222,6 +271,25 @@ func collectHeaders(r *http.Request) [][2]string {
 		}
 	}
 	return out
+}
+
+// stripRelayCookie 去掉 Cookie 头里的 relay 会话 Cookie，保留其余。
+func stripRelayCookie(values []string) string {
+	var kept []string
+	for _, raw := range values {
+		for _, part := range strings.Split(raw, ";") {
+			part = strings.TrimSpace(part)
+			if part == "" {
+				continue
+			}
+			name, _, _ := strings.Cut(part, "=")
+			if strings.EqualFold(strings.TrimSpace(name), userCookieName) {
+				continue
+			}
+			kept = append(kept, part)
+		}
+	}
+	return strings.Join(kept, "; ")
 }
 
 func writeHTTPReply(w http.ResponseWriter, reply HTTPEnvelope) {

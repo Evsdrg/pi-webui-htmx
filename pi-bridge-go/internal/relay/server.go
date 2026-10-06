@@ -481,7 +481,22 @@ func (s *Server) handleDevices(w http.ResponseWriter, r *http.Request) {
 		writeRelayError(w, 401, protocol.E("unauthorized", "需要用户身份"))
 		return
 	}
-	writeRelayJSON(w, 200, map[string]any{"devices": s.registry.List(owner)})
+	// 只回设备元数据，不回 TokenHash——它是内部的令牌校验值（落盘必需），
+	// 浏览器侧既用不到，暴露出去也没有好处。
+	devices := s.registry.List(owner)
+	out := make([]map[string]any, 0, len(devices))
+	for _, d := range devices {
+		out = append(out, map[string]any{
+			"deviceId":  d.DeviceID,
+			"name":      d.Name,
+			"owner":     d.Owner,
+			"online":    d.Online,
+			"claimedAt": d.ClaimedAt,
+			"createdAt": d.CreatedAt,
+			"lastSeen":  d.LastSeen,
+		})
+	}
+	writeRelayJSON(w, 200, map[string]any{"devices": out})
 }
 
 func (s *Server) handleRevoke(w http.ResponseWriter, r *http.Request) {
@@ -550,11 +565,16 @@ func (s *Server) handleTunnel(w http.ResponseWriter, r *http.Request) {
 	s.registry.SetOnline(deviceID, true)
 	defer func() {
 		s.mu.Lock()
-		if s.tunnels[deviceID] == t {
+		stillCurrent := s.tunnels[deviceID] == t
+		if stillCurrent {
 			delete(s.tunnels, deviceID)
 		}
 		s.mu.Unlock()
-		s.registry.SetOnline(deviceID, false)
+		// 只有本隧道仍是当前隧道时才置离线：同设备重连时，旧连接的 defer 会
+		// 在新隧道上线之后才执行，无条件置否会把在线位错误地翻成离线。
+		if stillCurrent {
+			s.registry.SetOnline(deviceID, false)
+		}
 	}()
 	go pumpWrites(ctx, ws, t.out)
 	for {
@@ -569,9 +589,9 @@ func (s *Server) handleTunnel(w http.ResponseWriter, r *http.Request) {
 		frame := make([]byte, len(b))
 		copy(frame, b)
 		rf, ok := Unwrap(frame)
-		// 设备回的 HTTP 响应（B54）：按 ID 交给等待中的转发。
+		// 设备回的 HTTP 响应（B54）：按 ID 交给等待中的转发，且只认发起设备。
 		if rf.HTTP != nil {
-			s.deliverHTTP(*rf.HTTP)
+			s.deliverHTTP(deviceID, *rf.HTTP)
 			continue
 		}
 		if !ok || rf.To == "" {

@@ -217,6 +217,11 @@ func serve() error {
 		cfg.RelayURL = *relayURL
 		cfg.DeviceID = *deviceID
 		cfg.DeviceToken = deviceToken
+		// 发送队列必须装得下单帧最大响应：HTTPEnvelope.Body 是 []byte，
+		// JSON 序列化走 base64（约 1.33×）再加信封开销。默认 2 MiB 会让
+		// 8 MiB 预算内的图片/导出响应被 Send 直接拒绝、静默丢弃，云端
+		// 挂到 504，而本地直连一切正常。按响应预算派生并留一倍余量。
+		cfg.QueueBytes = 2*bridge.ResponseBudget() + (1 << 20)
 		tunnelClient = tunnel.NewClient(cfg, bridge)
 		bridge.SetSender(tunnelClient.Send)
 		go tunnelClient.Run(context.Background())

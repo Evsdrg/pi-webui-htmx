@@ -2,6 +2,7 @@ package relay
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -106,6 +107,178 @@ func Test设备前缀HTTP转发(t *testing.T) {
 	}
 	if !sawCookie {
 		t.Fatalf("浏览器 Cookie 未转发: %+v", got.Headers)
+	}
+}
+
+// 另一台设备的隧道不能替目标设备回包：HTTP 响应的等待者必须绑定发起设备。
+// 反例：ID（http-N）全局可枚举，任何持有合法设备令牌的其它设备用同键
+// 写一条伪响应，就能把任意状态码/头/正文注入到别人的浏览器。
+func Test中继拒绝跨设备伪造的HTTP响应(t *testing.T) {
+	s, _, users := newRelayServer(t)
+	srv := httptest.NewServer(s)
+	defer srv.Close()
+	userTokenA, deviceTokenA := pairDevice(t, srv, users, "dev-a")
+	_, deviceTokenB := pairDevice(t, srv, users, "dev-b")
+
+	tunnelA := dialTunnelOrFail(t, s, srv, "dev-a", deviceTokenA)
+	defer tunnelA.CloseNow()
+	tunnelB := dialTunnelOrFail(t, s, srv, "dev-b", deviceTokenB)
+	defer tunnelB.CloseNow()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	// 浏览器请求设备 A；设备 A 先扣住不回，等设备 B 来抢答。
+	got := make(chan string, 1)
+	go func() {
+		req, _ := http.NewRequest(http.MethodGet, srv.URL+"/d/dev-a/", nil)
+		req.Header.Set("Authorization", "Bearer "+userTokenA)
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			got <- "ERR:" + err.Error()
+			return
+		}
+		defer resp.Body.Close()
+		b, _ := io.ReadAll(resp.Body)
+		got <- string(b)
+	}()
+
+	// 设备 A 读出待处理的转发 ID。
+	_, frame, err := tunnelA.Read(ctx)
+	if err != nil {
+		t.Fatalf("设备 A 未收到帧: %v", err)
+	}
+	rf, ok := Unwrap(frame)
+	if !ok || rf.HTTP == nil {
+		t.Fatalf("不是 HTTP 帧: %s", frame)
+	}
+	injected := "被设备 B 伪造的响应"
+	raw, err := MarshalHTTPFrame(HTTPEnvelope{ID: rf.HTTP.ID, Status: http.StatusOK, Body: []byte(injected)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := tunnelB.Write(ctx, websocket.MessageText, raw); err != nil {
+		t.Fatalf("设备 B 写入失败: %v", err)
+	}
+
+	// 设备 B 的伪响应不该被投递：浏览器要么拿不到注入内容，要么等价地
+	// 拿到真实的转发超时/设备 A 的真实回复。这里断言它绝不等于注入内容。
+	select {
+	case body := <-got:
+		if body == injected {
+			t.Fatalf("跨设备响应注入成功：设备 B 冒充设备 A 回包")
+		}
+	case <-time.After(2 * time.Second):
+	}
+
+	// 设备 A 现在给真实响应，浏览器必须收到它，证明同设备回包仍正常。
+	real, err := MarshalHTTPFrame(HTTPEnvelope{ID: rf.HTTP.ID, Status: http.StatusOK, Body: []byte("设备 A 的真实响应")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := tunnelA.Write(ctx, websocket.MessageText, real); err != nil {
+		t.Fatalf("设备 A 写入失败: %v", err)
+	}
+	select {
+	case body := <-got:
+		if body != "设备 A 的真实响应" {
+			t.Fatalf("设备 A 的真实响应未生效: %q", body)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("设备 A 的真实响应未到达浏览器")
+	}
+}
+
+// relay 自己的账号凭据（会话 Cookie 与用户令牌）不得随请求转发到设备：
+// 设备主机只应持有模型密钥，不该额外持有可 list/claim/revoke 该用户全部
+// 设备的 relay 账号级凭据。桥自己的 Cookie 与令牌不是 relay 凭据，照常转发。
+func Test中继不转发自身凭据(t *testing.T) {
+	s, _, users := newRelayServer(t)
+	srv := httptest.NewServer(s)
+	defer srv.Close()
+	userToken, deviceToken := pairDevice(t, srv, users, "dev-1")
+	tunnel := dialTunnelOrFail(t, s, srv, "dev-1", deviceToken)
+	defer tunnel.CloseNow()
+
+	seen := make(chan HTTPEnvelope, 1)
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_, frame, err := tunnel.Read(ctx)
+		if err != nil {
+			return
+		}
+		rf, ok := Unwrap(frame)
+		if !ok || rf.HTTP == nil {
+			return
+		}
+		seen <- *rf.HTTP
+		raw, _ := MarshalHTTPFrame(HTTPEnvelope{ID: rf.HTTP.ID, Status: http.StatusOK, Body: []byte("ok")})
+		_ = tunnel.Write(ctx, websocket.MessageText, raw)
+	}()
+
+	req, _ := http.NewRequest(http.MethodGet, srv.URL+"/d/dev-1/ui/sessions", nil)
+	req.Header.Set("Authorization", "Bearer "+userToken)
+	// 同时带上 relay 会话 Cookie 与桥自己的 Cookie。
+	req.Header.Set("Cookie", "pi_relay_session=should-not-forward; pi_bridge_session=keep-me")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	_, _ = io.Copy(io.Discard, resp.Body)
+
+	got := <-seen
+	var authorization, cookie string
+	for _, kv := range got.Headers {
+		switch strings.ToLower(kv[0]) {
+		case "authorization":
+			authorization = kv[1]
+		case "cookie":
+			cookie += kv[1]
+		}
+	}
+	if strings.Contains(authorization, userToken) || authorization != "" {
+		t.Fatalf("relay 用户令牌被转发到设备: %q", authorization)
+	}
+	if strings.Contains(cookie, "pi_relay_session") {
+		t.Fatalf("relay 会话 Cookie 被转发到设备: %q", cookie)
+	}
+	if !strings.Contains(cookie, "pi_bridge_session=keep-me") {
+		t.Fatalf("桥自己的 Cookie 应照常转发: %q", cookie)
+	}
+}
+
+// /api/relay/devices 只回设备元数据，不回令牌哈希（内部校验值，浏览器用不到）。
+func Test设备列表不暴露令牌哈希(t *testing.T) {
+	s, _, users := newRelayServer(t)
+	srv := httptest.NewServer(s)
+	defer srv.Close()
+	userToken, _ := pairDevice(t, srv, users, "dev-1")
+	req, _ := http.NewRequest(http.MethodGet, srv.URL+"/api/relay/devices", nil)
+	req.Header.Set("Authorization", "Bearer "+userToken)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	if strings.Contains(string(body), "tokenHash") {
+		t.Fatalf("设备列表不应包含令牌哈希: %s", body)
+	}
+}
+
+// 在途转发达上限时 registerHTTPWaiter 返回 nil（调用方回 503），而不是无界增长。
+func TestHTTP等待者达上限被拒绝(t *testing.T) {
+	s, _, _ := newRelayServer(t)
+	s.mu.Lock()
+	s.httpWaitersInit()
+	for i := 0; i < maxPendingHTTPWaiters; i++ {
+		s.httpWaiters[fmt.Sprintf("w-%d", i)] = &pendingHTTP{ch: make(chan HTTPEnvelope, 1)}
+	}
+	s.mu.Unlock()
+	if w := s.registerHTTPWaiter("overflow", "dev-1"); w != nil {
+		t.Fatal("等待者达上限时应返回 nil")
 	}
 }
 
