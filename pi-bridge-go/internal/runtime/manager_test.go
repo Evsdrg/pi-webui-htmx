@@ -305,6 +305,12 @@ func TestStopSession与进程表更新并发安全(t *testing.T) {
 		if err := w.Stop(true); err != nil {
 			t.Fatalf("停止失败: %v", err)
 		}
+		// 等退出清理把进程表的旧键删掉再进下一轮：否则下一轮 Start 会撞上
+		// 尚未清理的键、报 conflict——那是清理时序，不是本用例要测的竞态。
+		// 并发读表由上面的 StopSession 循环持续制造（它仍在与 map 写入竞争）。
+		testutil.WaitFor(t, "退出清理移出进程表", func() bool {
+			return len(m.List()) == 0
+		})
 	}
 	close(stop)
 	wg.Wait()
