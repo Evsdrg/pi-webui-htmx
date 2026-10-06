@@ -41,6 +41,14 @@ func (f *fakePipe) blockWrites() {
 	}
 }
 
+// writeCount 返回已写入 stdin 的帧数。用于「等命令真正写到 stdin」的同步：
+// pending 是在入队之前登记的，只等 pendingCount 会落进「已登记、未入队」的窗口。
+func (f *fakePipe) writeCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return len(f.order)
+}
+
 func (f *fakePipe) releaseWrites() {
 	f.mu.Lock()
 	gate := f.gate
@@ -208,11 +216,15 @@ func TestCall返回Pi明确错误(t *testing.T) {
 }
 
 func TestCall连接关闭时结果未知(t *testing.T) {
-	c, _, _ := newPair(t, nil)
+	c, in, _ := newPair(t, nil)
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	go func() {
-		testutil.WaitFor(t, "命令写入 stdin", func() bool { return c.pendingCount() == 1 })
+		// 必须等到命令真正写进 stdin，而不是只等 pending 登记。
+		// pending 在入队之前就写入 c.pending：只等 pendingCount==1 会让 fail
+		// 落进「已登记、尚未入队」的窗口，此时命令根本没发出去，Call 返回
+		// ErrClosed（可重试）才是对的——旧判据因此间歇性误判为失败。
+		testutil.WaitFor(t, "命令写入 stdin", func() bool { return in.writeCount() > 0 })
 		c.fail(io.ErrUnexpectedEOF)
 	}()
 	_, err := c.Call(ctx, "prompt", map[string]any{"message": "hi"})
