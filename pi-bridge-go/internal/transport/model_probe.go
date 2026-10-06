@@ -50,8 +50,7 @@ func (s *Server) serveModelProbe(w http.ResponseWriter, r *http.Request, enc pre
 			if err != nil {
 				return "", err
 			}
-			message, _ := data["message"].(string)
-			return s.ui.RenderNote(message)
+			return s.ui.RenderNote(probeNote(data))
 		}
 		models, err := s.piConfig.Discover(r.Context(), base, api, key, headers, s.discovery)
 		if err != nil {
@@ -59,4 +58,20 @@ func (s *Server) serveModelProbe(w http.ResponseWriter, r *http.Request, enc pre
 		}
 		return s.ui.RenderDiscoveredModels(models)
 	})
+}
+
+// probeNote 把测试连接的结果转成一句可读提示。
+// TestConnection 的返回体只有 ok/modelsListed/firstModelId，没有 message；
+// 原来固定读 message 会让成功时渲染出一个空的提示段落。
+func probeNote(data map[string]any) string {
+	if message, _ := data["message"].(string); message != "" {
+		return message
+	}
+	if listed, _ := data["modelsListed"].(bool); listed {
+		if id, _ := data["firstModelId"].(string); id != "" {
+			return "连接成功，模型列表可读取，例如 " + id + "。"
+		}
+		return "连接成功，模型列表可读取。"
+	}
+	return "连接成功，但模型列表为空；请确认该供应商是否支持列出模型。"
 }

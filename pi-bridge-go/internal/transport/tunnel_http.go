@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"io"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -62,7 +63,10 @@ func (t *TunnelBridge) handleTunnelHTTP(ctx context.Context, envelope relay.HTTP
 			return
 		}
 		if err := t.sender(raw); err != nil {
-			// 隧道已断：没有接收方，丢弃即可。
+			// 隧道已断、或发送队列装不下这一帧。不能静默丢弃：relay 只能等到
+			// 超时回 504，用户在云端看到「设备未应答」而不知原因（本地直连
+			// 却正常）。至少把原因记下来，便于对照发送队列预算。
+			slog.Warn("云端转发响应未能发出", "请求", envelope.ID, "字节", len(raw), "错误", err)
 			return
 		}
 	}()

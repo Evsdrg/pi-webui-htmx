@@ -29,7 +29,60 @@ import (
 	"pi-bridge-go/internal/protocol"
 	run "pi-bridge-go/internal/runtime"
 	"pi-bridge-go/internal/sessions"
+	"unicode/utf8"
 )
+
+// replyOverheadReserve 给「文本字段之外」的响应内容留的固定开销余量：
+// 包装字段、truncated/size 标志与错误帧都远小于它。
+const replyOverheadReserve = 4 << 10
+
+// fitTextToFrame 把文本截断到「JSON 序列化后仍落在单帧上限内」。
+//
+// rawBudget（wsTextBudget 或客户端给的 maxBytes）是按**原始字节**算的；
+// 但响应还要经 JSON 转义再封帧，反斜杠、引号、换行与控制字符都会放大体积，
+// 极端内容（如整篇反斜杠）按原始预算截断后仍会超过 outboundFrameLimit。
+// 连接层遇到超限帧只能拆掉整条连接，所以这里按转义后的实际长度再收紧一次。
+// second 表示是否发生了额外截断。
+func fitTextToFrame(text string, rawBudget int) (string, bool) {
+	if rawBudget > 0 && len(text) > rawBudget {
+		text = text[:rawBudget]
+		return shrinkToFrame(text, true)
+	}
+	return shrinkToFrame(text, false)
+}
+
+func shrinkToFrame(text string, cut bool) (string, bool) {
+	budget := outboundFrameLimit - replyOverheadReserve
+	escaped, err := json.Marshal(text)
+	if err != nil || len(escaped) <= budget {
+		return text, cut
+	}
+	keep := len(text) * budget / len(escaped)
+	for keep > 0 {
+		candidate := trimPartialRune(text[:keep])
+		escaped, err = json.Marshal(candidate)
+		if err != nil {
+			return candidate, true
+		}
+		if len(escaped) <= budget {
+			return candidate, true
+		}
+		next := keep * budget / len(escaped)
+		if next >= keep {
+			next = keep - 1
+		}
+		keep = next
+	}
+	return "", true
+}
+
+// trimPartialRune 去掉按字节切断留下的半个 UTF-8 序列，避免响应里出现替换字符。
+func trimPartialRune(s string) string {
+	for len(s) > 0 && !utf8.ValidString(s) {
+		s = s[:len(s)-1]
+	}
+	return s
+}
 
 // dispatchRun 处理会话的运行控制：发送消息、排队方式、思考与压缩开关、
 // 重试、以及中止与停止。这些命令都作用于活跃工作进程的状态。
@@ -670,11 +723,8 @@ func (s *Server) dispatchWorkspace(ctx context.Context, r protocol.Request) (any
 		// WS 单帧有上限：超预算时必须在这里截断并告知，
 		// 而不是把超限帧发给连接层——那会直接断开整条连接（B07）。
 		// 需要完整内容的调用方应改用 HTTP 的 /ui/file-text。
-		if len(text) > wsTextBudget {
-			text = text[:wsTextBudget]
-			truncated = true
-		}
-		return fileTextReply{Text: text, Truncated: truncated, Size: size}, nil
+		trimmed, cut := fitTextToFrame(text, wsTextBudget)
+		return fileTextReply{Text: trimmed, Truncated: truncated || cut, Size: size}, nil
 
 	case "files.image":
 		var p struct {
@@ -742,7 +792,8 @@ func (s *Server) dispatchWorkspace(ctx context.Context, r protocol.Request) (any
 		if err != nil {
 			return nil, err
 		}
-		return diffReply{Diff: text, Truncated: truncated}, nil
+		trimmed, cut := fitTextToFrame(text, p.MaxBytes)
+		return diffReply{Diff: trimmed, Truncated: truncated || cut}, nil
 	}
 	return nil, errUnhandled(r.Method)
 }

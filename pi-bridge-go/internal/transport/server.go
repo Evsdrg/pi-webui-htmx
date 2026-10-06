@@ -1133,9 +1133,17 @@ func (c *connection) sendRaw(ctx context.Context, b []byte) bool {
 
 func (c *connection) send(m protocol.Message) bool {
 	b, err := json.Marshal(m)
-	if err != nil || len(b) > outboundFrameLimit {
+	if err != nil {
 		c.cancel()
 		return false
+	}
+	if len(b) > outboundFrameLimit {
+		alt, ok := frameFallback(m)
+		if !ok {
+			c.cancel()
+			return false
+		}
+		b = alt
 	}
 	ctx, cancel := context.WithTimeout(c.ctx, outboundWait)
 	defer cancel()
@@ -1144,6 +1152,24 @@ func (c *connection) send(m protocol.Message) bool {
 		return false
 	}
 	return true
+}
+
+// frameFallback 在一条响应超过单帧上限时，把它替换成显式的 limit_exceeded
+// 错误响应，返回替换帧与是否可行。
+//
+// 契约要求「先检查序列化长度，超限显式报错，而不是取消整个连接」
+// （api/v1/protocol.md）。只有**响应**能这样降级：事件没有请求标识，
+// 客户端无法把错误对到某条命令上，只能维持原有的断开语义。
+func frameFallback(m protocol.Message) ([]byte, bool) {
+	if m.Kind != "response" || m.RequestID == "" {
+		return nil, false
+	}
+	alt, err := json.Marshal(protocol.Reply(m.RequestID, nil,
+		protocol.E("limit_exceeded", "响应超过单帧上限，请改用 HTTP 数据通道获取完整内容")))
+	if err != nil || len(alt) > outboundFrameLimit {
+		return nil, false
+	}
+	return alt, true
 }
 
 // writer 是连接内唯一的写协程，保证 WebSocket 写入串行化。

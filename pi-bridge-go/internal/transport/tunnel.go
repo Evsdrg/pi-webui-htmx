@@ -78,6 +78,14 @@ func NewTunnelBridge(server *Server, sender func([]byte) error, max int, idle ti
 	return t
 }
 
+// ResponseBudget 返回单次 HTTP 转发允许回传的响应体上限。
+// 装配方用它把隧道发送队列配到足以承载一帧最大响应——HTTPEnvelope.Body
+// 是 []byte，JSON 序列化走 base64（约 1.33×）再加信封开销；队列小于单帧
+// 时 Send 会直接拒绝，大响应被静默丢弃、云端挂到 504（本地直连却正常）。
+func (t *TunnelBridge) ResponseBudget() int64 {
+	return t.maxHTTPResponse
+}
+
 // SetSender 设置隧道发送函数；必须在启动隧道前调用。
 func (t *TunnelBridge) SetSender(sender func([]byte) error) {
 	t.mu.Lock()
@@ -404,9 +412,17 @@ func (c *virtualConn) dropSubscription(sessionID string) {
 // send 实现 connSink。
 func (c *virtualConn) send(m protocol.Message) bool {
 	b, err := json.Marshal(m)
-	if err != nil || len(b) > outboundFrameLimit {
+	if err != nil {
 		c.cancel()
 		return false
+	}
+	if len(b) > outboundFrameLimit {
+		alt, ok := frameFallback(m)
+		if !ok {
+			c.cancel()
+			return false
+		}
+		b = alt
 	}
 	ctx, cancel := context.WithTimeout(c.ctx, outboundWait)
 	defer cancel()

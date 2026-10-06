@@ -171,6 +171,14 @@ func outcomeFor(err error) storage.Outcome {
 	if err == nil {
 		return storage.OutcomeOK
 	}
+	var pe *protocol.Error
+	if errors.As(err, &pe) {
+		if pe.Code == "outcome_unknown" {
+			// Pi 可能已接受该命令、桥只是没等到结果：这是「未知」，
+			// 不是「确定失败」。记成 error 会让客户端以为没执行过而重发。
+			return storage.OutcomeUnknown
+		}
+	}
 	if isNotExecuted(err) {
 		// 明确没执行：记 rejected，客户端可重试。
 		return storage.OutcomeRejected
@@ -205,10 +213,11 @@ func (s *Server) admit(req protocol.Request, reply func(protocol.Message)) (acce
 		switch rec.Outcome {
 		case storage.OutcomeRejected:
 			// 明确没执行过：允许用同一 requestId 重试。
-		case storage.OutcomePending:
-			// 上次桥崩在 intent 之后、结论之前。无法证明命令有没有到达 Pi，
-			// 只能回答 unknown 让客户端对账，绝不假装成功。
-			reply(protocol.Reply(req.RequestID, nil, protocol.E("outcome_unknown", "命令结果未知：桥在上次执行中中断，请先对账")))
+		case storage.OutcomePending, storage.OutcomeUnknown:
+			// 上次桥崩在 intent 之后、结论之前，或超时未能判定结果。
+			// 无法证明命令有没有到达 Pi，只能回答 unknown 让客户端对账，
+			// 绝不假装成功、也绝不自动重发。
+			reply(protocol.Reply(req.RequestID, nil, protocol.E("outcome_unknown", "命令结果未知：先前执行未能得出结论，请先对账")))
 			return false, false
 		default:
 			reply(protocol.Reply(req.RequestID, map[string]any{
@@ -266,5 +275,10 @@ func (s *Server) runCommand(c connSink, req protocol.Request) {
 	// 收到响应，回执就一定已经落盘——unknown 只会在真正的崩溃恢复里出现。
 	s.recordReceipt(req, err)
 	s.claims.finish(req.RequestID)
+	// 订阅类命令已经自行发出确认响应（见 noReply 与 subscribeWithReplay），
+	// 不能再补一条——那会让客户端在同一 requestId 上收到两条响应。
+	if _, ok := data.(noReply); ok && err == nil {
+		return
+	}
 	c.send(protocol.Reply(req.RequestID, data, err))
 }
