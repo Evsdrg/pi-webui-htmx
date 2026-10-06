@@ -828,7 +828,7 @@ export class Workbench {
     // 归属随请求一起登记，beforeSwap 才能拒绝旧代次的响应（U17/U18）。
     this.pendingHistory = { sessionId: id, epoch: this.scope.epoch };
     const query = leafId ? `?leafId=${encodeURIComponent(leafId)}` : '';
-    try { await window.htmx.ajax('get', `/ui/sessions/${encodeURIComponent(id)}/history${query}`, { target: '#turns', swap: 'innerHTML' }); }
+    try { await window.htmx.ajax('get', `ui/sessions/${encodeURIComponent(id)}/history${query}`, { target: '#turns', swap: 'innerHTML' }); }
     finally {
       if (this.historyLoading === id) this.historyLoading = '';
       if (this.historyRefreshPending && this.sessionId === id) {
@@ -1011,7 +1011,7 @@ export class Workbench {
         const wanted = [...pending.ids].sort();
         if (JSON.stringify(shown) === JSON.stringify(wanted)) continue;
         if (!wanted.length) { el('ext-dialog-slot').replaceChildren(); continue; }
-        await window.htmx.ajax('get', `/ui/extensions/dialogs?sessionId=${encodeURIComponent(id)}`, { target: '#ext-dialog-slot', swap: 'innerHTML' });
+        await window.htmx.ajax('get', `ui/extensions/dialogs?sessionId=${encodeURIComponent(id)}`, { target: '#ext-dialog-slot', swap: 'innerHTML' });
         scope.write(() => this.openExtensionDialog());
       }
     } finally { this.dialogsLoading = false; }

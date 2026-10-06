@@ -274,7 +274,7 @@ export class Workspace {
     // 完整内容走 HTTP：WS 是控制通道，单帧有上限，整份文本会把连接撑断（B07）。
     // HTTP 端点带压缩，大文件也更划算；只有它整体失败时才退回 WS 的截断预览。
     try {
-      const response = await fetch(`/ui/file-text?path=${encodeURIComponent(path)}`, { credentials: 'same-origin', signal: controller.signal });
+      const response = await fetch(`ui/file-text?path=${encodeURIComponent(path)}`, { credentials: 'same-origin', signal: controller.signal });
       if (!response.ok) throw new Error((await response.json().catch(() => null))?.error?.message ?? `读取失败（${response.status}）`);
       text = await response.text();
       if (response.headers.get('X-Truncated')) text += '\n[预览已截断]';
@@ -327,7 +327,7 @@ export class Workspace {
   // 调用方据此回退到文本分支——不需要额外的「这是不是图片」往返。
   private async fetchImage(path: string, controller: AbortController): Promise<{ node: HTMLImageElement; url: string } | null> {
     try {
-      const response = await fetch(`/ui/file-image?path=${encodeURIComponent(path)}`, { credentials: 'same-origin', signal: controller.signal });
+      const response = await fetch(`ui/file-image?path=${encodeURIComponent(path)}`, { credentials: 'same-origin', signal: controller.signal });
       if (!response.ok) return null;
       const url = URL.createObjectURL(await response.blob());
       const node = document.createElement('img');

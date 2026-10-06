@@ -55,7 +55,8 @@ export function wireLazy(sessionId: () => string, parent?: AbortSignal): () => v
     try {
       if (kind !== 'tool-image' && kind !== 'user-image') throw new Error(`未知的惰性内容类型: ${kind}`);
       const query = new URLSearchParams({ kind, entryId, blockIndex });
-      const response = await fetch(`/ui/sessions/${encodeURIComponent(session)}/lazy?${query}`, { signal: controller.signal });
+      // 相对路径：云端外壳注入 <base href="/d/{id}/">，根绝对路径会绕过设备前缀。
+      const response = await fetch(`ui/sessions/${encodeURIComponent(session)}/lazy?${query}`, { signal: controller.signal });
       if (!response.ok) throw new Error(await errorText(response));
       const blob = await response.blob();
       if (!alive()) return;

@@ -82,7 +82,7 @@ export async function openFullHistory(host: TopbarHost): Promise<void> {
   const result = await host.request<{ path: string }>('session.export_html', { fileName: `session-${host.sessionId().slice(0, 64)}.html` }, host.sessionId());
   const file = (result.path ?? '').split('/').pop();
   if (!file) { host.notify('Pi 没有返回导出文件', 'warning'); return; }
-  window.open(`/ui/exports/${encodeURIComponent(file)}?inline=1`, '_blank', 'noopener,noreferrer');
+  window.open(`ui/exports/${encodeURIComponent(file)}?inline=1`, '_blank', 'noopener,noreferrer');
   host.notify('已在新标签页打开完整历史。');
 }
 

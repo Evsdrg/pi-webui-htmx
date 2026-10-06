@@ -43,7 +43,7 @@ it('图片预览走 HTTP，不再占用 WS 帧预算', async () => {
   document.querySelector<HTMLButtonElement>('[data-file-path]')!.click();
   await vi.waitFor(() => expect(document.querySelector('#panel-preview img')).toBeTruthy());
   expect(bridge.request).not.toHaveBeenCalled();
-  expect(String(fetchMock.mock.calls[0]?.[0])).toContain('/ui/file-image');
+  expect(String(fetchMock.mock.calls[0]?.[0])).toContain('ui/file-image');
 });
 
 it('换预览时释放上一张图的 blob URL', async () => {

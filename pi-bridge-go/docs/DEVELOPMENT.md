@@ -112,7 +112,8 @@ TimeoutStopSec=30
    有归属守卫。缺口一律 `resync_required`，不静默遗漏。
 3. **worker 身份**：new/switch/fork/clone 是事务——先预留、再调 Pi、最后按 `get_state` 的真实 ID
    提交并换 epoch；删除前先收敛 writer。退出清理按对象身份移除绑定，第二次 Stop 有界。
-4. **配置与凭据**：写入按 revision 校验、按 model id 合并、把 `***` 识别为占位符保留原值；
+4. **配置与凭据**：写入按 model id 合并、把 `***` 识别为占位符保留原值（revision/CAS 校验
+   **尚未实现**，属 v2，见 `api/v1/protocol.md`）；
    网页不能新增或修改 `!command` 形式的凭据表达式，discover/test 不执行命令表达式、默认禁止重定向。
 5. **会话索引**：历史、tree、标题、lazy 共用一份带文件身份校验（size/mtime + 平台可用的
    inode/ctime）的偏移索引；标题用首尾双向有界读取。大内容走 HTTP 数据通道，控制帧保持小。
@@ -138,12 +139,12 @@ TimeoutStopSec=30
 | RPC 只按 LF 分帧（可接受 CRLF） | U+2028/U+2029 不切行；外部 requestId 与内部 RPC id 相互独立 |
 | `models` 是数组，`api` 是协议标识 | `baseUrl` 才是 HTTP 地址；读、脱敏、恢复、校验共用同一 schema |
 | RPC 命令表没有树跳转 | `session.navigate` 走桥内扩展命令通道：桥随进程 `-e` 下发 `navigate-ext.mjs`（显式路径不受 `--no-extensions` 影响），`prompt("/pi-webui-navigate <id>")` 被扩展命令分流截获、不发给模型；RPC 的命令上下文不返回叶子，结果由扩展经 `PI_WEBUI_NAV_RESULT` 结果文件回传（每 worker 一份，变量名不能带 `PI_BRIDGE_` 前缀——`childenv.Filter` 会把它当凭据剥掉）。发命令前先核对 `get_commands` 已注册：prompt 对未知斜杠命令的兜底是**当普通消息发给模型**，会把命令文本写进会话正文 |
-| 快照里的系统提示词是基线 | `export_html` 抓到的是扩展改写**之前**的 `AgentState.systemPrompt`（Pi 每轮结束会复位）。真正下发给模型的那份由桥内 `capture-ext.mjs` 在 `before_provider_request` 落盘（按 `PI_WEBUI_CAPTURE_DIR/<sessionId>.json`）；`-e` 扩展运行在其它扩展**之前**，故同步读取会漏掉其后的改写，统一用 `setImmediate` 延迟读取、并在 `agent_settled` 兜底。MC 子代理是独立进程（`--no-session`），不会写进主会话的捕获文件 |
+| 快照里的系统提示词是基线 | `export_html` 抓到的是扩展改写**之前**的 `AgentState.systemPrompt`（Pi 每轮结束会复位）。真正下发给模型的那份由桥内 `capture-ext.mjs` 在 `before_provider_request` 落盘（按 `PI_WEBUI_CAPTURE_DIR/<sessionId>.json`）；`-e` 扩展运行在其它扩展**之前**，故同步读取会漏掉其后的改写，统一用 `setImmediate` 延迟读取、并在 `agent_settled` 兜底；**原地改写**（如 `zh-system-prompt.ts` 改同一对象的 `slot.set`）能被读到，但**返回新对象**（runner 会替换整个载荷引用）的扩展看不到——RPC 没有「所有处理器跑完后」的钩子，首位扩展无法观测这种替换。快照连同当时的会话 id 一起记，避免切换会话后把上一个会话的载荷写进新会话名下。MC 子代理是独立进程（`--no-session`），不会写进主会话的捕获文件 |
 | 插件仪表盘在 RPC 下到不了 | `internal/goal` 只读解析 pi-goal-x 的 `<cwd>/.pi/goals/*.md`（文件头 JSON 元数据 + 正文 objective）与 `goal_events.jsonl` 账本，自己渲染 `/ui/goal`；聚焦目标是会话级状态，从会话 JSONL 的 `pi-goal-focus` 条目取。理由同 magic-context：RPC 会忽略 `setWidget(key, factory)` 工厂函数。目标文件是插件自己的权威数据，桥**只读**、不写、不复制进桥存储。插件的 setStatus/notify/对话框文案在 `Worker.event` 转发前用 `goal.LocalizeUIRequest` 汉化（只改命中的 goal 文案，未命中原样放行） |
 
 ## 模型配置与执行边界
 
-`config.models.*` 由前端触发；桥提供原语。Pi 的 models 是数组，`api` 是协议标识，`baseUrl` 才是 HTTP 地址。写入按 revision 校验、按 model id 合并、把 `***` 识别为占位符保留原值；临时文件为同目录独占创建 + Sync + rename。这些保护覆盖桥自己的写入路径；外部 CLI 的不合作并发写入不受桥控制。
+`config.models.*` 由前端触发；桥提供原语。Pi 的 models 是数组，`api` 是协议标识，`baseUrl` 才是 HTTP 地址。写入按 model id 合并、把 `***` 识别为占位符保留原值（revision/CAS 校验属 v2，当前未实现）；临时文件为同目录独占创建 + Sync + rename。这些保护覆盖桥自己的写入路径；外部 CLI 的不合作并发写入不受桥控制。
 
 config.packages 只读清单与版本，不安装/更新。只读 Git 同样要防 fsmonitor/external diff/textconv 等隐式执行。Pi 工具和显式 PTY 本身具有执行能力；工作区根与环境过滤不是对它们的系统隔离。
 

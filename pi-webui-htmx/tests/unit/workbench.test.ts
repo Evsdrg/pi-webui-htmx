@@ -58,7 +58,7 @@ function mount() {
  const matches=Element.prototype.matches;
  vi.spyOn(Element.prototype,'matches').mockImplementation(function(this:Element,selector){return selector===':modal' ? this.getAttribute('data-modal')==='true' : matches.call(this,selector);});
  window.htmx = {trigger:vi.fn(),ajax:vi.fn(async (_method:string,url:string) => {
-  if(url.startsWith('/ui/extensions/dialogs')) {
+  if(url.startsWith('ui/extensions/dialogs')) {
    const root=document.getElementById('ext-dialog-slot')!;
    root.innerHTML='<dialog data-dialog-id=dialog-1 data-method=input><form data-extension-form><input name=value><button type=submit name=confirmed value=true>确定</button></form></dialog>';
    document.dispatchEvent(new CustomEvent('htmx:afterSwap',{detail:{target:root}}));
@@ -114,7 +114,7 @@ describe('扩展对话交互回归',()=>{
   await vi.advanceTimersByTimeAsync(15_000);
   expect(document.querySelector('#ext-dialog-slot input')).toBe(input);
   expect(input.value).toBe('尚未提交的内容');
-  const requests=vi.mocked(window.htmx.ajax).mock.calls.filter((call)=>String(call[1]).startsWith('/ui/extensions/dialogs'));
+  const requests=vi.mocked(window.htmx.ajax).mock.calls.filter((call)=>String(call[1]).startsWith('ui/extensions/dialogs'));
   expect(requests).toHaveLength(1);
  });
  it('回执期间已结束的任务不会被重新标记为运行中',async()=>{
@@ -237,7 +237,7 @@ describe('模型配置编辑器', () => {
     await (workbench as unknown as { action(a: string, b: HTMLElement): Promise<void> }).action('models-edit', document.createElement('button'));
     (document.getElementById('mp-base') as HTMLInputElement).value = 'https://api.example.com/v1';
     await (workbench as unknown as { action(a: string, b: HTMLElement): Promise<void> }).action('models-discover', document.createElement('button'));
-    expect(window.htmx.ajax).toHaveBeenCalledWith('post', '/ui/models/discover', expect.objectContaining({ values: expect.objectContaining({baseUrl:'https://api.example.com/v1'}) }));
+    expect(window.htmx.ajax).toHaveBeenCalledWith('post', 'ui/models/discover', expect.objectContaining({ values: expect.objectContaining({baseUrl:'https://api.example.com/v1'}) }));
     expect(document.getElementById('discover-result').querySelector('script')).toBeNull();
   });
 });
@@ -431,7 +431,7 @@ describe('搜索结果归属与定位', () => {
     // 会话名不再有独立的显示节点：侧栏列表负责显示，Workbench 只保存内部状态
     // （重命名流程与搜索结果标题都用它）。
     expect(workbench.title()).toBe('Sample workspace review');
-    expect(vi.mocked(window.htmx.ajax).mock.calls.some((call) => String(call[1]).includes('/ui/sessions/s2/history?leafId=a1'))).toBe(true);
+    expect(vi.mocked(window.htmx.ajax).mock.calls.some((call) => String(call[1]).includes('ui/sessions/s2/history?leafId=a1'))).toBe(true);
 
     const turns = document.getElementById('turns')!;
     turns.innerHTML = '<article data-turn-id="u1"><span hidden data-search-entry-id="a1"></span>回复</article>';
@@ -441,7 +441,7 @@ describe('搜索结果归属与定位', () => {
     expect(turns.querySelector('[data-turn-id="u1"]')?.classList.contains('search-target')).toBe(true);
     expect(document.getElementById('history-scope')?.hidden).toBe(false);
     document.querySelector<HTMLButtonElement>('#history-scope button')!.click();
-    await waitFor(() => expect(vi.mocked(window.htmx.ajax).mock.calls.some((call) => call[1] === '/ui/sessions/s2/history')).toBe(true));
+    await waitFor(() => expect(vi.mocked(window.htmx.ajax).mock.calls.some((call) => call[1] === 'ui/sessions/s2/history')).toBe(true));
     document.dispatchEvent(new CustomEvent('htmx:afterSwap', { detail: {
       target: turns, xhr: { responseURL: `${location.origin}/ui/sessions/s2/history` },
     } }));
@@ -518,7 +518,7 @@ describe('从用户消息创建未落盘分支', () => {
     expect(input.value).toBe('重写 src/main.ts');
     expect(document.getElementById('unsaved-branch')?.hidden).toBe(false);
     expect(document.getElementById('unsaved-branch')?.textContent).toContain('尚未写盘');
-    expect(vi.mocked(window.htmx.ajax).mock.calls.some((call) => String(call[1]).includes('/ui/sessions/s-fork/history'))).toBe(false);
+    expect(vi.mocked(window.htmx.ajax).mock.calls.some((call) => String(call[1]).includes('ui/sessions/s-fork/history'))).toBe(false);
   });
 
   it('刷新后的活跃未落盘分支收到 204 时不显示会话不存在', () => {
@@ -553,7 +553,7 @@ describe('从用户消息创建未落盘分支', () => {
     expect(document.body.dataset.sessionId).toBe('s-fork');
     expect((document.getElementById('prompt') as HTMLTextAreaElement).value).toBe('修改后的原消息');
     expect(document.getElementById('unsaved-branch')?.hidden).toBe(true);
-    expect(vi.mocked(window.htmx.ajax).mock.calls.some((call) => String(call[1]).includes('/ui/sessions/s-fork/history'))).toBe(true);
+    expect(vi.mocked(window.htmx.ajax).mock.calls.some((call) => String(call[1]).includes('ui/sessions/s-fork/history'))).toBe(true);
   });
 });
 
@@ -590,7 +590,7 @@ describe('从此处编辑（会话内跳转）与删除会话', () => {
     expect(document.getElementById('edit-scope')?.hidden).toBe(false);
     expect(document.getElementById('history-scope')?.hidden).toBe(true);
     // 跳转后按新叶子重读历史：视图截断到编辑点。
-    await waitFor(() => expect(vi.mocked(window.htmx.ajax).mock.calls.some((call) => String(call[1]).includes('/ui/sessions/s1/history?leafId=a1'))).toBe(true));
+    await waitFor(() => expect(vi.mocked(window.htmx.ajax).mock.calls.some((call) => String(call[1]).includes('ui/sessions/s1/history?leafId=a1'))).toBe(true));
   });
 
   it('发送后退出编辑态：分叉已落定，横幅收起', async () => {
@@ -1169,7 +1169,7 @@ describe('顶栏功能面板', () => {
     await waitFor(() => expect(document.body.dataset.sessionId).toBe('s1'));
     document.querySelector('[data-action="full-history"]')!.dispatchEvent(new Event('click', { bubbles: true }));
     await waitFor(() => expect(open).toHaveBeenCalled());
-    expect(open.mock.calls[0]?.[0]).toBe('/ui/exports/session-abc.html?inline=1');
+    expect(open.mock.calls[0]?.[0]).toBe('ui/exports/session-abc.html?inline=1');
     open.mockRestore();
   });
 
@@ -1390,7 +1390,7 @@ describe('实时流重同步与迟到回执的会话归属', () => {
     const ajax = window.htmx.ajax as unknown as ReturnType<typeof vi.fn>;
     ajax.mockClear();
     fake.instance!.dispatchEvent(new CustomEvent('message', { detail: { version: 1, kind: 'control', event: 'bridge.subscription_closed', sessionId: 's1', data: { resyncRequired: true } } }));
-    await waitFor(() => expect(ajax).toHaveBeenCalledWith('get', expect.stringContaining('/ui/sessions/s1/history'), expect.anything()));
+    await waitFor(() => expect(ajax).toHaveBeenCalledWith('get', expect.stringContaining('ui/sessions/s1/history'), expect.anything()));
   });
 
   // U15：事件因体积被省略时流已断开，等下一次 settled 会一直缺内容。
@@ -1400,7 +1400,7 @@ describe('实时流重同步与迟到回执的会话归属', () => {
     const ajax = window.htmx.ajax as unknown as ReturnType<typeof vi.fn>;
     ajax.mockClear();
     emitNamed('bridge.event_omitted', { type: 'pi.event', reason: '事件体积超过上限', resyncRequired: true });
-    await waitFor(() => expect(ajax).toHaveBeenCalledWith('get', expect.stringContaining('/ui/sessions/s1/history'), expect.anything()));
+    await waitFor(() => expect(ajax).toHaveBeenCalledWith('get', expect.stringContaining('ui/sessions/s1/history'), expect.anything()));
     expect(document.getElementById('connection-notice')!.textContent).toContain('体积');
   });
 

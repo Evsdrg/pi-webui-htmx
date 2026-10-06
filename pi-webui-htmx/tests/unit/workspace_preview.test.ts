@@ -19,7 +19,7 @@ it('文件原文迟到不能在关闭后重新打开预览',async()=>{
 // overflow 都没有，长行直接横向溢出、Markdown 读不了。
 async function open(path:string):Promise<HTMLElement|null>{
  document.body.innerHTML='<aside id="sidebar"></aside><aside id="workspace-panel"></aside><span id="file-name"></span><div id="panel-preview" hidden></div><button id="tab-preview"></button><div id="workbench"></div>';
- vi.stubGlobal('fetch',vi.fn((url:string)=>Promise.resolve(String(url).includes('/ui/file-image')
+ vi.stubGlobal('fetch',vi.fn((url:string)=>Promise.resolve(String(url).includes('ui/file-image')
    ? new Response('',{status:404})                     // 非图片：走文本分支
    : new Response('# 标题\n这是一段足够长的正文用来验证软换行可以生效'))));
  vi.stubGlobal('htmx',{trigger:vi.fn(),ajax:vi.fn()});

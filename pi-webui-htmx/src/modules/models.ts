@@ -603,7 +603,7 @@ export class ModelsEditor {
     catch (error) { result.textContent = error instanceof Error ? error.message : '头部无效'; return; }
     result.dataset.requestScope = String(++this.probeSequence);
     result.setAttribute('hx-sync', 'this:replace');
-    await window.htmx.ajax('post', `/ui/models/${action}`, {
+    await window.htmx.ajax('post', `ui/models/${action}`, {
       source: result, target: result, swap: 'innerHTML',
       values: { baseUrl: el<HTMLInputElement>('mp-base').value.trim(), api: el<HTMLSelectElement>('mp-api').value,
         apiKey: el<HTMLInputElement>('mp-key').value, headers: el<HTMLTextAreaElement>('mp-headers').value },

@@ -3,7 +3,7 @@
     <h3>{{.Title}}</h3>
     {{if .Message}}<p>{{.Message}}</p>{{end}}
     {{if eq .Method "select"}}
-    <label>选择一项<select name="value" required>{{range .Options}}<option value="{{.}}">{{.}}</option>{{end}}</select></label>
+    <label>选择一项<select name="value" required>{{range $i, $o := .Options}}<option value="{{$o}}">{{index $.OptionLabels $i}}</option>{{end}}</select></label>
     {{else if eq .Method "input"}}
     <label>输入内容<input name="value" type="text" placeholder="{{.Placeholder}}" value="{{.Prefill}}" maxlength="200000"></label>
     {{else if eq .Method "editor"}}
