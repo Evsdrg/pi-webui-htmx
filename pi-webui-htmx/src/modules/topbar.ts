@@ -24,7 +24,7 @@ export interface TopbarHost {
   refreshState(): Promise<void>;
 }
 
-const PANELS = ['panel-info', 'panel-title', 'panel-system', 'panel-tools', 'panel-mc'];
+const PANELS = ['panel-info', 'panel-title', 'panel-system', 'panel-tools', 'panel-mc', 'panel-goal'];
 
 // formatCompact 把 token 数压成短标签，供顶栏上下文用量使用。
 function formatCompact(value: number): string {
@@ -67,6 +67,11 @@ export function toggle(host: TopbarHost, target: string, force?: boolean): void 
     el<HTMLInputElement>('mc-category').value = '';
     el<HTMLInputElement>('mc-project').value = '';
     window.htmx.trigger(document.body, 'mc-refresh');
+  }
+  if (target === 'panel-goal') {
+    // 目标面板由桥只读渲染（读本工作区的 goal 文件与账本，不启动 Pi 进程）。
+    el<HTMLInputElement>('goal-session').value = host.sessionId();
+    window.htmx.trigger(document.body, 'goal-refresh');
   }
 }
 

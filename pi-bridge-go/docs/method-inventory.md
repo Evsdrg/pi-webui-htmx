@@ -38,6 +38,7 @@
 | GET `/ui/models`、`/ui/packages` | management + presentation | 配置域/出站读取预算；packages 不是本地廉价操作（含 npm 查询）；另列 `<agent-dir>/extensions` 下自动加载的扩展文件（只读目录结构） |
 | POST `/ui/models/discover`、`/ui/models/test` | management + presentation | 复用出站策略与全局操作槽；64KiB表单，认证/Host/Origin先于路由，拒绝打码/命令型凭据 |
 | GET `/ui/dirs`、`/ui/mc`、`/ui/mc/content` | workspace / magiccontext + presentation | 目录沙箱；记忆只读、正文65536字符上限、分页动作服务端生成 |
+| GET `/ui/goal` | goal（只读）+ presentation | 只读本工作区 `.pi/goals` 的目标文件与账本；不启动 worker；不写任何目标文件 |
 | GET `/ui/files`、`/ui/file-image`、`/ui/diff` | workspace + presentation | 文件沙箱、实际 reader 上限、Git runner |
 | GET `/ui/extensions/dialog/{id}`、`/ui/extensions/dialogs` | worker 展示投影 | worker/session/epoch 隔离，不因渲染消耗 pending |
 | POST `/ui/sessions/{id}/ui-response` | 对话服务 | 与 WS session.ui_response 相同 claim/验证/写入确认 |

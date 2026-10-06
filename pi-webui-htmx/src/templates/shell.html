@@ -90,6 +90,7 @@
              Tauri 应用，读的是同一个库——我们走同一条只读路径，
              不往 Pi 的 RPC 里塞扩展界面。 */}}
         <button class="topbar-btn" type="button" data-action="panel-mc" aria-controls="panel-mc" aria-expanded="false" title="magic-context 记忆"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5a3 3 0 0 0-3 3 3 3 0 0 0-1 5.8V16a3 3 0 0 0 6 0v-2.2A3 3 0 0 0 15 8a3 3 0 0 0-3-3Z"/><path d="M12 5V3"/><path d="M9 19h6"/></svg><span class="topbar-btn-label">记忆</span></button>
+        <button class="topbar-btn" type="button" data-action="panel-goal" aria-controls="panel-goal" aria-expanded="false" title="pi-goal-x 目标（只读）"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="5"/><circle cx="12" cy="12" r="1.2" fill="currentColor"/></svg><span class="topbar-btn-label">目标</span></button>
       </nav>
       {{/* 右侧成组：对齐锤在容器上，不在可能被 hidden 的子元素上。
            #context-usage 在没有上下文数据时是 hidden（display:none），
@@ -143,6 +144,11 @@
       <button class="icon-btn panel-close" type="button" data-action="panel-tools-close" aria-label="关闭工具面板">×</button>
       <input type="hidden" id="tools-session" name="sessionId" value="">
       <div id="tools-body" hx-sync="this:replace" hx-get="ui/tools" hx-trigger="tools-refresh from:body" hx-include="#tools-session" hx-swap="innerHTML" title="以下是本次工作进程实际暴露给模型的工具，随启动时的工具预设与已装扩展变化。"><p class="muted">打开时读取。</p></div>
+    </section>
+    <section id="panel-goal" class="top-panel" hidden>
+      <button class="icon-btn panel-close" type="button" data-action="panel-goal-close" aria-label="关闭目标面板">×</button>
+      <input type="hidden" id="goal-session" name="sessionId" value="">
+      <div id="goal-body" hx-sync="this:replace" hx-get="ui/goal" hx-trigger="goal-refresh from:body" hx-include="#goal-session" hx-swap="innerHTML" title="只读展示本工作区的 pi-goal-x 目标（目标文件与账本）；不启动 Pi 进程。"><p class="muted">打开时读取。</p></div>
     </section>
     <div id="connection-notice" class="notice" role="status" hidden></div>
     <div id="history-scope" class="history-scope" hidden><span>仅显示所选位置以前的历史；发送仍沿会话当前分支继续。</span><button class="btn-quiet" type="button" data-action="branch-current">返回最新</button></div>

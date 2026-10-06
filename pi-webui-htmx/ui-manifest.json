@@ -22,7 +22,8 @@
     "export": "templates/export.html",
     "catalog": "templates/catalog.html",
     "note": "templates/note.html",
-    "_comment": "相对路径以 src/ 为基准；下划线开头的键是说明，不是模板"
+    "_comment": "相对路径以 src/ 为基准；下划线开头的键是说明，不是模板",
+    "goal": "templates/goal.html"
   },
   "routes": {
     "shell": "/",
@@ -40,7 +41,8 @@
     "system": "/ui/system",
     "tools": "/ui/tools",
     "stats": "/ui/stats",
-    "exports": "/ui/exports/{name}"
+    "exports": "/ui/exports/{name}",
+    "goal": "/ui/goal"
   },
   "requiredMethods": [
     "config.models",

@@ -230,7 +230,7 @@ export class Workbench {
       void this.topbar().then((m) => m.changeToolPreset(this.host)).catch((err) => this.fail(err));
     }, { signal });
     el('title-form').addEventListener('submit', (event) => { event.preventDefault(); void this.topbar().then((m) => m.saveLocalTitle(this.host)).catch((err) => this.fail(err)); }, { signal });
-    for (const action of ['panel-info', 'panel-title', 'panel-system', 'panel-tools', 'panel-mc']) {
+    for (const action of ['panel-info', 'panel-title', 'panel-system', 'panel-tools', 'panel-mc', 'panel-goal']) {
       document.querySelector(`[data-action="${action}"]`)?.addEventListener('click', () => this.toggleTopPanel(action), { signal });
       document.querySelector(`[data-action="${action}-close"]`)?.addEventListener('click', () => this.toggleTopPanel(action, false), { signal });
     }
@@ -244,7 +244,7 @@ export class Workbench {
     // Escape 关闭已打开的顶栏面板（同时只开一个）。
     document.addEventListener('keydown', (event) => {
       if (event.key !== 'Escape') return;
-      for (const action of ['panel-info', 'panel-title', 'panel-system', 'panel-tools', 'panel-mc']) {
+      for (const action of ['panel-info', 'panel-title', 'panel-system', 'panel-tools', 'panel-mc', 'panel-goal']) {
         if (!el(action === 'panel-info' ? 'panel-info' : action).hidden) { this.toggleTopPanel(action, false); return; }
       }
     }, { signal });

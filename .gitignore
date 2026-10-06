@@ -11,6 +11,8 @@ dist/
 /backup-*/
 # AI 编码助手的本地目录（计划、会话记录等），不进仓库
 .zcode/
+# Pi 插件的本地运行数据（例如 pi-goal-x 的 .pi/goals 目标文件与账本）
+.pi/
 
 # 编辑器
 .idea/

@@ -18,6 +18,7 @@ import (
 
 	"pi-bridge-go/internal/childenv"
 	"pi-bridge-go/internal/events"
+	"pi-bridge-go/internal/goal"
 	"pi-bridge-go/internal/pi"
 	"pi-bridge-go/internal/protocol"
 	"pi-bridge-go/internal/sessions"
@@ -600,6 +601,14 @@ func (w *Worker) event(raw json.RawMessage) {
 	}
 	if json.Unmarshal(raw, &ev) != nil {
 		return
+	}
+	// 汉化 pi-goal-x 的界面文案（状态行/通知/对话框）。只改命中的文案，未命中的
+	// 原样放行。放在取锁之前做，避免持锁做一次 JSON 往返；快照与增量会用同一份
+	// 译文，两处显示不会不一致。
+	if ev.Type == "extension_ui_request" {
+		if localized, ok := goal.LocalizeUIRequest(raw); ok {
+			raw = localized
+		}
 	}
 	w.mu.Lock()
 	switch ev.Type {

@@ -39,6 +39,25 @@ func Test扩展状态快照不依赖订阅者(t *testing.T) {
 	}
 }
 
+// pi-goal-x 的状态行在桥侧汉化后再进快照：面板/状态栏读到的都应是中文。
+func Test扩展状态行汉化goal(t *testing.T) {
+	m, cwd := newTestManager(t)
+	w, err := m.Start(context.Background(), "", cwd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	w.event(setStatusRaw("goal", "goal: unfocused [3 open] - /goal-focus"))
+	_, statuses := w.ExtensionStatuses()
+	if statuses["goal"] != "目标：未聚焦（3 个进行中）· /goal-focus" {
+		t.Fatalf("goal 状态行应被汉化: %q", statuses["goal"])
+	}
+	// 其它插件的状态行不受影响。
+	w.event(setStatusRaw("mc", "mc: 12 (3%) · idle"))
+	if _, statuses = w.ExtensionStatuses(); statuses["mc"] != "mc: 12 (3%) · idle" {
+		t.Fatalf("非 goal 状态行不应被改写: %+v", statuses)
+	}
+}
+
 // B36 的核心：不同 worker 的同名 key 不再互相覆盖。
 // 老实现是传输层的全局 byKey，后收到的 setStatus 会把先前的顶掉，
 // 切会话时就会看到另一个会话的扩展状态。

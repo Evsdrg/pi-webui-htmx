@@ -91,7 +91,7 @@ xterm 等按需加载，不计入首屏。
 
 - 片段端点：`/ui/sessions`、`/ui/search`、`/ui/sessions/{id}/history`、`/ui/models`、`/ui/packages`、
   `/ui/files`、`/ui/git-status`、`/ui/diff`、`/ui/branch`、`/ui/extensions/*`、`/ui/dirs`、`/ui/mc`、
-  `/ui/system`、`/ui/tools`、`/ui/stats`
+  `/ui/system`、`/ui/tools`、`/ui/stats`、`/ui/goal`
 - 模型发现/连通测试用认证 POST（`/ui/models/discover`、`/ui/models/test`），**凭据不进 URL**
 - 思考正文走 lazy 路径的 `format=html` 变体
 - 模板声明动作、目标与同步域；需要 JS 参与时用隐藏输入或 `htmx.ajax`

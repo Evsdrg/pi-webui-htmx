@@ -28,6 +28,7 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
+	"pi-bridge-go/internal/goal"
 	"pi-bridge-go/internal/magiccontext"
 	"pi-bridge-go/internal/management"
 	"pi-bridge-go/internal/observe"
@@ -652,6 +653,11 @@ func (s *Server) serveUIFragments(w http.ResponseWriter, r *http.Request, encodi
 				return "", err
 			}
 			return s.ui.RenderTools(value.Tools, value.Source)
+		})
+
+	case path == "/ui/goal":
+		return s.renderFragment(w, encoding, func() (string, error) {
+			return s.renderGoal(r.Context(), r.URL.Query().Get("sessionId"))
 		})
 
 	case path == "/ui/stats":
@@ -1680,6 +1686,34 @@ func (s *Server) serveDirs(w http.ResponseWriter, r *http.Request, encoding pres
 //
 // 走片段端点约定：问题一律 200 + 可读 HTML，因为调用方是 htmx，
 // 它默认不交换 4xx/5xx，用户会看到一个永远停在占位符的面板。
+// renderGoal 渲染「目标」面板：只读读取本工作区 .pi/goals 下的目标文件与账本。
+//
+// 不启动 worker：会话的 cwd 从磁盘索引取（浏览历史不拉起 Pi 进程）。聚焦目标
+// 来自会话 JSONL 里的 pi-goal-focus 条目，读不到就按“未聚焦”展示。
+func (s *Server) renderGoal(ctx context.Context, sessionID string) (string, error) {
+	if sessionID == "" {
+		return s.ui.RenderGoal(presentation.GoalPanel{Notice: "缺少会话 ID。"})
+	}
+	header, err := s.store.Find(ctx, sessionID)
+	if err != nil {
+		return s.ui.RenderGoal(presentation.GoalPanel{Notice: "读不到该会话，无法定位它的工作区。"})
+	}
+	// 聚焦目标是会话级状态：从会话文件里取最后一次 pi-goal-focus。只读、尽力而为。
+	focusedID, focusRoot := "", ""
+	if file := s.store.Path(header); file != "" {
+		if id, root, ok := goal.ReadFocus(file); ok {
+			focusedID, focusRoot = id, root
+		}
+	}
+	// 根目录：聚焦条目记录了外部存储根时优先用它，否则按 cwd + agentDir 解析。
+	root := focusRoot
+	if root == "" {
+		root = goal.RootFor(header.Cwd, s.piConfig.AgentDir())
+	}
+	view := goal.Load(root, focusedID, goal.DefaultLedgerLimit)
+	return s.ui.RenderGoal(presentation.GoalPanelFrom(view))
+}
+
 func (s *Server) serveMagicContext(w http.ResponseWriter, r *http.Request, encoding presentation.Encoding) {
 	query := r.URL.Query()
 	kind := magiccontext.Kind(query.Get("kind"))

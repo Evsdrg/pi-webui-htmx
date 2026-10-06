@@ -1,0 +1,68 @@
+{{/* 目标面板：只读展示 pi-goal-x 在本工作区落的目标数据。
+     桥直接读 <cwd>/.pi/goals 下的目标文件与账本，不走 Pi 的 UI 通道
+     （RPC 会忽略插件注册的 setWidget 工厂函数）。文案全部为中文。
+     版面复用既有样式类（.packages / .tag* / .mc-preview / .config-note），
+     不新增首屏 CSS。状态配色类在 Go 侧算好（避免在 class 属性里塞模板字符串）。 */}}
+{{if not .Available}}<p class="empty-note">{{if .Notice}}{{.Notice}}{{else}}本工作区还没有目标。{{end}}</p>{{else}}
+{{if .Notice}}<p class="config-note">{{.Notice}}</p>{{end}}
+
+{{if .Focused}}
+<div class="config-detail-header"><h3 class="config-detail-title">当前聚焦目标 <span class="tag {{.Focused.StatusClass}}">{{.Focused.StatusLabel}}</span></h3></div>
+<div class="mc-preview">{{.Focused.Objective}}</div>
+<table class="packages">
+  <tbody>
+    <tr><td class="nowrap">模式</td><td>{{.Focused.Mode}}{{if .Focused.Archived}} · 已归档{{end}}</td></tr>
+    <tr><td class="nowrap">自动继续</td><td>{{if .Focused.AutoContinue}}开{{else}}关{{end}}</td></tr>
+    <tr><td class="nowrap">用量</td><td>{{.Focused.Usage}}</td></tr>
+    <tr><td class="nowrap">进度</td><td>{{.Focused.TasksDone}}/{{.Focused.TasksTotal}} 任务{{if .Focused.BlockCompletion}} · 有待办任务时不允许完成{{end}}</td></tr>
+    {{if .Focused.Budget}}<tr><td class="nowrap">预算</td><td>{{.Focused.Budget}}</td></tr>{{end}}
+    {{if .Focused.CurrentTask}}<tr><td class="nowrap">当前任务</td><td><code>{{.Focused.CurrentTask}}</code></td></tr>{{end}}
+    {{if .Focused.Verification}}<tr><td class="nowrap">验收契约</td><td>{{.Focused.Verification}}</td></tr>{{end}}
+    {{if .Focused.PauseReason}}<tr><td class="nowrap">暂停原因</td><td>{{.Focused.PauseReason}}</td></tr>{{end}}
+    {{if .Focused.SuggestedAction}}<tr><td class="nowrap">建议</td><td>{{.Focused.SuggestedAction}}</td></tr>{{end}}
+    <tr><td class="nowrap">目标文件</td><td class="wrap-key">{{.Focused.File}}</td></tr>
+  </tbody>
+</table>
+
+{{if .Focused.Tasks}}
+<div class="config-detail-header"><h3 class="config-detail-title">任务</h3></div>
+<table class="packages">
+  <thead><tr><th>状态</th><th>任务</th></tr></thead>
+  <tbody>
+  {{range .Focused.Tasks}}
+    <tr>
+      <td class="nowrap"><span class="tag {{.StatusClass}}">{{.StatusLabel}}</span></td>
+      <td>{{if .Depth}}<span class="muted">└ </span>{{end}}{{.Title}}{{if .Note}} <span class="config-note">{{.Note}}</span>{{end}}</td>
+    </tr>
+  {{end}}
+  </tbody>
+</table>
+{{end}}
+
+{{else}}
+<p class="config-note">本会话没有聚焦的目标。{{if .Others}}在下面的进行中目标里选择，或用 <code>/goal-focus</code> 聚焦。{{else}}用 <code>/goal</code> 起草一个目标。{{end}}</p>
+{{end}}
+
+{{if .Others}}
+<div class="config-detail-header"><h3 class="config-detail-title">其他进行中的目标</h3></div>
+<table class="packages">
+  <thead><tr><th>状态</th><th>目标</th><th>更新</th></tr></thead>
+  <tbody>
+  {{range .Others}}
+    <tr><td class="nowrap"><span class="tag {{.StatusClass}}">{{.StatusLabel}}</span></td><td>{{.Objective}}</td><td class="nowrap muted">{{.Usage}}</td></tr>
+  {{end}}
+  </tbody>
+</table>
+{{end}}
+
+{{if .Ledger}}
+<div class="config-detail-header"><h3 class="config-detail-title">最近活动</h3></div>
+<table class="packages">
+  <tbody>
+  {{range .Ledger}}
+    <tr><td class="nowrap">{{.When}}</td><td>{{.Label}}{{if .Detail}} <span class="config-note">{{.Detail}}</span>{{end}}</td></tr>
+  {{end}}
+  </tbody>
+</table>
+{{end}}
+{{end}}

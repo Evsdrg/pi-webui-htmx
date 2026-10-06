@@ -118,6 +118,11 @@ func TestBrotliPoolWriterFootprint(t *testing.T) {
 func TestStaticAssetCompressionIsSerialized(t *testing.T) {
 	// 不并行：这条靠相对时序判断串行化，必须独占运行。
 	sample := sampleFragment(256<<10, 23)
+	// 预热一次：首次压缩含字典/缓冲的一次性初始化，把它算进 single 会系统性
+	// 高估单次耗时、压低比值，从而稳定误判（CI 上反复红）。预热后测的是稳态。
+	if _, err := compressBytes(sample, EncBrotli); err != nil {
+		t.Fatal(err)
+	}
 	start := time.Now()
 	if _, err := compressBytes(sample, EncBrotli); err != nil {
 		t.Fatal(err)

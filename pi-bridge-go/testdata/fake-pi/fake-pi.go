@@ -24,6 +24,9 @@ type frame struct {
 	// setStatus 帧的字段：桥的快照就靠它们（B36）。
 	StatusKey  string `json:"statusKey,omitempty"`
 	StatusText string `json:"statusText,omitempty"`
+	// notify 帧的字段。
+	Message    string `json:"message,omitempty"`
+	NotifyType string `json:"notifyType,omitempty"`
 }
 
 func emit(v any) {
@@ -92,6 +95,12 @@ func main() {
 	}
 	if script["set_status"] {
 		emit(frame{Type: "extension_ui_request", Method: "setStatus", StatusKey: "mc", StatusText: "mc: 3 (1%) · idle"})
+	}
+	// script `goal_status`：模拟 pi-goal-x 启动时的未聚焦状态行与一条通知，
+	// 用来验证桥侧的 goal 文案汉化（状态行 + notify 两条通道）。
+	if script["goal_status"] {
+		emit(frame{Type: "extension_ui_request", Method: "setStatus", StatusKey: "goal", StatusText: "goal: unfocused [2 open] - /goal-focus"})
+		emit(frame{Type: "extension_ui_request", Method: "notify", NotifyType: "info", Message: "Goal paused."})
 	}
 	for {
 		line, err := reader.ReadString('\n')
