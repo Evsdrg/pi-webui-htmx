@@ -452,8 +452,13 @@ input,select,textarea { background:var(--bg); border:1px solid var(--border); bo
 .system-prompt { margin:0; max-height:min(600px,60dvh); overflow:auto; padding:0; border:0; background:transparent; color:var(--text-muted); font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:12px; line-height:1.6; white-space:pre-wrap; overflow-wrap:anywhere; }
 .top-panel h3 { margin:14px 0 6px; font-size:12px; color:var(--text-muted); }
 
-/* 工具定义面板：左栏工具名、右栏详情（Pi Web 的 ToolDefinitionsPanel）。 */
-.tool-panel { display:grid; grid-template-columns:clamp(112px,26%,220px) minmax(0,1fr); min-height:240px; max-height:min(600px,60dvh); overflow:hidden; border:1px solid var(--border); border-radius:8px; background:var(--bg-panel); }
+/* 工具定义面板：左栏工具名、右栏详情（Pi Web 的 ToolDefinitionsPanel）。
+   grid-template-rows 必须显式写成 minmax(0,1fr)：否则网格唯一的行会被内容
+   撑到实际高度（工具多时超过面板 max-height），而面板本身 overflow:hidden
+   把超出的部分静默裁掉——左栏的 overflow:auto 永远不触发（它和内容一样高），
+   于是排在最后的工具（先是内置、后是插件）直接看不到。锁定行高后左栏才成为
+   真正的滚动区，全部工具都能滚到。 */
+.tool-panel { display:grid; grid-template-columns:clamp(112px,26%,220px) minmax(0,1fr); grid-template-rows:minmax(0,1fr); min-height:240px; max-height:min(600px,60dvh); overflow:hidden; border:1px solid var(--border); border-radius:8px; background:var(--bg-panel); }
 .tool-list { display:flex; flex-direction:column; min-height:0; overflow:auto; border-right:1px solid var(--border); }
 .tool-item { display:flex; align-items:center; min-height:38px; padding:8px 12px; border:0; border-bottom:1px solid var(--border); background:transparent; color:var(--text-muted); text-align:left; }
 .tool-item:hover { background:var(--bg-hover); color:var(--text); }
