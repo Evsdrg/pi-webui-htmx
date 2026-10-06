@@ -44,7 +44,15 @@ func fakeRelay(t *testing.T) (*httptest.Server, func()) {
 		mu.Lock()
 		tunnels[id] = conn
 		mu.Unlock()
-		defer func() { mu.Lock(); delete(tunnels, id); mu.Unlock() }()
+		// 只删自己这条：快速重连时新连接可能已经登记同名 key，无条件删除会把
+		// 新登记删掉，后续等待「注册到 relay」就会超时（重连退避用例的坑）。
+		defer func() {
+			mu.Lock()
+			if tunnels[id] == conn {
+				delete(tunnels, id)
+			}
+			mu.Unlock()
+		}()
 		ctx := r.Context()
 		for {
 			typ, b, err := conn.Read(ctx)
@@ -210,11 +218,29 @@ func Test断线后自动重连(t *testing.T) {
 	}
 }
 
+// closeOnConnectRelay 每次接受隧道连接后立即关闭：客户端会不停重连。
+// 用它测重连速率，不依赖手工踢连接与「等隧道注册」——后者在快速重连下
+// 会与夹具的登记/清理交错，把测试本身变得不稳。
+func closeOnConnectRelay(t *testing.T) *httptest.Server {
+	t.Helper()
+	mux := http.NewServeMux()
+	mux.HandleFunc("/tunnel", func(w http.ResponseWriter, r *http.Request) {
+		conn, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			return
+		}
+		_ = conn.CloseNow()
+	})
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	return srv
+}
+
 // 每次成功连上后退避必须回落：否则 relay 重启后桥会等满 30 秒才重连。
-// 连续踢 6 次，每次都要在很短时间内重连；退避不回落时第 6 次早已涨到
-// 30 秒上限，整轮必然超时。
+// 退避回落到 1 秒时，6 次连接约 5~6 秒即可完成；若只翻倍不回落，
+// 第 4 次起就要等 8/16/30 秒，6 次远超 12 秒——据此判定。
 func Test重连退避在连上后回落(t *testing.T) {
-	srv, kick := fakeRelay(t)
+	srv := closeOnConnectRelay(t)
 	cfg := Defaults()
 	cfg.RelayURL = "ws" + strings.TrimPrefix(srv.URL, "http")
 	cfg.DeviceID = "dev-1"
@@ -222,21 +248,12 @@ func Test重连退避在连上后回落(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go c.Run(ctx)
-	select {
-	case <-c.Ready():
-	case <-time.After(15 * time.Second):
-		t.Fatal("首次连接失败")
-	}
-	deadline := time.Now().Add(15 * time.Second)
-	for i := 0; i < 6; i++ {
-		before := statInt(c, "connects")
-		kick()
-		for statInt(c, "connects") <= before {
-			if time.Now().After(deadline) {
-				t.Fatalf("第 %d 次重连退避未回落（连上后应重置为 1 秒）", i+1)
-			}
-			time.Sleep(20 * time.Millisecond)
+	deadline := time.Now().Add(12 * time.Second)
+	for statInt(c, "connects") < 6 {
+		if time.Now().After(deadline) {
+			t.Fatalf("6 次重连未在 12 秒内完成（connects=%d），退避可能未回落", statInt(c, "connects"))
 		}
+		time.Sleep(20 * time.Millisecond)
 	}
 }
 
