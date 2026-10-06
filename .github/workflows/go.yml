@@ -84,6 +84,16 @@ jobs:
           for f in /tmp/deps-install.log /tmp/build-ui.log /tmp/vet.log \
                    /tmp/staticcheck.log /tmp/race.log /tmp/skipcheck.log; do
             [ -s "$f" ] || continue
+            # 先摘「失败用例」行：只给日志尾部时，失败的包可能在窗口之外，
+            # 公开注解里就看不到到底是哪条用例挂了。
+            if [ "$f" = /tmp/race.log ] || [ "$f" = /tmp/skipcheck.log ]; then
+              fails=$(grep -nE '^(--- )?FAIL|DATA RACE|^panic' "$f" | head -20 || true)
+              if [ -n "$fails" ]; then
+                echo "=== $f（失败行）" >> /tmp/diag.txt
+                echo "$fails" >> /tmp/diag.txt
+                echo >> /tmp/diag.txt
+              fi
+            fi
             echo "=== $f（尾部）" >> /tmp/diag.txt
             tail -c 500 "$f" >> /tmp/diag.txt
             echo >> /tmp/diag.txt
