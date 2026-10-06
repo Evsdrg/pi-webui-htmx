@@ -265,6 +265,10 @@ kbd { font-size:10px; color:var(--text-dim); margin-left:auto; }
 .composer-actions .select-label select:hover { background:var(--bg-hover); }
 .composer-actions .select-label select:disabled { cursor:not-allowed; }
 .ext-widgets { font-size:12px; max-height:160px; overflow:auto; }
+/* 目标徽标：有聚焦目标时常驻输入栏上方，让用户一眼看出当前处于目标状态。
+   直角、细边框，与设置面板同一套形态；点击打开目标面板。 */
+.goal-badge { display:inline-flex; align-items:center; gap:6px; margin:0 0 6px; padding:3px 9px; border:1px solid var(--border); border-radius:0; background:var(--bg-panel); color:var(--text); cursor:pointer; font-size:11px; }
+.goal-badge:hover { border-color:var(--accent); color:var(--accent); }
 .ext-widget { white-space:pre-wrap; border:1px solid var(--border); padding:8px; margin:6px 0; border-radius:8px; }
 /* ── 新建会话：目录选择器（对齐 Pi Web 的 DirectoryPicker）── */
 .app-dialog.dir-dialog { flex-direction:column; width:min(520px,calc(100vw - 16px)); height:min(620px,calc(100dvh - 16px)); max-height:calc(100dvh - 16px); padding:0; overflow:hidden; }

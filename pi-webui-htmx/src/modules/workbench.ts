@@ -230,10 +230,9 @@ export class Workbench {
       void this.topbar().then((m) => m.changeToolPreset(this.host)).catch((err) => this.fail(err));
     }, { signal });
     el('title-form').addEventListener('submit', (event) => { event.preventDefault(); void this.topbar().then((m) => m.saveLocalTitle(this.host)).catch((err) => this.fail(err)); }, { signal });
-    for (const action of ['panel-info', 'panel-title', 'panel-system', 'panel-tools', 'panel-mc', 'panel-goal']) {
-      document.querySelector(`[data-action="${action}"]`)?.addEventListener('click', () => this.toggleTopPanel(action), { signal });
-      document.querySelector(`[data-action="${action}-close"]`)?.addEventListener('click', () => this.toggleTopPanel(action, false), { signal });
-    }
+    // 顶栏功能面板的开关统一走 onClick 里的 [data-action] 委托（见 action()）。
+    // 以前这里给每个顶栏按钮单独挂监听：那样只有文档里第一批带该 data-action
+    // 的元素能生效，片段里后插入的同类按钮（如输入栏上方的目标徽标）点了没反应。
     // 「完整历史」与 Pi Web 同义：新标签页阅读导出的 HTML。
     document.querySelector('[data-action="full-history"]')?.addEventListener('click', () => {
       void this.topbar().then((m) => m.openFullHistory(this.host)).catch((err) => this.fail(err));
@@ -573,6 +572,11 @@ export class Workbench {
     const filesPath = document.getElementById('files-path') as HTMLInputElement | null;
     if (filesPath) filesPath.value = cwd;
     window.htmx.trigger(document.body, 'files-refresh');
+    // 目标与工作区/会话绑定：切换会话时把当前 id 交给目标片段并刷新，
+    // 让输入栏上方的目标徽标立刻反映这个会话是否有聚焦目标。
+    const goalSession = document.getElementById('goal-session') as HTMLInputElement | null;
+    if (goalSession) goalSession.value = id;
+    window.htmx.trigger(document.body, 'goal-refresh');
     this.syncNewSessionButton();
     // 连上之后补一次：页面可能在 ?session= 之外打开，也可能一个会话都没选。
     // 没有 cwd 时列表保持空提示，那是对的——没有项目就没什么可列。
@@ -755,6 +759,8 @@ export class Workbench {
     if (this.run === 'idle' && el('turns').querySelector('[data-turn-id]')) this.live.clear();
     this.refreshSessions();
     await this.refreshUsage(this.scope.current$());
+    // 一轮结束：目标状态可能刚变化（创建/完成/暂停/新任务），刷新徽标与面板。
+    window.htmx.trigger(document.body, 'goal-refresh');
   }
   // gotoLeaf 查看指定分支。leafId 为空表示回到磁盘上可恢复的当前分支。
   // 这只是查看，不改 Pi 的状态；要真正确认一个分支仍然走「从此处分支」。
@@ -1053,6 +1059,13 @@ export class Workbench {
     if (command) { el<HTMLTextAreaElement>('prompt').value = `/${command.dataset.command} `; el('command-menu').hidden = true; el('prompt').focus(); return; }
   }
   private async action(action: string, button: HTMLElement): Promise<void> {
+    // 顶栏功能面板：开/关都走这一条委托。片段（目标徽标等）里后插入的
+    // 同类按钮因此也能生效。
+    if (action.startsWith('panel-')) {
+      const closing = action.endsWith('-close');
+      this.toggleTopPanel(closing ? action.slice(0, -'-close'.length) : action, closing ? false : undefined);
+      return;
+    }
     switch (action) {
       case 'new': await this.newSession(); break;
       case 'latest': this.bottom(); break;

@@ -23,7 +23,8 @@
     "catalog": "templates/catalog.html",
     "note": "templates/note.html",
     "_comment": "相对路径以 src/ 为基准；下划线开头的键是说明，不是模板",
-    "goal": "templates/goal.html"
+    "goal": "templates/goal.html",
+    "goal-badge": "templates/goal-badge.html"
   },
   "routes": {
     "shell": "/",

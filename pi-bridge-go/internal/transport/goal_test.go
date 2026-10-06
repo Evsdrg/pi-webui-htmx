@@ -90,3 +90,29 @@ func Test目标面板无目标时给出说明(t *testing.T) {
 		t.Fatalf("无目标时应给出可读说明：%s", rec.Body.String())
 	}
 }
+
+// 目标徽标（compact）：有聚焦目标时产出可点的徽标，无聚焦目标时为空，
+// 让输入栏保持干净。这是「不打开面板也能看出当前处于目标状态」的那条通道。
+func Test目标徽标只在聚焦时出现(t *testing.T) {
+	requireUI(t)
+	s, _, cwd, _, sessionDir := newTestServerTuned(t, 2_000_000_000)
+	writeGoalFixture(t, cwd, "g1", "active", "把仓库整理干净")
+	writeSessionWithFocus(t, sessionDir, "badge-sess", cwd, "g1")
+
+	rec := getUI(t, s, "/ui/goal?compact=1&sessionId=badge-sess")
+	if rec.Code != 200 {
+		t.Fatalf("状态码 %d", rec.Code)
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, "goal-badge") || !strings.Contains(body, "进行中") || !strings.Contains(body, "data-action=\"panel-goal\"") {
+		t.Fatalf("聚焦目标时徽标应可见且可点：%s", body)
+	}
+	// 未聚焦（会话里没有 pi-goal-focus）时徽标为空。
+	writeSessionFile(t, sessionDir, "unfocused-sess", cwd)
+	if got := getUI(t, s, "/ui/goal?compact=1&sessionId=unfocused-sess").Body.String(); strings.TrimSpace(got) != "" {
+		t.Fatalf("未聚焦时徽标应为空：%q", got)
+	}
+	if len(s.manager.List()) != 0 {
+		t.Fatalf("目标徽标不得启动工作进程: %+v", s.manager.List())
+	}
+}

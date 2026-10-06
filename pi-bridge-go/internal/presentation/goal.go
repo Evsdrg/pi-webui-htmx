@@ -219,3 +219,9 @@ func truncateRunes(text string, max int) string {
 func (r *Renderer) RenderGoal(panel GoalPanel) (string, error) {
 	return r.execute("goal.html", panel)
 }
+
+// RenderGoalBadge 渲染输入栏上方的目标徽标：只在有聚焦目标时产出内容，
+// 无聚焦目标时渲染为空，让输入栏保持干净。
+func (r *Renderer) RenderGoalBadge(panel GoalPanel) (string, error) {
+	return r.execute("goal-badge.html", panel)
+}

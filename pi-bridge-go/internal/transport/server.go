@@ -657,7 +657,7 @@ func (s *Server) serveUIFragments(w http.ResponseWriter, r *http.Request, encodi
 
 	case path == "/ui/goal":
 		return s.renderFragment(w, encoding, func() (string, error) {
-			return s.renderGoal(r.Context(), r.URL.Query().Get("sessionId"))
+			return s.renderGoal(r.Context(), r.URL.Query().Get("sessionId"), r.URL.Query().Get("compact") == "1")
 		})
 
 	case path == "/ui/stats":
@@ -1690,13 +1690,13 @@ func (s *Server) serveDirs(w http.ResponseWriter, r *http.Request, encoding pres
 //
 // 不启动 worker：会话的 cwd 从磁盘索引取（浏览历史不拉起 Pi 进程）。聚焦目标
 // 来自会话 JSONL 里的 pi-goal-focus 条目，读不到就按“未聚焦”展示。
-func (s *Server) renderGoal(ctx context.Context, sessionID string) (string, error) {
+func (s *Server) renderGoal(ctx context.Context, sessionID string, compact bool) (string, error) {
 	if sessionID == "" {
-		return s.ui.RenderGoal(presentation.GoalPanel{Notice: "缺少会话 ID。"})
+		return s.renderGoalOutput(compact, presentation.GoalPanel{Notice: "缺少会话 ID。"})
 	}
 	header, err := s.store.Find(ctx, sessionID)
 	if err != nil {
-		return s.ui.RenderGoal(presentation.GoalPanel{Notice: "读不到该会话，无法定位它的工作区。"})
+		return s.renderGoalOutput(compact, presentation.GoalPanel{Notice: "读不到该会话，无法定位它的工作区。"})
 	}
 	// 聚焦目标是会话级状态：从会话文件里取最后一次 pi-goal-focus。只读、尽力而为。
 	focusedID, focusRoot := "", ""
@@ -1711,7 +1711,16 @@ func (s *Server) renderGoal(ctx context.Context, sessionID string) (string, erro
 		root = goal.RootFor(header.Cwd, s.piConfig.AgentDir())
 	}
 	view := goal.Load(root, focusedID, goal.DefaultLedgerLimit)
-	return s.ui.RenderGoal(presentation.GoalPanelFrom(view))
+	return s.renderGoalOutput(compact, presentation.GoalPanelFrom(view))
+}
+
+// renderGoalOutput 按模式渲染：compact 是输入栏上方的徽标（无聚焦目标时为空），
+// 否则是完整面板。
+func (s *Server) renderGoalOutput(compact bool, panel presentation.GoalPanel) (string, error) {
+	if compact {
+		return s.ui.RenderGoalBadge(panel)
+	}
+	return s.ui.RenderGoal(panel)
 }
 
 func (s *Server) serveMagicContext(w http.ResponseWriter, r *http.Request, encoding presentation.Encoding) {

@@ -50,7 +50,7 @@ function mount() {
 <section data-models-panel=provider hidden></section><section data-models-panel=model hidden></section><section data-models-panel=json hidden></section><section data-models-panel=empty hidden></section>
 <button data-action=models-edit>编辑</button><button data-action=models-reload>重读</button><button data-action=models-save>保存</button><button data-action=models-discover>发现</button><button data-action=models-test>测试</button></dialog>`;
  for(const id of ['live','conn-state','connection-notice','session-state','session-title','session-cwd','session-list','session-count','turns','older-slot','chat-scroll','welcome','command-menu','ext-status-slot','ext-widgets-before','ext-widgets-after','ext-dialog-slot','usage','toast-root']) {const node=document.createElement('div');node.id=id;document.body.append(node);}
-{for(const id of ['search-query','system-session','tools-session','stats-session','branch-session','files-path','git-path','diff-path']){const node=document.createElement('input');node.type='hidden';node.id=id;document.body.append(node);}}
+{for(const id of ['search-query','system-session','tools-session','stats-session','branch-session','goal-session','files-path','git-path','diff-path']){const node=document.createElement('input');node.type='hidden';node.id=id;document.body.append(node);}}
  document.body.insertAdjacentHTML('beforeend', readFileSync('src/templates/shell.html', 'utf8').match(/<template id="thinking-row-template">[\s\S]*?<\/template>/)![0]);
  document.body.dataset.sessionId='s1';
  Object.defineProperty(HTMLDialogElement.prototype,'showModal',{configurable:true,value:function(this:HTMLDialogElement){this.open=true;this.dataset.modal='true';}});
@@ -1190,6 +1190,15 @@ describe('顶栏功能面板', () => {
     // 提示词内容由桥渲染；前端只负责带上会话 ID 与触发刷新。
     expect((document.getElementById('system-session') as HTMLInputElement).value).toBe('s1');
     expect(vi.mocked(window.htmx.trigger).mock.calls.some((call) => call[1] === 'system-refresh')).toBe(true);
+  });
+
+  // 切换会话时必须把新会话 id 交给目标片段并刷新：目标徽标据此反映
+  // 「当前会话是否有聚焦目标」——用户不打开面板也能看出是否处于目标状态。
+  it('切换会话时刷新目标徽标并把会话 ID 交给片段', async () => {
+    workbench.selectSession('s9', '/tmp/a', 'A');
+    await waitFor(() => expect(document.body.dataset.sessionId).toBe('s9'));
+    expect((document.getElementById('goal-session') as HTMLInputElement).value).toBe('s9');
+    expect(vi.mocked(window.htmx.trigger).mock.calls.some((call) => call[1] === 'goal-refresh')).toBe(true);
   });
 });
 

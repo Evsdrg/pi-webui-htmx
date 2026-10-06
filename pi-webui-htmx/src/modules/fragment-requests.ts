@@ -1,7 +1,7 @@
 // HTTP片段的请求归属。守卫在HX响应头和OOB处理之前执行。
 // xhr保留发起时的快照，不能拿“最新请求的epoch”冒充旧xhr的epoch。
 export function mountFragmentRequests(sessionEpoch: () => number, signal: AbortSignal): () => void {
-  const scoped = new Set(['turns', 'older-slot', 'stats-body', 'system-body', 'tools-body', 'goal-body', 'branch-body', 'ext-dialog-slot', 'model-select', 'file-list', 'git-status', 'git-diff']);
+  const scoped = new Set(['turns', 'older-slot', 'stats-body', 'system-body', 'tools-body', 'goal-body', 'goal-badge', 'branch-body', 'ext-dialog-slot', 'model-select', 'file-list', 'git-status', 'git-diff']);
   const active = new Map<HTMLElement, XMLHttpRequest>();
   const owners = new WeakMap<XMLHttpRequest, { target: HTMLElement; epoch: number; revision: string | undefined; sessionScoped: boolean }>();
   document.addEventListener('htmx:beforeRequest', (event) => {

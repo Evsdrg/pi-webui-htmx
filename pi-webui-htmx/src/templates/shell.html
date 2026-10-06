@@ -163,6 +163,7 @@
     </div>
     <button id="jump-latest" class="btn jump-latest" data-action="latest" hidden>↓ 回到最新</button>
     <div class="composer-wrap">
+      <div id="goal-badge" hx-get="ui/goal?compact=1" hx-trigger="goal-refresh from:body" hx-include="#goal-session" hx-swap="innerHTML"></div>
       <div id="ext-widgets-before" class="ext-widgets"></div>
       <form id="composer" autocomplete="off">
         <div id="attachments" class="attachments" hidden></div>

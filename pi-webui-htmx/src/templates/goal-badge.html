@@ -1,0 +1,4 @@
+{{/* 目标徽标：只在「有聚焦目标」时出现，让用户不打开面板也能一眼看出当前处于目标状态。
+     无聚焦目标时渲染为空——「未聚焦但有进行中目标」的提示由插件自己的 setStatus 承担
+     （桥已汉化，落在输入栏状态行上）。点击打开目标面板。 */}}
+{{if .Focused}}<button type="button" class="goal-badge" data-action="panel-goal" title="打开目标面板"><span aria-hidden="true">◎</span> 目标 {{.Focused.StatusLabel}} · {{.Focused.TasksDone}}/{{.Focused.TasksTotal}}{{if .Focused.CurrentTask}} · {{.Focused.CurrentTask}}{{end}}</button>{{end}}
