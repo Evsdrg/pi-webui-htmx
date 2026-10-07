@@ -73,7 +73,11 @@ go run ./cmd/pi-bridge \
 - `--pi`、额外运行参数由本机运维配置，不接受网页选择。
 - `--state-dir` 保存桥状态、隔离会话和临时资源；长期使用不要放 `/tmp`。
 - `--agent-dir` 可指定 Pi 配置；默认隔离目录避免自动使用真实用户配置。共享生产会话目录不能解决与外部 CLI 同时写的问题。
-- 扩展默认关闭；显式开启 `--extensions` 也不等于授权全部项目执行，更不提供沙箱。
+- 扩展默认关闭；显式开启 `--extensions` 也不等于授权全部项目执行，更不提供沙箱。**启动守卫**：
+  agent 目录里已配插件（`extensions/*.ts|js` 或 `settings.json` 的 `packages`）却没开
+  `--extensions` 时，桥拒绝启动并报出数量——不再静默地不带插件运行；确要让某实例不带插件
+  时显式加 `--no-extensions`。systemd 部署把公共参数（含 `--extensions`）集中在一处启动脚本里，
+  避免两个 unit 各写一遍、改一处漏一处。
 - 不配置 `--ui-dir` 时只提供 API；配置后必须有模板和 Vite 产物，没有内嵌/CDN 兜底。UI rebuild 后重启桥，确保模板、manifest 与哈希资源一致。
 
 ### 受管部署（systemd）

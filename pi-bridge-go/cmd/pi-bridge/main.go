@@ -51,6 +51,7 @@ func serve() error {
 	stateDir := flag.String("state-dir", filepath.Join(cache, "pi-bridge-go"), "桥自有的运行目录")
 	agentDir := flag.String("agent-dir", "", "Pi 配置目录，缺省使用隔离的 state-dir/agent")
 	extensions := flag.Bool("extensions", false, "加载 Pi 已配置资源；项目信任仍保持拒绝")
+	noExtensions := flag.Bool("no-extensions", false, "确认本实例**有意**不加载扩展（agent-dir 已配插件时用于绕过启动守卫）")
 	uiDir := flag.String("ui-dir", "", "pi-webui-htmx 检出目录；为空则禁用 UI 层，只提供 JSON/WS API")
 	idle := flag.Duration("idle-timeout", 2*time.Minute, "空闲工作进程的回收时间")
 	maxWorkers := flag.Int("max-workers", 4, "活跃工作进程上限")
@@ -119,6 +120,10 @@ func serve() error {
 		if err = os.MkdirAll(dir, 0700); err != nil {
 			return err
 		}
+	}
+
+	if err := extensionsGuardError(*agentDir, *extensions, *noExtensions); err != nil {
+		return err
 	}
 
 	store, err := sessions.New(sessionDir, policy, sessions.DefaultLimits())
@@ -251,6 +256,24 @@ func serve() error {
 	ctx, stop := context.WithTimeout(context.Background(), 5*time.Second)
 	defer stop()
 	return server.Shutdown(ctx)
+}
+
+// extensionsGuardError 在「agent 目录已配插件却没开扩展」时返回错误。
+//
+// 桥默认不带插件启动（--extensions 是显式开关）；systemd 单元、文档示例、
+// 换机部署都容易漏传它，于是「装了插件却没生效」会静默发生。这里把这种
+// 漏配变成启动期硬失败：要么 --extensions 加载，要么 --no-extensions 明确
+// 表示本实例不要插件。只读本地文件，不联网。
+func extensionsGuardError(agentDir string, extensions, noExtensions bool) error {
+	if extensions || noExtensions {
+		return nil
+	}
+	exts, pkgs := management.NewConfig(agentDir, management.DefaultLimits()).ConfiguredPlugins()
+	if exts == 0 && pkgs == 0 {
+		return nil
+	}
+	return fmt.Errorf("agent 目录已配置插件（扩展 %d 个、包 %d 个）但未开扩展："+
+		"加 --extensions 加载，或加 --no-extensions 明确表示本实例不加载插件", exts, pkgs)
 }
 
 // privateOrOverlay 判断监听地址是否属于「不会路由到公网」的网段：

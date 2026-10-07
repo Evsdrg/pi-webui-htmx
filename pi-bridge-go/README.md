@@ -72,8 +72,9 @@ go run ./cmd/pi-bridge \
 所以第一次打开时模型列表是空的，发消息也会提示「当前会话没有可用模型」。二选一：
 
 ```bash
-# 方案一：让桥直接用你现有的 Pi 配置（含 API 凭据）
---agent-dir "$HOME/.pi/agent"
+# 方案一：让桥直接用你现有的 Pi 配置（含 API 凭据与已装插件）
+# 若该目录里装了插件，记得再加 --extensions，否则桥会拒绝启动并提示
+--agent-dir "$HOME/.pi/agent" --extensions
 
 # 方案二：保持隔离，只把模型配置拷进去
 mkdir -p "$HOME/.local/state/pi-bridge/agent"
@@ -96,12 +97,19 @@ cp "$HOME/.pi/agent/models.json" "$HOME/.local/state/pi-bridge/agent/"
 | `--ui-dir` | 空 | 前端目录；为空则只提供 API |
 | `--state-dir` | 缓存目录 | 桥自有运行目录 |
 | `--agent-dir` | `state-dir/agent` | Pi 配置目录；默认用隔离目录，不会自动读取你真实的 `~/.pi/agent` |
-| `--extensions` | 关 | 加载 Pi 已配置的扩展；即使开启，项目信任策略仍然保持拒绝 |
+| `--extensions` | 关 | 加载 Pi 已配置的扩展；即使开启，项目信任策略仍然保持拒绝。**agent 目录已配插件却没开此项时会拒绝启动**（见下） |
+| `--no-extensions` | 关 | 确认本实例有意不加载扩展；仅在 agent 目录已配插件、用于绕过上述启动守卫时才需要 |
 | `--idle-timeout` | `2m` | 空闲工作进程的回收时间 |
 | `--max-workers` / `--max-terminals` | 4 / 4 | 并发上限 |
 | `--relay` / `--device-id` / `--device-name` | — | 通过云端转发器接入（见下） |
 
 完整列表：`go run ./cmd/pi-bridge --help`。
+
+**关于扩展（插件）**：桥默认**不**加载插件。如果你的 `--agent-dir` 里已经配了
+插件（`extensions/*.ts|js`，或 `settings.json` 的 `packages`），却忘了加
+`--extensions`，桥会**直接拒绝启动**并报出「已配 N 个扩展、M 个包」——避免
+「明明装了插件却没生效」这类静默降级。确实想让某个实例不加载插件时，显式加
+`--no-extensions`。
 
 ## 范围：刻意不做的事
 

@@ -72,6 +72,25 @@ func isExtensionFile(name string) bool {
 	return strings.HasSuffix(name, ".ts") || strings.HasSuffix(name, ".js")
 }
 
+// ConfiguredPlugins 报告 agent 目录里「已配置、需要 Pi 加载才会生效」的资源：
+// 自动加载的扩展条目数与 settings.json 的 packages 条数。
+//
+// 它只读本地文件、不发网络请求，也不因文件缺失/损坏而报错（坏了就当 0）——
+// 供桥启动守卫判断「这个目录配了插件吗」：配了却没开 --extensions，就必须
+// 拒绝启动，而不是静默地不带插件跑（那是「明明装了插件却没生效」的根因）。
+func (c *Config) ConfiguredPlugins() (extensions, packages int) {
+	if files, err := c.Extensions(); err == nil {
+		extensions = len(files)
+	}
+	// settings.json 缺失或损坏都视为「没有 packages」，不阻断启动。
+	if doc, err := c.readObject("settings.json"); err == nil {
+		if list, ok := doc["packages"].([]any); ok {
+			packages = len(list)
+		}
+	}
+	return extensions, packages
+}
+
 // withinDir 判断 path 是否落在 dir 之内（含相等）。
 func withinDir(dir, path string) bool {
 	rel, err := filepath.Rel(dir, path)
