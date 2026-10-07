@@ -75,7 +75,7 @@ describe('实时思考增量', () => {
 });
 
 describe('实时过程摘要与时间线', () => {
-  it('工作段折叠时仍显示当前动作，思考预览每 1500ms 尾沿更新', () => {
+  it('工作段运行中展开，仍显示当前动作，思考预览每 1500ms 尾沿更新', () => {
     vi.useFakeTimers();
     const root = mount();
     const view = new LiveView(root);
@@ -85,7 +85,8 @@ describe('实时过程摘要与时间线', () => {
     const group = root.querySelector<HTMLDetailsElement>('.live-group')!;
     const status = group.querySelector('.live-status')!;
     const preview = group.querySelector('.live-preview')!;
-    expect(group.open).toBe(false);
+    // 运行中默认展开：工具/思考在回合进行时直接可见（ZCode 的「运行中摊开」）。
+    expect(group.open).toBe(true);
     expect(status.textContent).toContain('思考中');
     expect(preview.textContent).toContain('先检查目录');
     view.event({ type: 'message_update', assistantMessageEvent: { type: 'thinking_delta', delta: '，再读取配置' } });
@@ -201,6 +202,20 @@ describe('实时过程摘要与时间线', () => {
     expect(groups[1]!.textContent).toContain('edit');
     // 正文开始流式后活动信号交给光标：最新的工作段也停止扫光。
     expect(groups[1]!.hasAttribute('data-active')).toBe(false);
+    root.remove();
+  });
+
+  it('回合结算时收起运行中展开的工作段', () => {
+    stubSyncRaf();
+    const root = mount();
+    const view = new LiveView(root);
+    view.begin('任务');
+    view.event({ type: 'tool_execution_start', toolName: 'read' });
+    const group = root.querySelector<HTMLDetailsElement>('.live-group')!;
+    expect(group.open).toBe(true);
+    view.finish();
+    // 结算：收起，避免与随后折叠的历史过程组之间闪高度差。
+    expect(group.open).toBe(false);
     root.remove();
   });
 

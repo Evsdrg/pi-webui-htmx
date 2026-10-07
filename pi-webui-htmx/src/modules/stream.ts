@@ -174,6 +174,9 @@ export class LiveView {
     void this.renderLiveMarkdown();
     if (this.work) { this.work.group.removeAttribute('data-active'); this.status('处理结束，正在读取历史…'); }
     else this.showPending('处理结束，正在读取历史…');
+    // 回合结束：把运行中展开的工作段收起。历史渲染接管后过程组本就是折叠的，
+    // 这里先收一道，避免「展开的实时层 → 折叠的历史」之间闪一下高度差。
+    for (const group of this.flowEl().querySelectorAll<HTMLDetailsElement>('.live-group')) group.open = false;
     delete this.root.dataset.running;
   }
   clear(): void {
@@ -231,6 +234,10 @@ export class LiveView {
     const group = document.createElement('details');
     group.className = 'turn-process live-group';
     group.dataset.active = '';
+    // 运行中的工作段默认展开：工具调用、思考与中间正文在回合进行时应当直接
+    // 可见（对齐 ZCode「运行中摊开」）。结算时由 finish() 收起，历史渲染的
+    // 过程组接管（默认折叠）。
+    group.open = true;
     const summary = document.createElement('summary');
     summary.className = 'process-summary';
     const status = document.createElement('span'); status.className = 'live-status'; status.textContent = '正在处理…';

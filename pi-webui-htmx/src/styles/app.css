@@ -231,6 +231,9 @@ kbd { font-size:10px; color:var(--text-dim); margin-left:auto; }
 .process-summary > span:first-child { flex:0 0 auto; }
 .process-preview { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--text-dim); }
 .process-body { min-width:0; padding:8px 10px 6px; display:flex; flex-direction:column; gap:8px; }
+/* 过程组内的中间正文：模型在工具之间穿插的说明性文字。比最终正文小一档、颜色偏淡，
+   折叠后随过程组一起隐藏，展开时才看到——与真正的回答区分开。 */
+.process-text { margin:0; color:var(--text-muted); font-size:12px; }
 /* 实时工作段的项容器：工具行与思考 pre 按时间顺序排在一列。 */
 .live .live-items { display:flex; flex-direction:column; gap:8px; min-width:0; }
 /* 空思考（模型直接调工具）与空容器都不占位：flex 的 gap 会给空元素留缝。 */

@@ -296,9 +296,10 @@ func Test过程组内容转义且归属正确(t *testing.T) {
 	}
 }
 
-// 正文段必须渲染在两次工作之间，而不是全部拼到回合末尾。
-// 这是用户直接反馈过的问题：模型在工具调用之间穿插的说明全被放到最后。
-func Test正文段渲染在工作段之间(t *testing.T) {
+// 一个回合只出一个过程组：最终正文之前的工具、思考与**中间正文**全部折进去
+// （按时间顺序），最终正文留在组外始终可见。中间正文曾单独成气泡常驻显示，
+// 现在统一折进过程组——对齐 ZCode「运行中摊开、结算后整体收起」。
+func Test中间正文与工具折进同一过程组(t *testing.T) {
 	renderer := testRenderer(t)
 	html, err := renderer.RenderHistory("s1", sessions.Page{
 		Entries: []json.RawMessage{
@@ -314,24 +315,60 @@ func Test正文段渲染在工作段之间(t *testing.T) {
 		t.Fatalf("渲染失败：%v", err)
 	}
 	block := turnBlock(t, html, "u1")
-	posText1 := strings.Index(block, "先看看目录")
-	posWork1 := strings.Index(block, `<details class="turn-process"`)
-	if posText1 < 0 || posWork1 < 0 || posText1 > posWork1 {
-		t.Fatalf("第一段正文应在第一个工作段之前：%s", block)
+	if n := strings.Count(block, `class="turn-process"`); n != 1 {
+		t.Fatalf("一个回合只应有一个过程组，实际 %d 个：%s", n, block)
 	}
-	rest := block[posWork1+1:]
-	posWork2 := strings.Index(rest, `<details class="turn-process"`)
-	posText2 := strings.Index(rest, "再改配置")
-	posText3 := strings.Index(rest, "结论")
-	if posText2 < 0 || posWork2 < 0 || posText3 < 0 || !(posText2 < posWork2 && posWork2 < posText3) {
-		t.Fatalf("中间正文段应落在两个工作段之间、结论在最后：%s", block)
+	group := strings.Index(block, `class="turn-process"`)
+	answer := strings.Index(block, `class="turn-assistant"`)
+	if group < 0 || answer < 0 || group > answer {
+		t.Fatalf("过程组应在最终正文之前：%s", block)
 	}
-	// 两段工作各自的工具不能串段。
-	work1 := block[posWork1 : posWork1+1+posWork2]
-	if !strings.Contains(work1, "输出一") || strings.Contains(work1, "输出二") {
-		t.Fatalf("第一个工作段只应含 t1：%s", work1)
+	// 过程组内按时间顺序：中间正文1 → 工具1 → 中间正文2 → 工具2。
+	pos := group
+	for _, needle := range []string{"先看看目录", "输出一", "再改配置", "输出二"} {
+		i := strings.Index(block[pos:], needle)
+		if i < 0 {
+			t.Fatalf("过程组内缺少或顺序错误：%q：%s", needle, block)
+		}
+		pos += i + len(needle)
+		if pos > answer {
+			t.Fatalf("中间内容应全部落在过程组内（最终正文之前）：%s", block)
+		}
 	}
-	if !strings.Contains(rest[posWork2:], "输出二") {
-		t.Fatalf("第二个工作段应含 t2：%s", block)
+	// 最终正文在组外；过程组内不得出现它。
+	if !strings.Contains(block[answer:], "结论") {
+		t.Fatalf("最终正文应在过程组之外：%s", block)
+	}
+	if strings.Contains(block[group:answer], "结论") {
+		t.Fatalf("最终正文不应折进过程组：%s", block)
+	}
+	// 摘要把工具与中间正文都算进去。
+	if summary := processSummaryText(t, block); !strings.Contains(summary, "2 个工具") || !strings.Contains(summary, "2 段说明") {
+		t.Fatalf("过程组摘要应计入工具与说明段：%q", summary)
+	}
+}
+
+// 没有最终正文的回合（中断、纯工具）整个 Flow 都是过程：仍出一个过程组，
+// 不生成空的最终正文气泡。
+func Test无正文回合整个折进过程组(t *testing.T) {
+	renderer := testRenderer(t)
+	html, err := renderer.RenderHistory("s1", sessions.Page{
+		Entries: []json.RawMessage{
+			json.RawMessage(`{"type":"message","id":"u1","timestamp":"2026-09-21T13:33:00Z","message":{"role":"user","content":[{"type":"text","text":"跑"}]}}`),
+			json.RawMessage(`{"type":"message","id":"t1","timestamp":"2026-09-21T13:33:07Z","message":{"role":"toolResult","toolName":"read","content":[{"type":"text","text":"输出一"}]}}`),
+		},
+	})
+	if err != nil {
+		t.Fatalf("渲染失败：%v", err)
+	}
+	block := turnBlock(t, html, "u1")
+	if n := strings.Count(block, `class="turn-process"`); n != 1 {
+		t.Fatalf("无正文回合仍应出一个过程组，实际 %d：%s", n, block)
+	}
+	if strings.Contains(block, `class="turn-assistant"`) {
+		t.Fatalf("无正文回合不应有最终正文气泡：%s", block)
+	}
+	if !strings.Contains(block, "输出一") {
+		t.Fatalf("过程组应含工具：%s", block)
 	}
 }

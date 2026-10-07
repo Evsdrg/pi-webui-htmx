@@ -673,7 +673,18 @@ type Turn struct {
 	UserText   string
 	UserImages []ImageBlock
 	// Flow 是回合内按时间排序的块：正文段与工作段（工具/思考）交替。
+	// 它是构建期的事实来源（appendText/appendStep 在这里累积）；
+	// Process/Answer 是 finalize 之后再切出来的渲染字段。
 	Flow []FlowBlock
+	// Process 是折进过程组的块：最终正文之前的工具、思考与**中间正文**。
+	// Answer 是最终正文（及其之后的块），始终可见。
+	// 一个回合只出一个过程组，最终正文之前的全部内容——包括模型在工具之间
+	// 穿插的说明性正文——都折进去（对齐 ZCode：运行中摊开、结算后整体收起）。
+	Process []FlowBlock
+	Answer  []FlowBlock
+	// ProcessSummary 是过程组折叠时可见的标题行（工具/思考/失败计数 + 本段耗时）。
+	// 没有过程内容（纯正文回合）时为空，模板据此不渲染过程组。
+	ProcessSummary string
 	// Error 是回合内最后的错误提示（自动恢复成功后被清空）。
 	Error string
 	// Usage 汇总本回合全部 assistant 条目的 token 与费用。
@@ -907,16 +918,95 @@ func GroupTurns(entries []sessions.Entry) []Turn {
 			previous = e.Timestamp
 		}
 	}
-	// 工作段摘要统一在聚合完成后生成：它只依赖本段已收齐的项，
+	// 聚合完成后统一切分与生成摘要：它们只依赖已收齐的块，
 	// 逐条边收边算既更容易写错，也没有必要。
 	for i := range turns {
-		for j := range turns[i].Flow {
-			if turns[i].Flow[j].Kind == "work" {
-				turns[i].Flow[j].Summary = workSummary(&turns[i].Flow[j])
-			}
-		}
+		turns[i].finalize()
 	}
 	return turns
+}
+
+// finalize 把 Flow 切成「一个过程组」与「最终正文」两部分，并生成过程组摘要。
+//
+// 判据（对齐 ZCode 的回合形态）：最终正文 = Flow 中**最后一个正文块**；
+// 它之前的全部块（工具、思考、以及模型穿插在工具之间的说明性正文）合并成
+// 一个过程组折叠起来，它本身始终可见。历史只渲染结算后的回合，因此「最后一
+// 个正文块」就是模型的最终回答。没有正文块的回合（中断、纯工具）整个 Flow
+// 都是过程。
+func (t *Turn) finalize() {
+	// 保留每个工作段自身的摘要：它是「这一段做了什么」的紧凑事实，
+	// 供测试与后续可能的展开态复用；过程组标题另外由 processSummary 聚合。
+	for j := range t.Flow {
+		if t.Flow[j].Kind == "work" {
+			t.Flow[j].Summary = workSummary(&t.Flow[j])
+		}
+	}
+	last := -1
+	for i := range t.Flow {
+		if t.Flow[i].Kind == "text" {
+			last = i
+		}
+	}
+	if last < 0 {
+		t.Process = t.Flow
+	} else {
+		t.Process = t.Flow[:last]
+		t.Answer = t.Flow[last:]
+	}
+	t.ProcessSummary = processSummary(t.Process)
+}
+
+// processSummary 生成过程组折叠时的标题行：把过程组内所有工作段的工具/思考/
+// 失败计数与时间范围聚合到一行。措辞复用 workSummary 的规则（对齐 ZCode 的
+// 「已工作 X」）。过程组里只有中间正文、没有任何工作时，退回一句「N 段说明」，
+// 让折叠后仍知道里面是什么。
+func processSummary(blocks []FlowBlock) string {
+	tools, thinkings, failures, texts := 0, 0, 0, 0
+	var start, end time.Time
+	for i := range blocks {
+		b := &blocks[i]
+		if b.Kind == "text" {
+			texts++
+			continue
+		}
+		for _, item := range b.Items {
+			switch item.Kind {
+			case "tool":
+				tools++
+				if !item.Step.OK {
+					failures++
+				}
+			case "thinking":
+				thinkings++
+			}
+		}
+		if !b.start.IsZero() && (start.IsZero() || b.start.Before(start)) {
+			start = b.start
+		}
+		if b.end.After(end) {
+			end = b.end
+		}
+	}
+	if tools == 0 && thinkings == 0 && texts == 0 {
+		return ""
+	}
+	parts := []string{"已处理"}
+	if d := secondsBetween(start, end); d > 0 {
+		parts = []string{"已工作 " + formatWorkDuration(d)}
+	}
+	if tools > 0 {
+		parts = append(parts, fmt.Sprintf("%d 个工具", tools))
+	}
+	if thinkings > 0 {
+		parts = append(parts, fmt.Sprintf("%d 段思考", thinkings))
+	}
+	if texts > 0 {
+		parts = append(parts, fmt.Sprintf("%d 段说明", texts))
+	}
+	if failures > 0 {
+		parts = append(parts, fmt.Sprintf("%d 个失败", failures))
+	}
+	return strings.Join(parts, " · ")
 }
 
 // touch 用一个条目时间戳扩展回合的时间范围。零值时间戳不参与：

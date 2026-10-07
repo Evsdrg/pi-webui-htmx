@@ -11,15 +11,16 @@
 <article class="turn" data-turn-id="{{$turn.ID}}">
   {{range $turn.EntryIDs}}<span hidden data-search-entry-id="{{.}}"></span>{{end}}
   {{if or $turn.UserText $turn.UserImages}}<div class="turn-user"><div class="bubble">{{$turn.UserText}}{{range $turn.UserImages}}<div class="user-image-entry"><button class="lazy-block" data-lazy="user-image" data-entry-id="{{.EntryID}}" data-block-index="{{.BlockIndex}}">查看附带图片</button></div>{{end}}</div>{{if $turn.UserText}}<div class="turn-actions"><button class="icon-btn" data-action="edit-here" data-entry-id="{{$turn.ID}}" title="回到这条消息之前继续编辑：会话内跳转，原分支保留，发送后从该位置分叉出新内容">从此处编辑</button><button class="icon-btn" data-action="fork" data-entry-id="{{$turn.ID}}" title="以这条消息为终点新建一个会话文件，并把原文放进输入框以便改写；当前会话不受影响">新建会话</button></div>{{end}}</div>{{end}}
-  {{/* 回合内容按时间顺序渲染：工作段（工具/思考）折叠成组、正文段留在
-       它出现的位置。模型会在工具之间穿插说明性正文，曾经把全部正文拼成
-       一段放在回合末尾，时间线读起来是错的。纯正文回复没有工作段，
-       模板不会渲染空折叠组。 */}}
-  {{range $block := $turn.Flow}}{{if eq $block.Kind "work"}}
+  {{/* 一个回合只出一个过程组：最终正文之前的工具、思考与**中间正文**全部折进
+       去，默认折叠；最终正文留在组外始终可见。展开后组内仍按时间顺序排列
+       （工具/思考/正文块各自的位置不变）。纯正文回合没有过程内容，
+       ProcessSummary 为空、不渲染过程组。 */}}
+  {{if $turn.ProcessSummary}}
   <details class="turn-process" data-process-group>
-    <summary class="process-summary">{{$block.Summary}}</summary>
+    <summary class="process-summary">{{$turn.ProcessSummary}}</summary>
     <div class="process-body">
-    {{range $item := $block.Items}}{{if eq $item.Kind "tool"}}<details class="tool-call" data-ok="{{if $item.Step.OK}}true{{else}}false{{end}}" data-entry-id="{{$item.Step.EntryID}}">
+    {{range $block := $turn.Process}}{{if eq $block.Kind "work"}}
+      {{range $item := $block.Items}}{{if eq $item.Kind "tool"}}<details class="tool-call" data-ok="{{if $item.Step.OK}}true{{else}}false{{end}}" data-entry-id="{{$item.Step.EntryID}}">
       <summary>
         <span class="tool-name">{{if $item.Step.Name}}{{$item.Step.Name}}{{else}}{{$item.Step.Kind}}{{end}}</span>
         <span class="tool-preview">{{$item.Step.Preview}}</span>
@@ -28,14 +29,29 @@
       </summary>
       <pre class="tool-detail">{{$item.Step.Detail}}</pre>
       {{if and $item.Step.EntryID $item.Step.Images}}{{range $item.Step.Images}}<button class="lazy-block" data-lazy="tool-image" data-entry-id="{{$item.Step.EntryID}}" data-block-index="{{.}}">查看工具图片</button>{{end}}{{end}}
-    </details>{{else}}<details class="thinking-block">
+      </details>{{else}}<details class="thinking-block">
       <summary>
         <svg class="thinking-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9.5 2A5.5 5.5 0 0 0 4 7.5c0 1.7.78 3.21 2 4.21V14a1 1 0 0 0 1 1h5a1 1 0 0 0 1-1v-2.29c1.22-1 2-2.51 2-4.21A5.5 5.5 0 0 0 9.5 2z" /><line x1="7" y1="18" x2="12" y2="18" /><line x1="8" y1="21" x2="11" y2="21" /></svg>
         <span class="thinking-preview">思考</span>
         {{if $item.Thinking.Duration}}<span class="thinking-duration">· 持续了 {{workDuration $item.Thinking.Duration}}</span>{{end}}
       </summary>
       <div class="thinking-body"><button class="lazy-block" data-lazy="thinking" data-entry-id="{{$item.Thinking.EntryID}}" data-block-index="{{$item.Thinking.BlockIndex}}" hx-get="ui/sessions/{{$.SessionID}}/lazy?kind=thinking&amp;format=html&amp;entryId={{$item.Thinking.EntryID}}&amp;blockIndex={{$item.Thinking.BlockIndex}}" hx-target="this" hx-swap="outerHTML" hx-sync="this:drop" hx-disabled-elt="this">载入思考内容</button></div>
-    </details>{{end}}{{end}}
+      </details>{{end}}{{end}}
+    {{else}}<div class="bubble markdown process-text">{{$block.Text}}</div>{{end}}{{end}}
+    </div>
+  </details>
+  {{end}}
+  {{range $block := $turn.Answer}}{{if eq $block.Kind "work"}}
+  <details class="turn-process" data-process-group>
+    <summary class="process-summary">{{$block.Summary}}</summary>
+    <div class="process-body">
+    {{range $item := $block.Items}}{{if eq $item.Kind "tool"}}<details class="tool-call" data-ok="{{if $item.Step.OK}}true{{else}}false{{end}}" data-entry-id="{{$item.Step.EntryID}}">
+      <summary><span class="tool-name">{{if $item.Step.Name}}{{$item.Step.Name}}{{else}}{{$item.Step.Kind}}{{end}}</span><span class="tool-preview">{{$item.Step.Preview}}</span>{{if $item.Step.Duration}}<span class="tool-duration">{{workDuration $item.Step.Duration}}</span>{{end}}</summary>
+      <pre class="tool-detail">{{$item.Step.Detail}}</pre>
+      </details>{{else}}<details class="thinking-block">
+      <summary><span class="thinking-preview">思考</span>{{if $item.Thinking.Duration}}<span class="thinking-duration">· 持续了 {{workDuration $item.Thinking.Duration}}</span>{{end}}</summary>
+      <div class="thinking-body"><button class="lazy-block" data-lazy="thinking" data-entry-id="{{$item.Thinking.EntryID}}" data-block-index="{{$item.Thinking.BlockIndex}}" hx-get="ui/sessions/{{$.SessionID}}/lazy?kind=thinking&amp;format=html&amp;entryId={{$item.Thinking.EntryID}}&amp;blockIndex={{$item.Thinking.BlockIndex}}" hx-target="this" hx-swap="outerHTML" hx-sync="this:drop" hx-disabled-elt="this">载入思考内容</button></div>
+      </details>{{end}}{{end}}
     </div>
   </details>
   {{else}}
