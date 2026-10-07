@@ -38,6 +38,17 @@ for(const [name,relative] of Object.entries(manifest.templates??{})){
  ok('工具块字号只有一处声明');
 }
 
+// 消息滚动容器必须预留滚动条槽。经典（占位式）滚动条会随内容高度出现/消失，
+// 每次出现都从内容区夺走一条竖直槽、把整片文字挤窄并触发重排；切换会话（清空
+// 再填入）、翻页、流式增高都会让它来回切，肉眼就是「切会话时左右闪」。这条
+// 守卫挡住无意中删掉 scrollbar-gutter:stable 而让闪烁回归。
+{
+ const css=readFileSync(resolve(root,'src/styles/app.css'),'utf8');
+ const m=css.match(/\.chat-scroll\s*\{([^}]*)\}/);
+ if(!m||!/scrollbar-gutter\s*:\s*stable/.test(m[1]))fail('.chat-scroll 缺少 scrollbar-gutter:stable：滚动条出现/消失会改变内容宽度并引发整片重排，切换会话时会来回闪');
+ else ok('消息滚动容器预留滚动条槽（切会话不因滚动条重排）');
+}
+
 // 模板里的请求 URL 必须是相对的（B54）：云端形态下文档在
 // relay 的 `/d/{deviceId}/` 前缀下，根绝对路径会绕过设备前缀。
 // 允许的例外是以 `{{` 开头（由桥注入）或已带前缀的写法。

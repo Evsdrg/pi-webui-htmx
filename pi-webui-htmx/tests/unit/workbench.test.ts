@@ -801,6 +801,41 @@ describe('等待期间切换会话的归属', () => {
   });
 });
 
+describe('切换会话不塌缩视图（消除闪烁）', () => {
+  // 清空 #turns 会让内容高度骤降到 0、滚动条消失、scrollTop 被夹到 0，
+  // 随后历史填入又跳到底部——这一「塌缩到顶再落底」正是切换会话时的闪烁。
+  it('切到磁盘会话时保留旧内容，等 htmx 原子替换', async () => {
+    const turns = document.getElementById('turns')!;
+    turns.innerHTML = '<article class="turn" data-turn-id="a1">上一个会话</article>';
+    const older = document.getElementById('older-slot')!;
+    older.innerHTML = '<div class="older">加载更早</div>';
+    workbench.selectSession('s2', '/tmp/other', '另一个会话');
+    // 旧内容仍在：高度与滚动条不中断（htmx 响应到达时整体替换 #turns）。
+    expect(turns.children.length).toBe(1);
+    expect(older.children.length).toBe(1);
+    await waitFor(() => expect(vi.mocked(window.htmx.ajax).mock.calls.some((c) => String(c[1]).includes('ui/sessions/s2/history'))).toBe(true));
+  });
+
+  it('切到未落盘会话时清空旧内容', () => {
+    const turns = document.getElementById('turns')!;
+    turns.innerHTML = '<article class="turn" data-turn-id="a1">上一个会话</article>';
+    document.getElementById('older-slot')!.innerHTML = '<div class="older">加载更早</div>';
+    workbench.selectSession('s3', '/tmp/other', '新会话', true, '', false);
+    expect(turns.children.length).toBe(0);
+    expect(document.getElementById('older-slot')!.children.length).toBe(0);
+  });
+
+  it('历史请求失败时清掉残留的旧内容', () => {
+    const turns = document.getElementById('turns')!;
+    turns.innerHTML = '<article class="turn" data-turn-id="a1">上一个会话</article>';
+    document.dispatchEvent(new CustomEvent('htmx:responseError', {
+      bubbles: true,
+      detail: { xhr: { status: 500, responseURL: `${location.origin}/ui/sessions/s2/history`, responseText: '{}' } },
+    }));
+    expect(turns.children.length).toBe(0);
+  });
+});
+
 describe('附件按会话隔离', () => {
   // U01：selectSession 以前不清理全局附件数组，上一会话的图片
   // 会留在新会话里并被发送出去。

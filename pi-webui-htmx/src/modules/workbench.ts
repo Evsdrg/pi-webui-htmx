@@ -266,6 +266,8 @@ export class Workbench {
           this.diskSession = false;
           el('unsaved-branch').hidden = false;
           detail.shouldSwap = false;
+          // 会话未落盘：没有历史可显示，清掉切换时保留的上一个会话内容。
+          el('turns').replaceChildren(); el('older-slot').replaceChildren();
         }
       }
       if (detail.target?.id === 'ext-dialog-slot' && response.searchParams.get('sessionId') !== this.sessionId) detail.shouldSwap = false;
@@ -303,6 +305,8 @@ export class Workbench {
     }, { signal });
     document.addEventListener('htmx:responseError', (event) => {
       const xhr = (event as CustomEvent).detail?.xhr as XMLHttpRequest | undefined;
+      // 历史请求失败：清掉切换时保留的上一个会话内容，别让它挂在新会话名下。
+      if (xhr?.responseURL?.includes('/history')) { el('turns').replaceChildren(); el('older-slot').replaceChildren(); }
       if (xhr?.status === 401) { this.showLogin(); return; }
       if (xhr) { let message = `请求失败（${xhr.status}）`; try { message = text(record(record(JSON.parse(xhr.responseText)).error).message) || message; } catch { /* 保留状态码。 */ } this.fail(new Error(message)); }
     }, { signal });
@@ -538,7 +542,13 @@ export class Workbench {
     modelSelect.querySelectorAll('option[data-runtime-model]').forEach((option) => option.remove());
     this.renderModel();
     this.statuses.clear(); this.widgets.clear(); this.renderExtensions(); this.commands = [];
-    el('turns').replaceChildren(); el('older-slot').replaceChildren(); el('ext-dialog-slot').replaceChildren();
+    // 切到「会加载磁盘历史」的会话时**不同步清空 #turns**：清空会让内容高度骤降到 0，
+    // 滚动条随之消失、scrollTop 被夹到 0，随后历史填入又跳到底部——这一「塌缩到顶再
+    // 落底」正是切换会话时的闪烁。留着旧内容等 htmx 原子替换，高度与滚动条都不中断。
+    // 仅在没有历史可载（无会话 / 未落盘）时才清空；历史请求失败或服务端回「未落盘」
+    // 时会在对应分支补清，避免上一个会话的内容留在新会话名下。
+    el('ext-dialog-slot').replaceChildren();
+    if (!(id && this.diskSession)) { el('turns').replaceChildren(); el('older-slot').replaceChildren(); }
     el('history-scope').hidden = true; el('unsaved-branch').hidden = !id || persisted;
     // 编辑横幅属于上一个会话的叶子位置，切换后必须清掉。
     el('edit-scope').hidden = true;

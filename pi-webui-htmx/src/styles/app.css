@@ -38,14 +38,14 @@ a { color:var(--accent); }
 .sidebar { min-width:0; display:flex; flex-direction:column; background:var(--bg-panel); padding:18px 12px 10px; overflow:hidden; }
 /* 会话列表吃掉剩余高度，文件区按比例占一份（--files-ratio 由 workspace.ts 拖动写入，
    这里定义默认值并消费它）；可拖范围由 JS 按实测几何钳制，CSS 只管落地。 */
-#session-list { flex:1 1 0; min-height:60px; overflow-y:auto; }
+#session-list { flex:1 1 0; min-height:60px; overflow-y:auto; scrollbar-gutter:stable; }
 .sidebar-files { --files-ratio:0.45; flex:0 1 auto; height:calc(var(--files-ratio) * 100%); min-height:0; display:flex; flex-direction:column; overflow:hidden; }
 .sidebar-files.is-collapsed { height:auto; }
 .sidebar-files-head { display:flex; align-items:center; gap:4px; flex:0 0 auto; padding:6px 2px 4px; border-top:1px solid var(--border); }
 .sidebar-files-head .section-label { flex:0 0 auto; margin:0; }
 .sidebar-files-path { flex:1 1 auto; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--text-dim); font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:10px; }
 .sidebar-files-body { flex:1 1 auto; min-height:0; display:flex; flex-direction:column; overflow:hidden; }
-#file-list { flex:1 1 auto; min-height:0; overflow-y:auto; }
+#file-list { flex:1 1 auto; min-height:0; overflow-y:auto; scrollbar-gutter:stable; }
 .sidebar-splitter { flex:0 0 auto; height:6px; margin:2px 0; cursor:row-resize; background:transparent; touch-action:none; }
 .sidebar-splitter:hover,.sidebar-splitter:focus-visible { background:var(--accent); }
 /* 文件项：比右面板版更紧凑，侧栏宽度只有 260px 上下。 */
@@ -142,7 +142,17 @@ kbd { font-size:10px; color:var(--text-dim); margin-left:auto; }
 .state-offline::before { content:"○"; margin-right:4px; }
 /* ==== 消息流 ==================================================================== */
 /* 对话正文与输入栏共用同一条宽度基准，调整内容宽度时保持左右边界对齐。 */
-.chat-scroll { flex:1; min-height:0; overflow:auto; padding:24px max(20px,calc((100% - var(--chat-width))/2)); overflow-anchor:none; font-size:calc(13px + var(--chat-font-offset)); }
+/* scrollbar-gutter:stable 是这个滚动容器的关键不变量，别删：经典（占位式）
+   滚动条会随内容高度出现/消失，每次出现都从内容区夺走一条竖直槽，把整片
+   文字挤窄并触发重排——切换会话（清空再填入）、翻页、流式增高都会让它来回
+   切，肉眼就是「切会话时左右闪」。始终预留滚动条槽后内容宽度恒定，这种重排
+   整体消失。仅当滚动条是叠加式（不占位）时该属性才无副作用。 */
+.chat-scroll { flex:1; min-height:0; overflow:auto; scrollbar-gutter:stable; padding:24px max(20px,calc((100% - var(--chat-width))/2)); overflow-anchor:none; font-size:calc(13px + var(--chat-font-offset)); }
+/* 没有 scrollbar-gutter 的老浏览器：退回「始终显示竖直滚动条轨道」，同样固定
+   内容宽度、消除切换时的来回重排。现代浏览器不会走到这里。 */
+@supports not (scrollbar-gutter:stable) {
+  .chat-scroll, #session-list, #file-list { overflow-y:scroll; }
+}
 .welcome { display:flex; flex-direction:column; align-items:center; justify-content:center; min-height:100%; padding:48px 0; text-align:center; }
 .welcome-mark { font:68px Georgia,serif; color:var(--accent); opacity:.85; }
 .welcome h2 { margin:12px 0 8px; font-size:25px; font-weight:550; letter-spacing:-.5px; }
@@ -246,7 +256,7 @@ kbd { font-size:10px; color:var(--text-dim); margin-left:auto; }
 #composer { width:100%; max-width:var(--chat-width); margin:0 auto; position:relative; }
 .composer-input { display:flex; align-items:center; gap:8px; min-height:56px; padding:10px 10px 10px 14px; background:var(--bg); border:1px solid color-mix(in srgb,var(--border) 70%,transparent); border-radius:14px; box-shadow:0 1px 2px var(--shadow-color),0 8px 24px -12px var(--shadow-color); transition:border-color .15s,box-shadow .15s; }
 .composer-input:focus-within { border-color:color-mix(in srgb,var(--accent) 50%,var(--border)); }
-#prompt { display:block; flex:1; min-width:0; width:100%; min-height:24px; max-height:200px; field-sizing:content; resize:none; overflow:auto; border:0; outline:0; background:transparent; padding:0; font-size:14px; line-height:1.6; }
+#prompt { display:block; flex:1; min-width:0; width:100%; min-height:24px; max-height:200px; field-sizing:content; resize:none; overflow:auto; scrollbar-gutter:stable; border:0; outline:0; background:transparent; padding:0; font-size:14px; line-height:1.6; }
 #prompt:placeholder-shown { field-sizing:fixed; }
 #prompt::placeholder { color:var(--text-muted); opacity:.8; }
 #send-button { flex:none; align-self:flex-end; min-width:74px; min-height:34px; padding:7px 12px; border:0; border-radius:8px; font-size:13px; font-weight:600; line-height:20px; box-shadow:0 1px 3px color-mix(in srgb,var(--accent) 25%,transparent); }

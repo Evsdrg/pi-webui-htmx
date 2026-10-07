@@ -224,6 +224,16 @@ pnpm check        # 契约 + 对比度
   前端用 `src/lib/url.ts` 解析、`pushState` 保留 `location.pathname`。
   这样同一份产物适配本机、反代与 relay 设备前缀三种形态。
 - **`hx-disabled-elt` 对 `div` 无效**（`div` 不响应 `disabled`）；要防重复提交用 `hx-sync="this:drop"`。
+- **切换会话别同步清空 `#turns`，滚动容器要预留滚动条槽**：这是「切会话时来回闪」的两个成因，
+  一起去掉才算修好。
+  1. 清空 `#turns` 会让内容高度骤降到 0 → 滚动条消失 → `scrollTop` 被夹到 0，随后历史填入
+     又跳到底部；这一「塌缩到顶再落底」就是可见的闪烁。所以 `selectSession` 只在**没有历史可载**
+     （无会话 / 未落盘）时才清空，其余交给 htmx 原子替换 `#turns`；历史请求失败或服务端回
+     「未落盘」（204 `X-Session-Unsaved`）时在对应分支补清，别让上一个会话的内容挂在新会话名下。
+  2. 经典（占位式）滚动条出现/消失会改变内容宽度并触发整片文字重排。`.chat-scroll` 必须声明
+     `scrollbar-gutter:stable`（`#session-list` / `#file-list` / `#prompt` 同理），始终预留滚动条槽，
+     内容宽度恒定、重排消失；老浏览器由 `@supports not (scrollbar-gutter:stable)` 退回
+     `overflow-y:scroll`。契约脚本会拦 `.chat-scroll` 丢失该声明。
 - **思考/工具块懒加载**：正文由按钮 `hx-get` 拉取（`data-lazy="thinking"`），不要在前端缓存正文；
   Blob URL 与挂载作用域一起释放。
 - **首屏预算是硬约束**：新增依赖前先看 `ui-manifest.json` 的 `budgetNote`。
