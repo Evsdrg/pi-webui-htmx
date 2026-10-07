@@ -574,7 +574,6 @@ export class Workbench {
     }
     this.markSelected(); el('chat-scroll').dataset.resetScroll = 'true';
     if (id && this.diskSession) void this.refreshHistory(entryId);
-    if (this.bridge.connected) void this.reconcile().catch((err) => this.fail(err));
     this.workspace?.setCwd(cwd);
     // 文件树常驻侧栏，但 Workspace 是懒加载的：从没打开过右面板时它还不存在，
     // setCwd 便无从调用，树会停在空路径上（服务端回退到第一个根）。
@@ -590,6 +589,8 @@ export class Workbench {
     this.syncNewSessionButton();
     // 连上之后补一次：页面可能在 ?session= 之外打开，也可能一个会话都没选。
     // 没有 cwd 时列表保持空提示，那是对的——没有项目就没什么可列。
+    // 只在这里调一次 reconcile：它内部会拉 worker.list/state/扩展状态并发起若干
+    // 片段刷新，切会话时再叠加一次会重复交换同一批片段（多余的重排与请求）。
     void this.reconcile().then(() => {
       if (!(document.getElementById('files-path') as HTMLInputElement | null)?.value) {
         void this.bridge.request<{ roots: string[] }>('files.roots', undefined, '').then((data) => {
