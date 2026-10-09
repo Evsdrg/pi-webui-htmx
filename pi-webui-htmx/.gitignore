@@ -2,5 +2,9 @@ node_modules/
 # 依赖备份目录（曾用 node_modules.bak 留档，历史上误提交过；不再入库）
 node_modules.bak/
 dist/
+# 本地测试覆盖率、构建缓存与增量编译状态
+coverage/
+.vite/
+*.tsbuildinfo
 *.log
 .DS_Store
