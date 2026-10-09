@@ -65,12 +65,19 @@ describe('会话列表视图切换', () => {
     </div>`);
     return document.getElementById('view-switch')!;
   };
-  const pressed = () => [...document.querySelectorAll<HTMLElement>('.view-btn')]
+  const pressed = () => [...document.querySelectorAll<HTMLElement>('#view-switch .view-btn')]
     .filter((b) => b.getAttribute('aria-pressed') === 'true').map((b) => b.dataset.view);
   const carrier = () => (document.getElementById('session-view-value') as HTMLInputElement).value;
 
   beforeEach(() => {
     vi.stubGlobal('htmx', { trigger: vi.fn() });
+  });
+
+  it('主题按钮已完成异步初始化时会话选中态仍只统计本控件', async () => {
+    withSwitch();
+    unmount(); unmount = mountLayout();
+    await vi.waitFor(() => expect(document.querySelector('[data-theme-mode="system"]')?.getAttribute('aria-pressed')).toBe('true'));
+    expect(pressed()).toEqual(['timeline']);
   });
 
   it('没有偏好时选中时间线，且随请求发送的是 timeline', () => {
