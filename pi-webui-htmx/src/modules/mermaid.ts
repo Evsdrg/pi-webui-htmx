@@ -9,7 +9,7 @@ export function mountMermaid(root: ParentNode = document): void {
   const task = loading;
   serial = serial.then(async () => {
     const [module, { default: purify }] = await Promise.all([task, import('dompurify')]);
-    module.default.initialize({ startOnLoad:false, securityLevel:'strict', theme:document.documentElement.dataset.theme === 'dark' ? 'dark' : 'default', maxTextSize:50_000, flowchart:{htmlLabels:false} });
+    module.default.initialize({ startOnLoad:false, securityLevel:'strict', theme:document.documentElement.dataset.mode === 'dark' ? 'dark' : 'default', maxTextSize:50_000, flowchart:{htmlLabels:false} });
     for (const node of nodes) {
       if (!node.isConnected) continue;
       const source = node.textContent ?? '';

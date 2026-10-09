@@ -12,7 +12,7 @@
 {{/* 主题防闪烁：首帧之前按偏好解析出生效的调色板写进 data-theme / data-mode。
      这段必须内联在样式表之前——等模块加载再应用会先闪一帧默认亮色。
      键名与 layout.ts 的解析一致（pi-ui:theme-mode / theme-light / theme-dark）。 */}}
-<script>(function(){try{var r=function(k){return localStorage.getItem('pi-ui:'+k)||''};var L=['light','mist','rose','pine'],D=['dark','obsidian'];var l=r('theme-light'),d=r('theme-dark');l=L.indexOf(l)<0?'light':l;d=D.indexOf(d)<0?'dark':d;var m=r('theme-mode');var dark=m==='dark'||(m!=='light'&&matchMedia('(prefers-color-scheme: dark)').matches);var e=document.documentElement;e.dataset.theme=dark?d:l;e.dataset.mode=dark?'dark':'light'}catch(_){}})();</script>
+<script>(function(){try{var r=function(k){return localStorage.getItem('pi-ui:'+k)||''};var L=['light','mist','rose','pine'],D=['dark','obsidian','jade','plum'];var l=r('theme-light'),d=r('theme-dark');l=L.indexOf(l)<0?'light':l;d=D.indexOf(d)<0?'dark':d;var m=r('theme-mode');var dark=m==='dark'||(m!=='light'&&matchMedia('(prefers-color-scheme: dark)').matches);var e=document.documentElement;e.dataset.theme=dark?d:l;e.dataset.mode=dark?'dark':'light'}catch(_){}})();</script>
 {{/* 行内操作图标以 symbol 定义一次，会话列表片段用 <use> 引用：
      每行两个 svg 直接把 path 写进片段会让列表响应成倍变大。 */}}
 <svg width="0" height="0" style="position:absolute" aria-hidden="true"><symbol id="icon-pencil" viewBox="0 0 14 14"><path d="M9.6 2.2l2.2 2.2L5.2 11 2.6 11.4 3 8.8z" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/></symbol><symbol id="icon-trash" viewBox="0 0 14 14"><path d="M2.5 4h9M5.5 4V2.8h3V4M4.2 4l.6 7.4h4.4L9.8 4M6 6v3.6M8 6v3.6" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></symbol><symbol id="icon-sun" viewBox="0 0 14 14"><circle cx="7" cy="7" r="2.6" fill="none" stroke="currentColor" stroke-width="1.3"/><path d="M7 .9v1.8M7 11.3v1.8M.9 7h1.8M11.3 7h1.8M2.7 2.7l1.3 1.3M10 10l1.3 1.3M11.3 2.7L10 4M4 10l-1.3 1.3" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></symbol><symbol id="icon-moon" viewBox="0 0 14 14"><path d="M11.8 8.6A5 5 0 1 1 5.4 2.2a4.2 4.2 0 0 0 6.4 6.4z" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/></symbol></svg>
@@ -253,7 +253,7 @@
                 <div class="view-switch" role="group" aria-label="白天主题"><button type="button" class="view-btn" data-theme-pick="light">明亮</button><button type="button" class="view-btn" data-theme-pick="mist">雾蓝</button><button type="button" class="view-btn" data-theme-pick="rose">蔷薇</button><button type="button" class="view-btn" data-theme-pick="pine">松绿</button></div>
               </div>
               <div class="config-field"><label>夜间主题</label>
-                <div class="view-switch" role="group" aria-label="夜间主题"><button type="button" class="view-btn" data-theme-pick="dark">深夜蓝</button><button type="button" class="view-btn" data-theme-pick="obsidian">纯黑</button></div>
+                <div class="view-switch" role="group" aria-label="夜间主题"><button type="button" class="view-btn" data-theme-pick="dark">深夜蓝</button><button type="button" class="view-btn" data-theme-pick="obsidian">纯黑</button><button type="button" class="view-btn" data-theme-pick="jade">墨绿</button><button type="button" class="view-btn" data-theme-pick="plum">暮紫</button></div>
               </div>
             </div>
             <div class="config-group">

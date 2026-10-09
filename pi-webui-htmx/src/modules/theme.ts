@@ -7,7 +7,7 @@
 // tokens.css 里不再有媒体查询深色块（曾靠它实现「跟随系统」，两处入口
 // 必须逐行一致才不分叉；现在由这里的解析单点负责）。
 export const LIGHT_THEMES = ['light', 'mist', 'rose', 'pine'];
-export const DARK_THEMES = ['dark', 'obsidian'];
+export const DARK_THEMES = ['dark', 'obsidian', 'jade', 'plum'];
 export type ThemeMode = 'system' | 'light' | 'dark';
 export interface ThemeState { mode: ThemeMode; light: string; dark: string }
 function read(key: string): string { try { return localStorage.getItem(`pi-ui:${key}`) ?? ''; } catch { return ''; } }

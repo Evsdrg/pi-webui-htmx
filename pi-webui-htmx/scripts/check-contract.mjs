@@ -178,10 +178,10 @@ for(const [name,relative] of Object.entries(manifest.templates??{})){
  if(missing.size)fail(`这些 class 被模板引用，却既无样式定义、也未登记为钩子：${[...missing].sort().join('、')}（如确为纯钩子，请加入 check-contract.mjs 的 UNSTYLED_HOOKS 并写明理由）`);
  else ok('模板组件类都有样式定义或已登记为钩子');
 }
-// 主题契约（2026-10 模型）：主题 id 由 layout.ts 解析后写 data-theme，
+// 主题契约：主题 id 由 theme.ts 解析后写 data-theme，
 // 因此这里核对三件事，全部是「静默分叉」型故障的入口：
-//   1. layout.ts 声明的主题 id 与 tokens.css 的块一一对应（light 用 :root）；
-//   2. 深色主题（dark/obsidian）必须定义**完整**的深色调色板——漏一个令牌
+//   1. theme.ts 声明的主题 id 与 tokens.css 的块一一对应（light 用 :root）；
+//   2. 夜间主题必须定义完整调色板——漏一个令牌
 //      就会在深色页面上露出对应的浅色 fallback（例如工具块白底）；
 //   3. tokens.css 不得再出现 prefers-color-scheme 深色块：换主题的唯一入口
 //      是 JS 解析（system 模式由 matchMedia 监听重解析），两份入口会分叉。

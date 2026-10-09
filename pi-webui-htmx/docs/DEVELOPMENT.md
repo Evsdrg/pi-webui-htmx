@@ -128,18 +128,23 @@ WS 流式增量、textarea 自适应、xterm、未上传的本地附件缩略图
 而非片段交换），以及 `/ui/sessions/{id}/history` 的 `204 + X-Session-Unsaved`、`/ui/extensions/dialog/{id}`
 的 `204`（状态信号，调用方在 `htmx:beforeSwap` 里读）。
 
-## 样式：三张表
+## 样式与主题
 
 | 文件 | 职责 | 加载 |
 |---|---|---|
-| `src/styles/tokens.css` | **主题的唯一来源**：5 套调色板、派生令牌、语义色 | 首屏 |
+| `src/styles/tokens.css` | 8 套主题调色板、派生令牌、语义色 | 首屏 |
 | `src/styles/app.css` | 组件样式，分节；末尾是响应式与无障碍 | 首屏 |
 | `src/styles/code.css` | highlight.js 配色，颜色全走 `var(--code-*)` | 按需（由 `lib/hljs` 引入） |
+| `src/styles/models.css` | 模型配置专用样式 | 按需 |
+
+白天：明亮、雾蓝、蔷薇、松绿；夜间：深夜蓝、纯黑、墨绿、暮紫。
+两组分别保存选择，显示模式决定当前使用哪组；新增主题须同步 `theme.ts` 清单、
+`shell.html` 首帧脚本与按钮、调色板以及代码高亮选择器。`theme.test.ts` 验证首帧与运行时一致。
 
 `scripts/check-contract.mjs` 强制以下不变量（改坏会直接失败）：
 
-1. **主题色值只允许出现在 `tokens.css`**；`app.css` 出现十六进制色值即失败（与主题无关的叠加层除外）。
-2. 深色主题两个入口（`[data-theme=dark]` 与 `prefers-color-scheme`）的令牌集合必须**完全一致**。
+1. **主题色值只允许出现在 `tokens.css` 与 `code.css`**；`app.css` 出现具体主题色值即失败（与主题无关的叠加层除外）。
+2. 每个夜间主题必须有完整调色板与代码配色；不允许在 CSS 中另设 `prefers-color-scheme` 入口。
 3. `.hljs` 背景必须 `transparent`；不得引入 highlight.js 自带主题（浅色主题下会变成「浅框套深块」）。
 4. 会话详情的列模板**只能由分组规则**声明（`.stats-info/.stats-message/.stats-token .stats-rows`）；
    通用 `.stats-rows` 不得声明 `grid-template-columns`——特异性反转让 Token 数值被推到面板最右。
@@ -148,8 +153,10 @@ WS 流式增量、textarea 自适应、xterm、未上传的本地附件缩略图
 7. 模板里不得出现根绝对路径（`hx-*`/`href`/`src`）；不得含动态内联 `style`（CSP）。
 8. 自定义属性被引用前必须已定义。
 
-对比度由 `scripts/check-contrast.mjs` 校验：5 个主题 × 6 个文字色 × 2 种底色逐对算比值，
-低于 4.5:1 直接失败。
+对比度由 `scripts/check-contrast.mjs` 校验，主题清单直接读取 `theme.ts`，避免新增主题漏检。
+正文与两级弱文字覆盖页面、面板、悬停、选中、用户消息和代码块底色；语义色覆盖页面与面板；
+按钮和状态徽标的实底文字、每个代码高亮色也分别核算。目前 8 款主题共 304 对组合，
+低于 4.5:1 直接失败。此检查不代替浏览器对透明度、焦点与实际布局的验收。
 
 ## 安全与 CSP
 

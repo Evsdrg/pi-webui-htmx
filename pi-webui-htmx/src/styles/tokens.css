@@ -2,16 +2,14 @@
    每个主题只在这里定义一次调色板；app.css 不写任何主题色值。
 
    主题模型（2026-10 重构）：
-   - 显示模式（跟随系统/白天/夜间）与两侧各自的调色板都由 layout.ts 解析，
+   - 显示模式（跟随系统/白天/夜间）与两侧各自的调色板都由 theme.ts 解析，
      解析结果写进 <html> 的 data-theme（具体调色板）与 data-mode（明暗）。
    - 这里不再有 prefers-color-scheme 媒体查询：换主题只有一个入口
      （JS 写 data-theme），「跟随系统」在系统切换时由 JS 重新解析。
-   - 白天：light（:root 默认）/ mist / rose / pine；夜间：dark / obsidian。
-   - 深色主题（dark/obsidian）必须定义完整令牌集；浅色变体只需覆盖
-     与默认不同的令牌，其余继承 :root。
+   - 白天：light（:root 默认）/ mist / rose / pine；夜间：dark / obsidian / jade / plum。
+   - 夜间主题必须定义完整调色板；浅色变体只需覆盖差异，其余继承 :root。
 
-   改动色值后请跑 `pnpm check`：scripts/check-contrast.mjs 会把
-   每个文字色与两种底色逐对核算对比度。 */
+   改动色值后请跑 `pnpm check`：覆盖正文、弱文字、状态底色、按钮与代码高亮。 */
 
 
 /* 与具体主题无关的派生令牌。
@@ -46,11 +44,9 @@
   --bg-subtle: rgba(0, 0, 0, 0.03);
   --danger: #b3261e;
   --success: #166b2f;
-  /* 思考块展开时图标的启用色。Pi Web 用固定 #d4a017，这里收成令牌，
-     让五个主题都能各自取值（浅色主题下需要更深一档才够对比度）。 */
+  /* 思考图标的语义色由主题提供，不与强调色混用。 */
   --thinking-active: #d4a017;
-  /* 思考等级映射里每个等级的状态色点。Pi Web 用写死的七个色值，
-     这里收成令牌以便五个主题各自取值；点只是装饰，不参与文字对比度。 */
+  /* 思考等级状态点只是装饰，不参与文字对比度。 */
   --tl-off: #6b7280;
   --tl-minimal: #6b7280;
   --tl-low: #60a5fa;
@@ -58,8 +54,7 @@
   --tl-high: #f472b6;
   --tl-xhigh: #fb923c;
   --tl-max: #ef4444;
-  /* 工具块的半透明边框与底色。Pi Web 用写死的 rgba，这里收成令牌：
-     五个主题可以各自取值，app.css 也只剩变量引用。 */
+  /* 半透明边框与底色随各主题的成功、失败语义色派生。 */
   --success-border: color-mix(in srgb, var(--success) 25%, transparent);
   --success-bg: color-mix(in srgb, var(--success) 4%, transparent);
   --danger-border: color-mix(in srgb, var(--danger) 45%, transparent);
@@ -120,6 +115,52 @@
   --shadow-color: rgba(0, 0, 0, 0.6);
 }
 
+/* jade：墨绿底与浅青绿强调色；成功色仍独立使用语义绿。 */
+[data-theme="jade"] {
+  --bg: #101c17;
+  --bg-panel: #172720;
+  --bg-hover: #20352b;
+  --bg-selected: #294235;
+  --border: #365345;
+  --text: #e3eee7;
+  --text-muted: #aec5b7;
+  --text-dim: #95b1a0;
+  --accent: #80c7b3;
+  --accent-hover: #a4ddcb;
+  --accent-contrast: #0c1c16;
+  --user-bg: #20372d;
+  --assistant-bg: #101c17;
+  --tool-bg: #172720;
+  --bg-subtle: rgba(128, 199, 179, 0.08);
+  --danger: #ff7b72;
+  --success: #71ca86;
+  --thinking-active: #e8b93a;
+  --shadow-color: rgba(0, 0, 0, 0.45);
+}
+
+/* plum：低饱和紫灰底与淡紫强调色，提供不同于冷蓝与纯黑的夜间选择。 */
+[data-theme="plum"] {
+  --bg: #1b1621;
+  --bg-panel: #282030;
+  --bg-hover: #342a3f;
+  --bg-selected: #40344d;
+  --border: #54435f;
+  --text: #eee6f3;
+  --text-muted: #c8b6d3;
+  --text-dim: #b4a0c1;
+  --accent: #c9a0e5;
+  --accent-hover: #dfbff3;
+  --accent-contrast: #211329;
+  --user-bg: #35273f;
+  --assistant-bg: #1b1621;
+  --tool-bg: #282030;
+  --bg-subtle: rgba(201, 160, 229, 0.08);
+  --danger: #ff8c86;
+  --success: #76cc91;
+  --thinking-active: #e8b93a;
+  --shadow-color: rgba(0, 0, 0, 0.45);
+}
+
 /* mist */
 [data-theme="mist"] {
   --bg: #f4f6f8;
@@ -129,8 +170,8 @@
   --border: #c3d0dd;
   --text: #1c2430;
   --text-muted: #4d5a6b;
-  /* 次级文字在面板底上也要够 4.5:1（原 #5f6d80 在 #e8edf2 上 4.47）。 */
-  --text-dim: #5c6a7d;
+  /* 弱文字会用于悬停和选中行，必须在这两种更深底色上仍可读。 */
+  --text-dim: #526171;
   --accent: #2f6f9f;
   --accent-hover: #255a83;
   --accent-contrast: #ffffff;
@@ -152,7 +193,7 @@
   --border: #e0bfc7;
   --text: #2b1d21;
   --text-muted: #6b5058;
-  --text-dim: #7d616a;
+  --text-dim: #71565f;
   --accent: #b0486b;
   --accent-hover: #933a58;
   --accent-contrast: #ffffff;
@@ -174,7 +215,7 @@
   --border: #b3ccb9;
   --text: #17251c;
   --text-muted: #43584b;
-  --text-dim: #546a5c;
+  --text-dim: #4d6356;
   /* 强调色在面板底上要够 4.5:1（它会给 10–11px 的小字上色），
      原 #2f7a4f 在 #e6efe8 上只有 4.45，这里压深一档。 */
   --accent: #2d7449;

@@ -7,7 +7,7 @@ Pi Bridge 的 HTMX 工作台。模板、TypeScript 与样式归本仓；桥负�
 
 **目录：** 本目录是 HTMX/TypeScript 前端与 UI 包；相邻的 `../pi-bridge-go` 是 Go 桥，二者同属一个仓库。跨目录改动分别提交并同时通过，配套关系见[前端开发说明](docs/DEVELOPMENT.md)。
 
-**界面来源：** 界面设计与 CSS 样式移植自 [Pi Web](https://github.com/agegr/pi-web)（MIT，Copyright © 2026 agegr）——`src/styles/tokens.css` 的五套主题调色板（浅色/深色/雾蓝/蔷薇/松绿）与布局尺寸以它为基准。差异在渲染方式：本项目由 Go 模板在服务端出 HTML 片段，而不是浏览器端组件。声明与许可全文见 [THIRD-PARTY-NOTICES](../THIRD-PARTY-NOTICES.md)。
+**界面来源：** 界面设计与 CSS 样式移植自 [Pi Web](https://github.com/agegr/pi-web)（MIT，Copyright © 2026 agegr），布局与初始调色板以它为基准；本项目继续扩展并核算对比度，目前白天为明亮、雾蓝、蔷薇、松绿，夜间为深夜蓝、纯黑、墨绿、暮紫，各四款。差异在渲染方式：本项目由 Go 模板在服务端出 HTML 片段，而不是浏览器端组件。声明与许可全文见 [THIRD-PARTY-NOTICES](../THIRD-PARTY-NOTICES.md)。
 
 **状态：** 本地与云端（relay 设备前缀）两条链路都已端到端跑通。云端形态下外壳、片段、资源与 WS 全部经设备前缀转发，前端因路径全部相对化而无需知道自己跑在哪种形态。**未验收**：真实模型的长时流式、公网跨机 RTT 与丢包、小时级长稳。
 

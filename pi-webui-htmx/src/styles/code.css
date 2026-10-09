@@ -1,12 +1,12 @@
 /* 代码高亮（highlight.js）的配色。
    单独一个样式表、且只在 highlight 模块被加载时引入：没有代码块的会话
    不必为首屏带上这组规则（首屏预算很紧）。
-   配色由 tokens.css 的 --code-* 驱动，随主题切换。
+   配色由本文件的 --code-* 驱动，随主题切换。
    不引 highlight.js 自带主题文件的原因：它的 light/dark 两套是固定色值，
-   与我们的 6 个主题（尤其 mist/rose/pine）对不上。它还额外要求 .hljs
+   与我们的主题（尤其 mist/rose/pine）对不上。它还额外要求 .hljs
    自身不画背景——厂商主题会给 <code> 铺一块自己的底色，在我们 <pre> 的
    浅色底上就成了一大块深色方块（padding 处露浅色，形成「浅框套深块」）。
-   浅色取值在四个浅色主题的代码块底色上都不低于 4.5:1（脚本核算，最差 4.95）。 */
+   每个主题的代码色与 --tool-bg 由 check-contrast.mjs 核算，必须达到 4.5:1。 */
 :root {
   --code-comment: #5f6875;
   --code-keyword: #c9252d;
@@ -19,9 +19,8 @@
   --code-addition: #166b2f;
   --code-deletion: #b3261e;
 }
-/* 深色主题共用这套代码配色（dark 与 obsidian 都是深底；obsidian 纯黑，
-   这组值在纯黑上对比度更高，同样成立）。 */
-[data-theme="dark"], [data-theme="obsidian"] {
+/* 夜间主题共用高亮语义色，每种调色板的代码底色分别核算。 */
+[data-theme="dark"], [data-theme="obsidian"], [data-theme="jade"], [data-theme="plum"] {
   --code-comment: #8b949e;
   --code-keyword: #ff7b72;
   --code-entity: #d2a8ff;
