@@ -40,7 +40,7 @@ export function toggle(host: TopbarHost, target: string, force?: boolean): void 
   for (const id of PANELS) {
     const node = document.getElementById(id);
     if (node) node.hidden = id !== target || !open;
-    document.querySelector(`[aria-controls="${id}"]`)?.setAttribute('aria-expanded', String(id === target && open));
+    document.querySelector(`[data-action="${id}"][aria-controls="${id}"]`)?.setAttribute('aria-expanded', String(id === target && open));
   }
   if (!open) return;
   if (target === 'panel-info') {
