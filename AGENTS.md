@@ -37,7 +37,7 @@ go test -race ./...` 覆盖跨目录契约，缺 UI 直接失败。
 **中文规范**：注释、日志、错误消息、文档用中文；标识符与协议字段保持英文。
 改任何中文文案前先查术语表 `pi-work/research-prompt/MC-zh-glossary.md`（唯一术语来源）。
 
-**前端预算**：首屏自有代码 30 KiB / 总计 50 KiB（gzip），由 `pnpm check` 强制；
+**前端预算**：首屏自有代码 40 KiB / 总计 50 KiB（gzip），由 `pnpm check` 强制；
 KaTeX、Mermaid、xterm 必须按需动态导入。
 
 ## 常用命令

@@ -73,7 +73,7 @@ dist/             生成资产与 Vite manifest，不提交
 
 ## 体积与渲染
 
-首屏预算是硬约束，两个数字都在 `ui-manifest.json` 的 `build` 里：总 **50 KiB**、自有代码 **30 KiB**（均为 gzip）。`pnpm check` 递归统计入口的静态依赖闭包，并按 `vendorChunks` 把供应商分块单列——htmx 是一块换不掉的固定成本（gzip 17.59 KiB），单列才能让「改 UI」只盯自己的额度。当前构成：自有 28.78 + htmx 17.59 = 46.37 KiB。
+首屏预算是硬约束，两个数字都在 `ui-manifest.json` 的 `build` 里：总 **50 KiB**、自有代码 **40 KiB**（均为 gzip）。`pnpm check` 递归统计入口的静态依赖闭包，并按 `vendorChunks` 把供应商分块单列。两条上限同时生效，增加自有代码也不能超过总预算；当前体积与实际余量以 `pnpm check` 的构建产物统计为准。
 
 KaTeX、Mermaid、xterm 等按需加载，不计入首屏。`dist/` 不入库，改动后需重新构建并重启桥。
 

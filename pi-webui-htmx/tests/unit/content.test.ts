@@ -17,5 +17,7 @@ it('重复挂载不重新解析已有 Markdown', async () => {
 it('通知刷屏时节点和计时器均保持四个', () => {
   vi.useFakeTimers(); for (let i=0;i<200;i++) showToast('<script>正文</script>');
   expect(document.querySelectorAll('.toast')).toHaveLength(4); expect(document.querySelector('script')).toBeNull(); expect(vi.getTimerCount()).toBe(4);
-  vi.advanceTimersByTime(6001); expect(document.querySelectorAll('.toast')).toHaveLength(0); expect(vi.getTimerCount()).toBe(0);
+  vi.advanceTimersByTime(6001); // 到期先进入退场（等 CSS 动画），节点仍在、计时器换成退场兜底
+  expect(document.querySelectorAll('.toast')).toHaveLength(4); expect(vi.getTimerCount()).toBe(4);
+  vi.advanceTimersByTime(150); expect(document.querySelectorAll('.toast')).toHaveLength(0); expect(vi.getTimerCount()).toBe(0);
 });

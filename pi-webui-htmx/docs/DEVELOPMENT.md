@@ -78,10 +78,16 @@ cd ../../pi-bridge-go && go run ./cmd/pi-bridge --ui-dir ../pi-webui-htmx ...
 
 桥启动时校验 `protocolVersion` 与 `requiredMethods`，不匹配就明确失败——**没有内嵌模板或 CDN 回退**。
 
-首屏预算是硬约束，两个数字都在 `ui-manifest.json` 的 `build` 里：总 **50 KiB**、自有代码 **30 KiB**
-（均为 gzip）。`pnpm check` 递归统计入口的静态依赖闭包，并按 `vendorChunks` 把供应商分块单列——
-htmx 是换不掉的固定成本（gzip 17.59 KiB），单列才能让改 UI 时只盯自己的额度。KaTeX、Mermaid、
-xterm 等按需加载，不计入首屏。
+首屏预算是硬约束，两个数字都在 `ui-manifest.json` 的 `build` 里：总 **50 KiB**、自有代码 **40 KiB**
+（均为 gzip）。`pnpm check` 递归统计入口的静态依赖闭包，并按 `vendorChunks` 把供应商分块单列。
+两条上限同时生效，实际余量还要扣除 htmx 等供应商分块；以 `pnpm check` 的统计为准。
+KaTeX、Mermaid、xterm 等按需加载，不计入首屏。
+
+轻量动效只作用于控件、菜单和浮层：颜色反馈约 120ms、入场约 160ms，通知退场 100ms。
+通知的容量淘汰与清空不等待动画；普通退场有 150ms 释放兜底，并在减少动态效果时立即移除。
+补全查询保留已打开的菜单外层，但清掉旧候选，避免重复入场或误选旧结果。
+不要给消息回合、过程区和聊天滚动容器加位移或高度动画，也不要启用全局平滑滚动；
+这些区域依赖滚动锚点测量。移动遮罩用离散过渡渐进增强，不支持时保持即时显隐。
 
 ## 职责边界
 

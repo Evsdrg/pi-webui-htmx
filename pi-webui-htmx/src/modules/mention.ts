@@ -85,7 +85,12 @@ export class FileCompleter {
     window.clearTimeout(this.timer);
     if (!found) { this.hide(); return; }
     this.state = { active: true, start: found.start, query: found.query, items: [], selected: 0 };
-    this.render();
+    // 菜单已打开时保留外层，避免每次查询重播入场；旧候选不能继续被选中。
+    if (this.menu && !this.menu.hidden) {
+      const pending = document.createElement('p');
+      pending.className = 'empty-note'; pending.textContent = '正在查找文件…';
+      this.menu.replaceChildren(pending);
+    } else this.render();
     // 立即使在途请求失效：query 已变，但下一次 load 还要等 debounce。
     // 不在这里递增 seq，窗口内回来的旧候选会写进新菜单（U09）。
     this.seq++;

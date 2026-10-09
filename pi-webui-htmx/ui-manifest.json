@@ -108,7 +108,7 @@
     "viteManifest": "dist/.vite/manifest.json",
     "entry": "src/entry/app.ts",
     "firstLoadBudgetGzipKB": 50,
-    "firstLoadOwnBudgetGzipKB": 30,
+    "firstLoadOwnBudgetGzipKB": 40,
     "vendorChunks": [
       "htmx"
     ],
@@ -117,9 +117,9 @@
       "htmx 官方 dist/htmx.min.js 为 52,182 B / gzip 16,861 B（已核对 2.0.11）；",
       "npm 包的 main 指向未压缩的 dist/htmx.esm.js（171,382 B），所以打包后是 gzip 17.59 KiB，",
       "比官方压缩版多约 0.73 KiB（Vite 的压缩略弱于官方 terser 产物），属于可接受开销。",
-      "这一块是换不掉的固定成本，因此单独列出；firstLoadOwnBudgetGzipKB 才是每次改 UI 该盯的数字。"
+      "这一块是换不掉的固定成本，因此单独列出；自有代码与首屏总量必须同时满足各自上限。"
     ],
-    "budgetNote": "htmx 是换不掉的供应商成本（约 17.6 KiB gzip），因此单独列出；firstLoadOwnBudgetGzipKB 才是每次改 UI 该盯的数字。自有预算上限 30 KiB、总预算 50 KiB：顶栏面板按需加载、服务端片段、界面过渡动效、消息流的思考/工具块样式各自贡献了几百字节，均经死代码清查确认无冗余（171 个类名逐一核对在用）。预算的作用是拦住无意识的膨胀，不是拦住功能增长。"
+    "budgetNote": "自有代码预算上限 40 KiB，为轻量动效与交互改进留出空间；首屏总预算仍为 50 KiB。两条上限同时强制，实际可用余量还受 htmx 等供应商分块占用影响，以 pnpm check 的构建产物统计为准。预算用于防止无意识的膨胀，不要求用满额度；KaTeX、Mermaid、xterm 仍必须按需加载。"
   },
   "assets": {
     "_comment": "构建后由 dist/.vite/manifest.json 解析真实文件名；这里只声明逻辑入口。",

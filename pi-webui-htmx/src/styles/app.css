@@ -4,7 +4,7 @@
    主题色值全部在 tokens.css 里定义，这里只声明 color-scheme
    （它决定表单控件、滚动条等 UA 内建部件的明暗）。 */
 /* ==== 基础与主题（色值见 tokens.css） ================================================== */
-:root { color-scheme: light; --sidebar-width: 260px; --panel-width: 390px; }
+:root { color-scheme: light; --sidebar-width: 260px; --panel-width: 390px; --motion-fast:.12s; --motion-enter:.16s; }
 /* color-scheme 决定表单控件与滚动条的明暗，由 JS 解析后的 data-mode 驱动
    （tokens.css 的注释说明了为什么不再有媒体查询入口）。 */
 [data-mode=dark] { color-scheme: dark; }
@@ -97,8 +97,12 @@ kbd { font-size:10px; color:var(--text-dim); margin-left:auto; }
 .session-item:hover { background:var(--bg-hover); }
 .session-item.selected { background:var(--bg-selected); box-shadow:inset 2px 0 var(--accent); }
 .session-link { display:flex; flex-direction:column; flex:1 1 auto; min-width:0; padding:9px 10px; text-decoration:none; color:var(--text); }
-.session-ops { position:absolute; right:6px; top:50%; transform:translateY(-50%); display:none; gap:2px; padding:2px; border-radius:7px; background:var(--bg-panel); box-shadow:0 2px 8px var(--shadow-color); }
-.session-item:hover .session-ops, .session-item:focus-within .session-ops { display:flex; }
+.session-ops { position:absolute; right:6px; top:50%; transform:translateY(-50%); display:flex; opacity:0; visibility:hidden; pointer-events:none; transition:opacity var(--motion-fast) ease; gap:2px; padding:2px; border-radius:7px; background:var(--bg-panel); box-shadow:0 2px 8px var(--shadow-color); }
+.session-item:hover .session-ops, .session-item:focus-within .session-ops { opacity:1; visibility:visible; pointer-events:auto; }
+@media (hover:none) {
+  .session-ops { opacity:1; visibility:visible; pointer-events:auto; }
+  .session-link { padding-right:62px; }
+}
 .session-op { display:grid; place-items:center; width:22px; height:22px; border:0; border-radius:5px; background:transparent; color:var(--text-dim); cursor:pointer; }
 .session-op:hover { background:var(--bg-hover); color:var(--text); }
 .session-op-danger:hover { color:var(--danger); }
@@ -275,7 +279,7 @@ kbd { font-size:10px; color:var(--text-dim); margin-left:auto; }
 #abort-button { flex:0 0 auto; }
 .composer-actions .select-label { min-width:0; }
 .composer-actions .select-label select { field-sizing:content; max-width:280px; height:32px; border:0; border-radius:9px; background:transparent; padding:4px 8px; font-size:12px; cursor:pointer; }
-.composer-actions .select-label select:hover { background:var(--bg-hover); }
+.composer-actions .select-label select:hover:not(:disabled) { background:var(--bg-hover); }
 .composer-actions .select-label select:disabled { cursor:not-allowed; }
 .ext-widgets { font-size:12px; max-height:160px; overflow:auto; }
 /* 目标徽标：有聚焦目标时常驻输入栏上方，让用户一眼看出当前处于目标状态。
@@ -308,10 +312,13 @@ kbd { font-size:10px; color:var(--text-dim); margin-left:auto; }
 
 /* ==== 通用控件与对话框 =============================================================== */
 .btn,.icon-btn { display:inline-flex; align-items:center; justify-content:center; gap:6px; border:1px solid var(--border); border-radius:7px; background:var(--bg); color:var(--text); padding:6px 11px; font-size:12px; line-height:1.5; }
-.btn:hover,.icon-btn:hover { background:var(--bg-hover); }
+.btn:hover:not(:disabled),.icon-btn:hover:not(:disabled) { background:var(--bg-hover); }
+.btn,.icon-btn,.session-item,.session-op,.view-btn,.tool-item,.copy-btn,.goal-badge,.composer-actions .select-label select { transition:background-color var(--motion-fast) ease,border-color var(--motion-fast) ease,color var(--motion-fast) ease; }
+#send-button { transition:background-color var(--motion-fast) ease,color var(--motion-fast) ease,box-shadow var(--motion-fast) ease,transform .1s ease; }
+#send-button:not(:disabled):active { transform:scale(.98); }
 .icon-btn { padding:4px 7px; border-color:transparent; background:transparent; flex-shrink:0; min-width:28px; min-height:28px; }
 .btn-primary { background:var(--accent); border-color:var(--accent); color:var(--accent-contrast); }
-.btn-primary:hover { background:var(--accent-hover); }
+.btn-primary:hover:not(:disabled) { background:var(--accent-hover); }
 .btn-quiet { border:0; background:transparent; font-size:11px; padding:4px; }
 .form-error { color:var(--danger); }
 .muted,.empty-note { color:var(--text-muted); }
@@ -361,10 +368,15 @@ input,select,textarea { background:var(--bg); border:1px solid var(--border); bo
 .jump-latest { position:relative; flex:none; align-self:flex-end; z-index:1; margin:-42px 24px 8px 0; border-radius:20px; box-shadow:0 2px 12px #0002; }
 /* ==== 提示、命令菜单与富内容 ============================================================ */
 .toast-root { position:fixed; bottom:20px; right:20px; z-index:200; display:grid; gap:8px; max-width:min(400px,calc(100vw - 40px)); }
-.toast { padding:10px 16px; background:var(--bg-panel); border:1px solid var(--border); border-radius:8px; box-shadow:0 6px 24px #0002; font-size:12px; overflow-wrap:anywhere; }
+.toast { padding:10px 16px; background:var(--bg-panel); border:1px solid var(--border); border-radius:8px; box-shadow:0 6px 24px #0002; font-size:12px; overflow-wrap:anywhere; animation:toast-in var(--motion-enter) ease-out; }
+.toast[data-leaving] { pointer-events:none; animation:toast-exit .1s ease-in forwards; }
+@keyframes toast-in { from { opacity:0; transform:translateY(4px); } to { opacity:1; transform:none; } }
+@keyframes toast-exit { to { opacity:0; } }
 .toast-error { border-left:3px solid var(--danger); }
 .toast-success { border-left:3px solid var(--success); }
 .command-menu { position:absolute; left:8px; right:8px; bottom:100%; background:var(--bg-panel); border:1px solid var(--border); border-radius:8px; max-height:230px; overflow:auto; z-index:7; box-shadow:0 -4px 20px #0001; }
+.command-menu:not([hidden]) { animation:menu-in var(--motion-fast) ease-out; }
+@keyframes menu-in { from { opacity:0; transform:translateY(3px); } to { opacity:1; transform:none; } }
 .command-menu button { display:block; width:100%; text-align:left; border:0; padding:8px 12px; background:transparent; font-size:12px; }
 .command-menu button:hover { background:var(--bg-hover); }
 .markdown { white-space:normal; }
@@ -522,7 +534,7 @@ input,select,textarea { background:var(--bg); border:1px solid var(--border); bo
 .copy-btn { display:inline-flex; align-items:center; justify-content:center; width:22px; height:22px; padding:0; border:1px solid var(--border); border-radius:4px; background:transparent; color:var(--text-dim); }
 .copy-btn .check-icon { display:none; }
 .copy-btn.copied .copy-icon { display:none; }
-.copy-btn.copied .check-icon { display:block; }
+.copy-btn.copied .check-icon { display:block; animation:panel-fade-in var(--motion-fast) ease; }
 .copy-btn:hover { color:var(--accent); border-color:var(--accent); background:var(--bg-hover); }
 .copy-btn.copied { color:var(--accent); border-color:var(--accent); }
 /* 消息：标签 / 值 两列，行距 4px（Pi Web section() 的默认形态）。 */
@@ -690,7 +702,9 @@ input,select,textarea { background:var(--bg); border:1px solid var(--border); bo
   .sidebar-column { display:contents; }
   .sidebar { position:fixed; inset:0 auto 0 0; width:min(300px,85vw); z-index:40; transform:translateX(-100%); transition:transform .16s ease; visibility:visible !important; }
   .app-shell[data-mobile-sidebar=open] .sidebar { transform:translateX(0); }
-  .sidebar-backdrop:not([hidden]) { display:block; position:fixed; inset:0; background:#0006; z-index:30; border:0; }
+  .sidebar-backdrop { position:fixed; inset:0; background:#0006; z-index:30; border:0; opacity:0; pointer-events:none; transition:opacity var(--motion-enter) ease,display var(--motion-enter) allow-discrete; }
+  .sidebar-backdrop:not([hidden]) { display:block; opacity:1; pointer-events:auto; }
+  @starting-style { .sidebar-backdrop:not([hidden]) { opacity:0; } }
   .mobile-only { display:inline-flex; margin-left:auto; }
   .topbar-btn { padding:0 8px; gap:0; font-size:11px; }
   .topbar-btn-label { display:none; }

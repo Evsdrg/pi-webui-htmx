@@ -84,6 +84,39 @@ describe('Enter 不得把半个查询提交出去', () => {
 });
 
 describe('补全请求的归属', () => {
+  it('已有候选时连续输入保留菜单容器，避免每次结果返回重播入场', async () => {
+    vi.useFakeTimers();
+    const input = document.createElement('textarea');
+    const menu = document.createElement('div');
+    menu.hidden = true;
+    const search = vi.fn().mockResolvedValue([{ path: 'README.md' }]);
+    const completer = new FileCompleter(input, menu, () => '/w', search);
+    try {
+      input.value = '@r'; input.setSelectionRange(2, 2);
+      completer.refresh();
+      expect(menu.hidden).toBe(true);
+      await vi.advanceTimersByTimeAsync(120);
+      expect(menu.hidden).toBe(false);
+      input.value = '@re'; input.setSelectionRange(3, 3);
+      completer.refresh();
+      expect(menu.hidden).toBe(false);
+      expect(menu.textContent).toContain('正在查找');
+      expect(completer.choose()).toBe(false);
+      expect(menu.querySelector('button')).toBeNull();
+      await vi.advanceTimersByTimeAsync(120);
+      expect(menu.hidden).toBe(false);
+      expect(menu.textContent).toBe('README.md');
+      search.mockResolvedValue([]);
+      input.value = '@zzz'; input.setSelectionRange(4, 4);
+      completer.refresh();
+      await vi.advanceTimersByTimeAsync(120);
+      expect(menu.hidden).toBe(true);
+    } finally {
+      completer.hide();
+      vi.useRealTimers();
+    }
+  });
+
   // U09：refresh 只在新 load 开始时递增 seq，debounce 窗口内
   // 回来的旧候选仍会写进新菜单。
   it('防抖窗口内的旧结果被丢弃', async () => {
