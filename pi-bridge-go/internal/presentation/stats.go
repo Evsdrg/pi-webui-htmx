@@ -36,7 +36,7 @@ type StatsData struct {
 
 // StatsMeta 是与统计无关、但同属「这次会话是什么」的事实。
 //
-// 它包括模型/思考强度/工具预设：这些都是 Pi 与 worker 已经知道的值，
+// 它包括模型/思考强度等：这些都是 Pi 与 worker 已经知道的值，
 // 因此整个面板都能由桥渲染，前端不必再拼一遍表格。
 type StatsMeta struct {
 	Name     string
@@ -47,7 +47,6 @@ type StatsMeta struct {
 	Worktree string
 	Model    string
 	Thinking string
-	Preset   string
 	Status   string
 }
 
@@ -93,7 +92,7 @@ func infoSections(meta StatsMeta) []StatsSection {
 	// 顺序与文案对齐 Pi Web 的会话弹层：名称(可选)/会话文件/ID，
 	// 项目为项目目录/Git 分支/Worktree(可选)。
 	//
-	// 模型、思考强度、工具预设不在这里重复：输入栏已经各有一个控件，
+	// 模型、思考强度不在这里重复：输入栏已经各有一个控件，
 	// Pi Web 的弹层也不含它们。
 	session := make([]StatsField, 0, 3)
 	if meta.Name != "" {

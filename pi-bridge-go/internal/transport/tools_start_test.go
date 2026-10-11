@@ -47,48 +47,25 @@ func dial(t *testing.T, s *Server) (*websocket.Conn, func(any), func() map[strin
 	return conn, send, read
 }
 
-func TestSessionStart拒绝未知工具预设(t *testing.T) {
-	s, _, cwd := newTestServer(t)
-	_, send, read := dial(t, s)
-	send(map[string]any{"version": 1, "kind": "command", "requestId": "t1", "method": "session.start", "params": map[string]any{"cwd": cwd, "toolPreset": "admin"}})
-	m := read()
-	if m["ok"] != false {
-		t.Fatalf("未知工具预设应被拒绝: %v", m)
-	}
-	err, _ := m["error"].(map[string]any)
-	if code, _ := err["code"].(string); code != "invalid_params" {
-		t.Fatalf("错误码应为 invalid_params: %v", m)
-	}
-	if msg, _ := err["message"].(string); !strings.Contains(msg, "工具预设") {
-		t.Fatalf("错误信息应说明原因: %v", m)
-	}
-	// 拒绝后不能留下任何工作进程。
-	send(map[string]any{"version": 1, "kind": "command", "requestId": "t2", "method": "worker.list"})
-	list := read()
-	data, _ := list["data"].([]any)
-	if len(data) != 0 {
-		t.Fatalf("拒绝后不应留下工作进程: %v", list)
-	}
-}
-
-func TestSessionStart接受受支持的工具预设(t *testing.T) {
-	for _, preset := range []string{"", "default", "chat-only", "read-only", "full"} {
-		t.Run("预设 "+preset, func(t *testing.T) {
+// TestSessionStart忽略历史工具预设字段 工作进程现在始终启用全部工具。
+// 旧客户端仍会发 toolPreset，必须被容忍（不因 DisallowUnknownFields 报错），
+// 但该字段不再影响行为，启动响应也不再回带它。
+func TestSessionStart忽略历史工具预设字段(t *testing.T) {
+	for _, preset := range []string{"", "default", "chat-only", "read-only", "full", "admin"} {
+		t.Run("字段值 "+preset, func(t *testing.T) {
 			s, _, cwd := newTestServer(t)
 			_, send, read := dial(t, s)
 			send(map[string]any{"version": 1, "kind": "command", "requestId": "s1", "method": "session.start", "params": map[string]any{"cwd": cwd, "toolPreset": preset}})
 			m := read()
 			if m["ok"] != true {
-				t.Fatalf("预设 %q 应被接受: %v", preset, m)
+				t.Fatalf("历史字段 %q 应被忽略而非拒绝: %v", preset, m)
 			}
 			data, _ := m["data"].(map[string]any)
 			if id, _ := data["sessionId"].(string); id == "" {
 				t.Fatalf("启动响应缺少 sessionId: %v", m)
 			}
-			if preset != "" && preset != "default" {
-				if got, _ := data["toolPreset"].(string); got != preset {
-					t.Fatalf("启动响应应回带工具预设 %q，实际 %q", preset, got)
-				}
+			if _, exists := data["toolPreset"]; exists {
+				t.Fatalf("启动响应不应再回带 toolPreset: %v", m)
 			}
 		})
 	}

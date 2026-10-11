@@ -112,8 +112,6 @@ type Info struct {
 	Status    workerStatus `json:"status"`
 	Busy      bool         `json:"busy"`
 	Seq       uint64       `json:"seq"`
-	// ToolPreset 是本次启动使用的工具预设；空字符串表示 Pi 默认工具集。
-	ToolPreset string `json:"toolPreset,omitempty"`
 }
 
 // Manager 维护受管工作进程表，并负责空闲回收与整体关闭。
@@ -121,7 +119,7 @@ type Manager struct {
 	cfg    Config
 	ctx    context.Context
 	cancel context.CancelFunc
-	// mu 保护 workers、presets、closed 三个字段与它们的读写一致性。
+	// mu 保护 workers、closed 两个字段与它们的读写一致性。
 	// 只做短临界区（查表、增删、读标志），绝不在持锁期间启动进程或写盘——
 	// 拉起进程要几十到几百毫秒，持锁就等于挡住所有会话的查表。
 	mu sync.Mutex
@@ -130,9 +128,6 @@ type Manager struct {
 	// 启动路径先取 startMu，再在需要改表时取 mu；反之不成立。
 	startMu sync.Mutex
 	workers map[string]*Worker
-	// presets 记住每个会话最近一次启动使用的工具预设。空闲回收后再次
-	// 启动同一会话时沿用，避免用户的选择随进程重启 silently 丢失。
-	presets map[string]string
 	closed  bool
 	metrics MetricsSink
 }
@@ -150,7 +145,7 @@ type MetricsSink interface {
 // New 创建管理器并启动空闲回收协程。
 func New(cfg Config) *Manager {
 	ctx, cancel := context.WithCancel(context.Background())
-	m := &Manager{cfg: cfg, ctx: ctx, cancel: cancel, workers: map[string]*Worker{}, presets: map[string]string{}, metrics: cfg.Metrics}
+	m := &Manager{cfg: cfg, ctx: ctx, cancel: cancel, workers: map[string]*Worker{}, metrics: cfg.Metrics}
 	go m.reap()
 	return m
 }
@@ -216,16 +211,9 @@ func (m *Manager) List() []Info {
 	return out
 }
 
-// Start 显式启动或恢复一个工作进程，不指定工具预设（沿用 Pi 默认）。
-// 列表与历史查询不会走到这里；只有客户端明确要求启动时才会拉起 Pi。
+// Start 显式启动或恢复一个工作进程。列表与历史查询不会走到这里；
+// 只有客户端明确要求启动时才会拉起 Pi。工作进程始终启用全部工具。
 func (m *Manager) Start(ctx context.Context, id, cwd string) (*Worker, error) {
-	return m.StartWithPreset(ctx, id, cwd, "")
-}
-
-// StartWithPreset 显式启动或恢复一个工作进程，并按预设裁剪可用工具。
-// preset 为空表示沿用 Pi 默认工具集（read/bash/edit/write + 扩展工具）。
-// 已经在跑的 worker 直接复用：预设只在拉起进程时生效，改动预设需要先停止再启动。
-func (m *Manager) StartWithPreset(ctx context.Context, id, cwd, preset string) (*Worker, error) {
 	// 串行化冷启动，但不长期持有进程表锁，也不阻塞取消命令。
 	m.startMu.Lock()
 	defer m.startMu.Unlock()
@@ -246,15 +234,6 @@ func (m *Manager) StartWithPreset(ctx context.Context, id, cwd, preset string) (
 	if full {
 		return nil, protocol.E("limit_exceeded", "活跃工作进程数量已达上限")
 	}
-	if !ValidToolPreset(preset) {
-		return nil, protocol.E("invalid_params", "未知的工具预设")
-	}
-	// 调用方没带预设时沿用该会话上次的选择；新会话首次启动才是 Pi 默认。
-	if preset == "" && id != "" {
-		m.mu.Lock()
-		preset = m.presets[id]
-		m.mu.Unlock()
-	}
 	file := ""
 	if id != "" {
 		h, err := m.cfg.Store.Find(ctx, id)
@@ -271,7 +250,7 @@ func (m *Manager) StartWithPreset(ctx context.Context, id, cwd, preset string) (
 	if err != nil {
 		return nil, err
 	}
-	w, err := launch(m.cfg, real, file, preset)
+	w, err := launch(m.cfg, real, file)
 	if err != nil {
 		return nil, err
 	}
@@ -297,11 +276,6 @@ func (m *Manager) StartWithPreset(ctx context.Context, id, cwd, preset string) (
 		w.status = statusRunning
 	}
 	w.mu.Unlock()
-	m.mu.Lock()
-	if state.SessionID != "" {
-		m.presets[state.SessionID] = preset
-	}
-	m.mu.Unlock()
 	m.mu.Lock()
 	if m.closed {
 		m.mu.Unlock()
@@ -442,7 +416,6 @@ type Worker struct {
 	mu                                 sync.Mutex
 	id, epoch, cwd                     string
 	status                             workerStatus
-	preset                             string
 	cmd                                *exec.Cmd
 	client                             *pi.Client
 	done                               chan struct{}
@@ -488,7 +461,7 @@ func (w *Worker) busyLocked() bool {
 // Info 返回工作进程快照。
 func (w *Worker) Info() Info { w.mu.Lock(); defer w.mu.Unlock(); return w.infoLocked() }
 func (w *Worker) infoLocked() Info {
-	return Info{w.id, w.epoch, w.cmd.Process.Pid, w.cwd, w.status, w.busyLocked(), w.seq, w.preset}
+	return Info{w.id, w.epoch, w.cmd.Process.Pid, w.cwd, w.status, w.busyLocked(), w.seq}
 }
 
 // Replay 返回指定 epoch 内 afterSeq 之后的事件。
@@ -959,7 +932,7 @@ func (w *Worker) awaitStopped(deadline time.Time) error {
 
 // launch 按运维配置启动 Pi 子进程，并接管其 stdio。
 // 只接受本机配置参数，不把可执行文件路径或额外 CLI 参数暴露给网络请求。
-func launch(cfg Config, cwd, file, preset string) (*Worker, error) {
+func launch(cfg Config, cwd, file string) (*Worker, error) {
 	epoch := make([]byte, 16)
 	if _, err := rand.Read(epoch); err != nil {
 		return nil, err
@@ -978,28 +951,17 @@ func launch(cfg Config, cwd, file, preset string) (*Worker, error) {
 	if cfg.CaptureExt != "" {
 		args = append(args, "-e", cfg.CaptureExt)
 	}
-	// 桥内工具集扩展：read-only/full 的「启用哪些内置工具」经它施加，
-	// 因为 Pi 的 --tools 白名单会连带禁用扩展工具（见 tools.go）。
+	// 桥内工具集扩展：会话启动时把全部已注册工具设为激活（含默认关闭的
+	// grep/find/ls 与插件工具），因此不能用 Pi 的 --tools 白名单（见 toolsext.go）。
 	if cfg.ToolsExt != "" {
 		args = append(args, "-e", cfg.ToolsExt)
 	}
 	if !cfg.Extensions {
 		args = append(args, "--no-extensions", "--no-skills", "--no-prompt-templates", "--no-themes", "--no-context-files")
 	}
-	presetArgs, err := ToolPresetArgs(preset)
-	if err != nil {
-		return nil, err
-	}
-	args = append(args, presetArgs...)
 	cmd := exec.Command(cfg.Binary, args...)
 	cmd.Dir = cwd
 	env := append(append(os.Environ(), cfg.Env...), "PI_CODING_AGENT_DIR="+cfg.AgentDir, "PI_OFFLINE=1", "PI_TELEMETRY=0")
-	// 工具集扩展只在需要改默认工具集时才读这个变量：default/空预设不下发。
-	if cfg.ToolsExt != "" {
-		if names, ok := ActiveToolsForPreset(preset); ok {
-			env = append(env, "PI_WEBUI_ACTIVE_TOOLS="+joinToolNames(names))
-		}
-	}
 	navResultPath := ""
 	if cfg.NavigateExt != "" && cfg.NavigateResultDir != "" {
 		// 每个 worker 一份结果文件：并发 worker 共用一份会互相覆盖。
@@ -1053,7 +1015,6 @@ func launch(cfg Config, cwd, file, preset string) (*Worker, error) {
 		epoch:          hex.EncodeToString(epoch),
 		cwd:            cwd,
 		status:         statusStarting,
-		preset:         preset,
 		cmd:            cmd,
 		done:           make(chan struct{}),
 		lastActivity:   time.Now(),

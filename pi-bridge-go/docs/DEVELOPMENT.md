@@ -145,7 +145,7 @@ TimeoutStopSec=30
 | RPC 命令表没有树跳转 | `session.navigate` 走桥内扩展命令通道：桥随进程 `-e` 下发 `navigate-ext.mjs`（显式路径不受 `--no-extensions` 影响），`prompt("/pi-webui-navigate <id>")` 被扩展命令分流截获、不发给模型；RPC 的命令上下文不返回叶子，结果由扩展经 `PI_WEBUI_NAV_RESULT` 结果文件回传（每 worker 一份，变量名不能带 `PI_BRIDGE_` 前缀——`childenv.Filter` 会把它当凭据剥掉）。发命令前先核对 `get_commands` 已注册：prompt 对未知斜杠命令的兜底是**当普通消息发给模型**，会把命令文本写进会话正文 |
 | 快照里的系统提示词是基线 | `export_html` 抓到的是扩展改写**之前**的 `AgentState.systemPrompt`（Pi 每轮结束会复位）。真正下发给模型的那份由桥内 `capture-ext.mjs` 在 `before_provider_request` 落盘（按 `PI_WEBUI_CAPTURE_DIR/<sessionId>.json`）；`-e` 扩展运行在其它扩展**之前**，故同步读取会漏掉其后的改写，统一用 `setImmediate` 延迟读取、并在 `agent_settled` 兜底；**原地改写**（如 `zh-system-prompt.ts` 改同一对象的 `slot.set`）能被读到，但**返回新对象**（runner 会替换整个载荷引用）的扩展看不到——RPC 没有「所有处理器跑完后」的钩子，首位扩展无法观测这种替换。快照连同当时的会话 id 一起记，避免切换会话后把上一个会话的载荷写进新会话名下。MC 子代理是独立进程（`--no-session`），不会写进主会话的捕获文件 |
 | 插件仪表盘在 RPC 下到不了 | `internal/goal` 只读解析 pi-goal-x 的 `<cwd>/.pi/goals/*.md`（文件头 JSON 元数据 + 正文 objective）与 `goal_events.jsonl` 账本，自己渲染 `/ui/goal`；聚焦目标是会话级状态，从会话 JSONL 的 `pi-goal-focus` 条目取。理由同 magic-context：RPC 会忽略 `setWidget(key, factory)` 工厂函数。目标文件是插件自己的权威数据，桥**只读**、不写、不复制进桥存储。插件的 setStatus/notify/对话框文案在 `Worker.event` 转发前用 `goal.LocalizeUIRequest` 汉化（只改命中的 goal 文案，未命中原样放行） |
-| `--tools` 白名单连带禁用扩展工具 | Pi 的 `--tools` 是“只允许这些工具”的白名单，**同时作用于内置与扩展工具**；`--exclude-tools` 是 deny 列表，无法“额外启用”默认关闭的 `grep/find/ls`。因此 `read-only`/`full` 不用 CLI 开关，改由桥内 `tools-ext.mjs` 在会话启动时用 `pi.setActiveTools()` 施加：桥经 `PI_WEBUI_ACTIVE_TOOLS` 下发该预设的内置工具名单，扩展把它与当前**全部扩展工具**（`pi.getAllTools()` 里非内置名）求并集后重设，既启用 `grep/find/ls` 又不丢 magic-context / pi-goal-x 的工具。名单在 `ActiveToolsForPreset`；`chat-only` 仍走 CLI `--no-tools`（同时禁用内置与扩展），`default`/空预设不干预 |
+| 工作进程必须显式启用全部工具 | Pi 默认只激活 `read/bash/edit/write`，`grep/find/ls` 注册了但默认关闭；而 `--tools` 是同时作用于内置与扩展工具的白名单，用它启用 `grep/find/ls` 会连带禁用插件工具。因此桥随进程下发桥内 `tools-ext.mjs`，它在会话启动（及每轮开始前）用 `pi.setActiveTools()` 把 `pi.getAllTools()` 列出的**全部**工具一次性激活——不掺任何 CLI 工具开关，插件工具（magic-context / pi-goal-x）不会被误伤。扩展在 `session_start` / `before_agent_start` 各校正一次，覆盖插件晚注册工具的情形 |
 
 ## 模型配置与执行边界
 
@@ -221,9 +221,8 @@ bash 事件流上，而 `pi.Client.Call` 出于配对需要会过滤掉这个键
 - `FAKE_PI_CMDS_FILE`：把收到的每条命令原样追加写盘（JSONL）。
   配套读取用 `testutil.WaitForCommand`。断言真实载荷时优先用它，
   不要从桥侧代码「推」出载荷形状。
-- `FAKE_PI_ARGS_FILE`：写启动参数，用于验证工具预设翻译成 CLI 参数。
-- `FAKE_PI_ENV_FILE` + `FAKE_PI_ENV_KEYS`：按点名的键写回子进程收到的环境变量
-  （只写列出的键，不整体转储），用于断言 `PI_WEBUI_ACTIVE_TOOLS` 等工具集下发。
+- `FAKE_PI_ARGS_FILE`：写启动参数，用于断言启动参数里没有 CLI 工具开关、
+  桥内工具集扩展已随 `-e` 下发。
 - `FAKE_PI_SCRIPT` / `FAKE_PI_DELAY_METHOD` / `FAKE_PI_FORBID_ENV`：
   控制行为与启动环境断言。
 

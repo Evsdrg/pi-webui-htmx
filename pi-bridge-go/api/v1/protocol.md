@@ -92,7 +92,6 @@ WebSocket 的 origin 白名单与同一规则对齐，否则库层（`Origin.Hos
 | 进程与会话 | `worker.list`、`session.start`、`session.state`、`session.prompt`、`session.abort`、`session.stop`、`session.subscribe`、`session.unsubscribe` |
 | 排队 | `session.steer`、`session.follow_up`、`session.set_queue_mode` |
 | 模型 | `session.models`、`session.set_model`、`session.cycle_model`、`session.thinking_levels`、`session.set_thinking`、`session.cycle_thinking` |
-| 工具预设 | `session.start` 的 `toolPreset` 参数（`chat-only`/`read-only`/`default`/`full`），见第 5 节 |
 | 压缩与重试 | `session.compact`、`session.set_auto_compaction`、`session.set_auto_retry`、`session.abort_retry` |
 | 分支 | `session.new`、`session.switch`、`session.fork`、`session.clone`、`session.navigate`、`session.tree`、`session.fork_messages`、`session.entries` |
 | bash | `session.bash`、`session.abort_bash`、`session.bash_output` |
@@ -159,11 +158,9 @@ Pi 原事件通过 `pi.event` 传递并绑定基线版本；不是跨 agent 通�
 - 搜索与列表共享工作区筛选：两者都接受 `cwd`，取值必须是会话的真实 `cwd`（客户端不得自行拼前缀）。筛选在分页之前生效，`hasMore`/`offset` 都相对于筛选后的集合。单文件搜索上限与会话读取上限一致（256 MiB）——实测本机最大的会话 86.9 MB 在旧的 16 MiB 搜索上限下**完全搜不到**（命中 0），而它在列表里是能打开的；同一个文件不该在「能不能看」与「能不能搜」上得到两个答案。代价是罕见词需要读完所有候选：实测 130 MB 候选 652 ms，因此另有总字节预算（512 MiB）兜底，超预算时置 `truncated`。
 - 删除前先协调活跃 worker；trash 存在但删除失败时返回错误，不降级为永久删除。永久删除需要显式 force 选项。
 
-### 工具预设与思考强度
+### 工具与思考强度
 
-`session.start` 接受可选 `toolPreset`，取值 `chat-only`/`read-only`/`default`/`full`，未知值必须报 `invalid_params`，不静默回落默认。预设只在拉起 Pi 进程时通过 CLI 生效，运行中切换需要先 `session.stop` 再以新预设 `session.start`；`worker.list`/启动响应回带 `toolPreset`，管理器按会话记住最近一次选择，空闲回收后重启沿用。
-
-预设到 Pi CLI 的映射与 Pi Web 的 `lib/tool-presets.ts` 对齐，但**不**用 `--tools` 白名单：`default` 不加参数（Pi 默认 read/bash/edit/write，扩展工具可用），`chat-only` 用 `--no-tools`（同时禁用内置与扩展工具）。`read-only` 与 `full` 需要启用 Pi 默认关闭的 `grep/find/ls`，而 `--tools` 白名单会**连带禁用扩展工具**（magic-context / pi-goal-x 的工具会一起消失）、`--exclude-tools` 又无法“额外启用”工具，因此这两档改由**桥内工具集扩展**在会话启动时用 `pi.setActiveTools()` 施加：桥把预设的内置工具名单经 `PI_WEBUI_ACTIVE_TOOLS` 下发，扩展把名单与当前**全部扩展工具**求并集后重设。结果是只读与完整既能启用 `grep/find/ls`，又不丢插件工具，与 Pi Web 的语义一致。
+`session.start` 只接受 `cwd`。工作进程**始终启用全部工具**（全部内置工具，含默认关闭的 `grep/find/ls`，加上全部插件工具）：桥随进程下发桥内 `tools-ext.mjs`，它在会话启动时用 `pi.setActiveTools()` 把 `pi.getAllTools()` 列出的全部工具一次性激活——不走 `--tools` 白名单，因为那会连带禁用扩展工具。为兼容旧客户端，`toolPreset` 字段仍被接受但**已废弃、被忽略**；不因该字段报错，也不再回显。
 
 `session.thinking_levels` 返回当前模型支持的等级（来自 Pi 的 `get_available_thinking_levels`，无模型时仅 `off`）。UI 的「自动」不是 Pi 等级，而是“不发送 `session.set_thinking`”的语义，由 Pi 按 settings 的 `defaultThinkingLevel` 与模型能力决定；Pi 没有“未设置”读回字段，因此自动/等级选择只能按会话在本地记忆，界面必须标注这是本机偏好而非 Pi 实时状态。
 
@@ -239,7 +236,7 @@ GET /ui/tools?sessionId=ID      当前实际暴露给模型的工具：name/desc
   标成基线时提示用户「在本会话运行一次后会显示实际下发的版本」。
 - 回退路径按需导出一次到**自己的临时目录**（不是导出目录，避免内部产物被 `/ui/exports` 下载），
   读回后立即删除；结果按 `(sessionId, epoch)` 缓存 120 秒、上限 8 条。epoch 变化（fork/clone/切换身份）即失效。
-- `tools` 是**实际生效**的工具集合，受启动时的工具预设与扩展追加影响，不是"全部可用工具目录"。
+- `tools` 是**实际生效**的工具集合，受已装插件影响，不是"全部可用工具目录"。
 - 导出超过 64 MiB（`limit_exceeded`）或模板里找不到数据块时明确失败，不静默返回空面板。
 
 ### 顶栏面板的呈现方式
@@ -272,7 +269,7 @@ GET /ui/stats?sessionId=ID
 
 **未包含「活跃时长」**：Pi Web 由前端从内存里的会话条目按时间戳累加得出，而 `get_session_stats` 不含该值。桥要给出它就得完整扫一遍 JSONL，因此不在打开面板时重扫；需要时应改为在索引构建时累加。
 
-**顶栏面板没有标题行**：Pi Web 的这几个面板都是「内容直接铺满」，关闭靠再点一次工具栏按钮。因此桥渲染的片段里不含标题；壳层只放一个绝对定位的 ×（不占垂直空间，读屏/键盘用户可用），并支持 Escape 关闭。模型、思考强度、工具预设不在这块面板里重复——输入栏各有一个控件。工具面板同样是两栏（左栏工具名列表、右栏该工具的定义），所有工具的详情一次性渲染进 HTML，切换选中项只是显示/隐藏，不再发请求——否则每点一次都要重新导出一次会话快照。
+**顶栏面板没有标题行**：Pi Web 的这几个面板都是「内容直接铺满」，关闭靠再点一次工具栏按钮。因此桥渲染的片段里不含标题；壳层只放一个绝对定位的 ×（不占垂直空间，读屏/键盘用户可用），并支持 Escape 关闭。模型、思考强度不在这块面板里重复——输入栏各有一个控件。工具面板同样是两栏（左栏工具名列表、右栏该工具的定义），所有工具的详情一次性渲染进 HTML，切换选中项只是显示/隐藏，不再发请求——否则每点一次都要重新导出一次会话快照。
 
 数字全部来自 Pi 的 `get_session_stats`（`userMessages/assistantMessages/toolCalls/toolResults/totalMessages`、`tokens.{input,output,cacheRead,cacheWrite,total}`、`cost`、`contextUsage`），桥只做分类与格式化。缓存读写与缓存命中率只在实际发生时显示。`get_session_stats` 会因失败回合整体报错，那时仍输出会话、项目、运行三组事实——面板至少该告诉你「这是哪个会话」。
 

@@ -156,11 +156,6 @@ func (s *Server) statsMeta(ctx context.Context, worker *run.Worker) presentation
 			}
 		}
 	}
-	if info := worker.Info(); info.ToolPreset != "" {
-		meta.Preset = info.ToolPreset
-	} else {
-		meta.Preset = "default"
-	}
 	if cwd := worker.Info().Cwd; cwd != "" {
 		meta.Cwd = cwd
 		if status, err := s.files.GitStatus(ctx, cwd); err == nil && status.Branch != "" {

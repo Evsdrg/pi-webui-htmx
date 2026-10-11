@@ -52,7 +52,7 @@ func newTestManager(t *testing.T, opts ...func(*Config)) (*Manager, string) {
 	cfg.StopGrace = 200 * time.Millisecond
 	cfg.StartTimeout = 5 * time.Second
 	cfg.OperationTimeout = 2 * time.Second
-	// 与生产一致：桥内工具集扩展随启动落盘并下发，read-only/full 预设才走名单路径。
+	// 与生产一致：桥内工具集扩展随启动落盘并下发（会话启动时启用全部工具）。
 	if toolsExt, extErr := InstallToolsExt(state); extErr == nil {
 		cfg.ToolsExt = toolsExt
 	}

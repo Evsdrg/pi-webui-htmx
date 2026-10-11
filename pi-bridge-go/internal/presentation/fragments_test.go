@@ -167,7 +167,7 @@ func Test详情可复制行带按钮(t *testing.T) {
 	renderer := testRenderer(t)
 	html, err := renderer.RenderStats(StatsMeta{
 		Name: "示例", File: "/tmp/s.jsonl", ID: "abc123",
-		Cwd: "/repo", Branch: "main", Model: "m", Thinking: "off", Preset: "default",
+		Cwd: "/repo", Branch: "main", Model: "m", Thinking: "off",
 	}, map[string]any{
 		"userMessages": 3.0, "assistantMessages": 4.0, "totalMessages": 7.0,
 		"tokens": map[string]any{"input": 10.0, "output": 20.0, "total": 30.0},

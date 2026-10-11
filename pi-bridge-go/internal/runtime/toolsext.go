@@ -6,8 +6,12 @@ import (
 	"path/filepath"
 )
 
-// 桥内工具集扩展（read-only / full 预设的工具名单施加点）。内置成 .mjs 源文件
-// 而不是 Go 字符串：它是一段真实的 Pi 扩展，保留原文件才能被格式化与当作扩展审阅。
+// 桥内工具集扩展。内置成 .mjs 源文件而不是 Go 字符串：它是一段真实的 Pi 扩展，
+// 保留原文件才能被格式化与当作扩展审阅。
+//
+// 作用：会话启动时把 Pi 当前注册的**全部**工具设为激活（含默认关闭的
+// grep/find/ls 与已装插件注册的工具）。Pi 的 --tools 白名单会连带禁用扩展
+// 工具，所以走扩展的 pi.setActiveTools() 而不是 CLI 开关。
 //
 //go:embed tools-ext.mjs
 var toolsExtSource []byte

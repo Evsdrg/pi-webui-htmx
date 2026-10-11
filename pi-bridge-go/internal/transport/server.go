@@ -1357,17 +1357,15 @@ func (s *Server) dispatchCommon(ctx context.Context, r protocol.Request, sink co
 	case "session.start":
 		var p struct {
 			Cwd string `json:"cwd"`
-			// ToolPreset 只接受四个受支持的预设名；未知值必须被拒，
-			// 而不是悄悄回落成默认工具集。
+			// 历史字段：早期版本用 toolPreset 选择工具集。现在工作进程始终
+			// 启用全部工具，该字段被忽略（保留字段名以免旧客户端被
+			// DisallowUnknownFields 拒绝）。
 			ToolPreset string `json:"toolPreset"`
 		}
 		if err := protocol.Decode(r.Params, &p); err != nil {
 			return nil, err
 		}
-		if !run.ValidToolPreset(p.ToolPreset) {
-			return nil, protocol.E("invalid_params", "未知的工具预设")
-		}
-		w, err := s.manager.StartWithPreset(ctx, r.SessionID, p.Cwd, p.ToolPreset)
+		w, err := s.manager.Start(ctx, r.SessionID, p.Cwd)
 		if err != nil {
 			return nil, err
 		}
