@@ -165,6 +165,13 @@ func serve() error {
 	}
 	cfg.CaptureExt = captureExt
 	cfg.CaptureResultDir = captureResults
+	// 工具集扩展：read-only/full 预设的内置工具名单经它施加，避免用
+	// --tools 白名单时连带禁用 magic-context / pi-goal-x 等扩展工具。
+	toolsExt, err := run.InstallToolsExt(absolute)
+	if err != nil {
+		return err
+	}
+	cfg.ToolsExt = toolsExt
 	files, err := workspace.NewFiles(policy, workspace.DefaultLimits())
 	if err != nil {
 		return err

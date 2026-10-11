@@ -46,6 +46,10 @@ type Config struct {
 	// CaptureExt 是桥内「实际载荷捕获」扩展的绝对路径；为空表示未启用。
 	// CaptureResultDir 是各 worker 按会话 id 写入的捕获结果目录（由扩展写入）。
 	CaptureExt, CaptureResultDir string
+	// ToolsExt 是桥内「工具集」扩展的绝对路径；为空表示未启用。
+	// read-only/full 预设的内置工具名单经它（配合 PI_WEBUI_ACTIVE_TOOLS）施加，
+	// 以避开 Pi --tools 白名单连带禁用扩展工具的问题。
+	ToolsExt string
 }
 
 // Defaults 给出默认限额与超时（capabilities 的 replay 声明也引用它，见 transport）。
@@ -974,6 +978,11 @@ func launch(cfg Config, cwd, file, preset string) (*Worker, error) {
 	if cfg.CaptureExt != "" {
 		args = append(args, "-e", cfg.CaptureExt)
 	}
+	// 桥内工具集扩展：read-only/full 的「启用哪些内置工具」经它施加，
+	// 因为 Pi 的 --tools 白名单会连带禁用扩展工具（见 tools.go）。
+	if cfg.ToolsExt != "" {
+		args = append(args, "-e", cfg.ToolsExt)
+	}
 	if !cfg.Extensions {
 		args = append(args, "--no-extensions", "--no-skills", "--no-prompt-templates", "--no-themes", "--no-context-files")
 	}
@@ -985,6 +994,12 @@ func launch(cfg Config, cwd, file, preset string) (*Worker, error) {
 	cmd := exec.Command(cfg.Binary, args...)
 	cmd.Dir = cwd
 	env := append(append(os.Environ(), cfg.Env...), "PI_CODING_AGENT_DIR="+cfg.AgentDir, "PI_OFFLINE=1", "PI_TELEMETRY=0")
+	// 工具集扩展只在需要改默认工具集时才读这个变量：default/空预设不下发。
+	if cfg.ToolsExt != "" {
+		if names, ok := ActiveToolsForPreset(preset); ok {
+			env = append(env, "PI_WEBUI_ACTIVE_TOOLS="+joinToolNames(names))
+		}
+	}
 	navResultPath := ""
 	if cfg.NavigateExt != "" && cfg.NavigateResultDir != "" {
 		// 每个 worker 一份结果文件：并发 worker 共用一份会互相覆盖。

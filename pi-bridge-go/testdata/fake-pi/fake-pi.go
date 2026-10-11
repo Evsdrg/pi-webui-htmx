@@ -65,6 +65,19 @@ func main() {
 	if path := os.Getenv("FAKE_PI_ARGS_FILE"); path != "" {
 		_ = os.WriteFile(path, []byte(strings.Join(os.Args, "\n")+"\n"), 0600)
 	}
+	// 可选地把指定的环境变量写盘（按 FAKE_PI_ENV_KEYS 列出，未设置记为空值）。
+	// 用来断言桥给子进程下发的工具集提示（PI_WEBUI_ACTIVE_TOOLS）等，只写点名的键，
+	// 不整体转储环境，避免把无关变量带进测试证据。
+	if path := os.Getenv("FAKE_PI_ENV_FILE"); path != "" {
+		var lines []string
+		for _, name := range strings.Split(os.Getenv("FAKE_PI_ENV_KEYS"), ",") {
+			if name = strings.TrimSpace(name); name == "" {
+				continue
+			}
+			lines = append(lines, name+"="+os.Getenv(name))
+		}
+		_ = os.WriteFile(path, []byte(strings.Join(lines, "\n")+"\n"), 0600)
+	}
 	// 可选地把收到的每条命令原样追加写盘（JSONL）。
 	// 没有这个出口时，「某个字段到底有没有传给 Pi」只能靠推断——
 	// 而此前恰好有一处参数从未到达过：桥侧以为它在传，实际被上层过滤掉了。

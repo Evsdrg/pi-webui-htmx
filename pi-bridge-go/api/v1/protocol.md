@@ -163,7 +163,7 @@ Pi 原事件通过 `pi.event` 传递并绑定基线版本；不是跨 agent 通�
 
 `session.start` 接受可选 `toolPreset`，取值 `chat-only`/`read-only`/`default`/`full`，未知值必须报 `invalid_params`，不静默回落默认。预设只在拉起 Pi 进程时通过 CLI 生效，运行中切换需要先 `session.stop` 再以新预设 `session.start`；`worker.list`/启动响应回带 `toolPreset`，管理器按会话记住最近一次选择，空闲回收后重启沿用。
 
-预设到 Pi CLI 的映射与 Pi Web 的 `lib/tool-presets.ts` 对齐：`default` 不加参数（Pi 默认 read/bash/edit/write，扩展工具可用），`chat-only` 用 `--no-tools`，`read-only` 用 `--exclude-tools bash,edit,write`。**`full` 只能用 `--tools` 白名单启用 grep/find/ls，而 Pi 的白名单同时作用于扩展工具，因此 `full` 会禁用 magic-context 等扩展工具**——这是上游限制，UI 必须明示，不能假装与 Pi Web 完全一致。
+预设到 Pi CLI 的映射与 Pi Web 的 `lib/tool-presets.ts` 对齐，但**不**用 `--tools` 白名单：`default` 不加参数（Pi 默认 read/bash/edit/write，扩展工具可用），`chat-only` 用 `--no-tools`（同时禁用内置与扩展工具）。`read-only` 与 `full` 需要启用 Pi 默认关闭的 `grep/find/ls`，而 `--tools` 白名单会**连带禁用扩展工具**（magic-context / pi-goal-x 的工具会一起消失）、`--exclude-tools` 又无法“额外启用”工具，因此这两档改由**桥内工具集扩展**在会话启动时用 `pi.setActiveTools()` 施加：桥把预设的内置工具名单经 `PI_WEBUI_ACTIVE_TOOLS` 下发，扩展把名单与当前**全部扩展工具**求并集后重设。结果是只读与完整既能启用 `grep/find/ls`，又不丢插件工具，与 Pi Web 的语义一致。
 
 `session.thinking_levels` 返回当前模型支持的等级（来自 Pi 的 `get_available_thinking_levels`，无模型时仅 `off`）。UI 的「自动」不是 Pi 等级，而是“不发送 `session.set_thinking`”的语义，由 Pi 按 settings 的 `defaultThinkingLevel` 与模型能力决定；Pi 没有“未设置”读回字段，因此自动/等级选择只能按会话在本地记忆，界面必须标注这是本机偏好而非 Pi 实时状态。
 

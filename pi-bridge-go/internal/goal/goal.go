@@ -125,7 +125,7 @@ type LedgerEvent struct {
 
 // View 是渲染一个会话目标面板所需的全部数据。
 type View struct {
-	// Available 表示本工作区是否真的存在 goals 目录（没装插件或从未用过）。
+	// Available 表示本工作区是否真的存在 goals 目录（从未用过目标时为假）。
 	Available bool
 	// Root 是解析出的 goals 目录（用于“文件”一行）。
 	Root string
@@ -208,7 +208,9 @@ func Load(root, focusedGoalID string, ledgerLimit int) View {
 
 	entries, err := os.ReadDir(root)
 	if err != nil {
-		view.Notice = "本工作区还没有目标（未安装 pi-goal-x 或从未创建过）。"
+		// 只有「目录不存在」这一个事实可判定，因此不武断归因于“未安装插件”——
+		// 插件可能已加载，只是这个工作区从未用过目标。
+		view.Notice = "本工作区还没有目标：尚无目标目录，可能从未在此创建过。用 /goal 起草一个。"
 		return view
 	}
 	view.Available = true
