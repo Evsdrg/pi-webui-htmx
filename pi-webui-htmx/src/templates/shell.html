@@ -143,7 +143,7 @@
     <section id="panel-tools" class="top-panel" hidden>
       <button class="icon-btn panel-close" type="button" data-action="panel-tools-close" aria-label="关闭工具面板">×</button>
       <input type="hidden" id="tools-session" name="sessionId" value="">
-      <div id="tools-body" hx-sync="this:replace" hx-get="ui/tools" hx-trigger="tools-refresh from:body" hx-include="#tools-session" hx-swap="innerHTML" title="以下是本次工作进程实际暴露给模型的工具，随启动时的工具预设与已装扩展变化。"><p class="muted">打开时读取。</p></div>
+      <div id="tools-body" hx-sync="this:replace" hx-get="ui/tools" hx-trigger="tools-refresh from:body" hx-include="#tools-session" hx-swap="innerHTML" title="以下是本次工作进程实际暴露给模型的工具，随已装扩展变化。"><p class="muted">打开时读取。</p></div>
     </section>
     <section id="panel-goal" class="top-panel" hidden>
       <button class="icon-btn panel-close" type="button" data-action="panel-goal-close" aria-label="关闭目标面板">×</button>
@@ -177,13 +177,12 @@
           <button id="send-button" type="submit" class="btn btn-primary" disabled><span aria-hidden="true">→</span>发送</button>
         </div>
         <div class="composer-actions">
-          {{/* 左组：输入相关的选择器（附件、模型、思考强度、工具预设、命令）。
+          {{/* 左组：输入相关的选择器（附件、模型、思考强度、命令）。
                右组：运行元信息（mc 状态行、用量）与中止——元信息不再单独占一行。 */}}
           <div class="composer-tools">
             <button class="icon-btn" type="button" data-action="attach" aria-label="添加图片附件" title="添加图片附件">＋</button><input id="attach-input" type="file" accept="image/png,image/jpeg,image/gif,image/webp" multiple hidden>
             <label class="select-label model-control"><span class="sr-only">模型</span><select id="model-select" name="model" aria-label="模型" hx-get="ui/models" hx-trigger="models-refresh from:body"><option value="">Pi 默认模型</option></select></label>
             <label class="select-label"><span class="sr-only">思考强度</span><select id="thinking-select" aria-label="思考强度" disabled><option value="">自动</option></select></label>
-            <label class="select-label" title="工具预设：启动工作进程时生效"><span class="sr-only">工具预设</span><select id="tool-preset-quick" aria-label="工具预设"><option value="chat-only">仅聊天</option><option value="read-only">只读</option><option value="default" selected>默认</option><option value="full">完整</option></select></label>
             <button class="icon-btn" type="button" data-action="commands" aria-label="查看斜杠命令" title="查看斜杠命令">/</button>
           </div>
           <div class="composer-meta">

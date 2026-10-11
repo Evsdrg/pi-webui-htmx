@@ -33,7 +33,7 @@ function emitNamed(event: string, data: Record<string, unknown>) {
 }
 function mount() {
  document.body.innerHTML = `<form id=auth-form><input id=bridge-token><button>连接</button></form><dialog id=auth-dialog></dialog><div id=auth-error></div>
- <form id=composer><textarea id=prompt></textarea><div id=attachments hidden></div><p id=composer-drop hidden></p><input id=attach-input type=file><button id=send-button></button><button id=abort-button></button><select id=model-select><option value="">Pi 默认模型</option></select><select id=thinking-select></select><select id=tool-preset-quick><option value=chat-only>仅聊天</option><option value=read-only>只读</option><option value=default selected>默认</option><option value=full>完整</option></select></form>
+ <form id=composer><textarea id=prompt></textarea><div id=attachments hidden></div><p id=composer-drop hidden></p><input id=attach-input type=file><button id=send-button></button><button id=abort-button></button><select id=model-select><option value="">Pi 默认模型</option></select><select id=thinking-select></select></form>
  <div id=history-scope hidden><button type=button data-action=branch-current>返回最新</button></div><div id=edit-scope hidden><span>正在编辑较早的消息</span></div><div id=unsaved-branch hidden>会话尚未写盘；首条回复前关闭工作进程会丢失这个临时分支。</div>
  <form id=new-form><input id=cwd-input></form><dialog id=new-dialog></dialog><datalist id=workspace-roots></datalist><input id=session-search>
  <button class=icon-btn data-action=session-menu aria-label=会话操作>···</button><dialog id=session-dialog><div class=session-action-grid><button data-action=compact>压缩</button><button data-action=clone>克隆</button><button data-action=export>导出</button><button data-action=stop>释放</button><button data-action=abort-retry>中止重试</button></div></dialog>
@@ -1052,15 +1052,14 @@ describe('上下文用量来自 Pi 统计', () => {
   });
 });
 
-// stubHost 构造顶栏面板需要的最小宿主，用来直接验证预设切换策略，
+// stubHost 构造顶栏面板需要的最小宿主，用来直接验证面板行为，
 // 不依赖 DOM 运行状态（假定时器下状态会被 reconcile 反复刷写）。
 function stubHost(overrides: { busy?: boolean } = {}) {
-  const state = { stopCalls: [] as unknown[], startCalls: [] as unknown[], notices: [] as string[], presetBySession: new Map<string, string>() };
+  const state = { stopCalls: [] as unknown[], startCalls: [] as unknown[], notices: [] as string[] };
   const host = {
     stopCalls: state.stopCalls,
     startCalls: state.startCalls,
     notices: state.notices,
-    presetBySession: () => state.presetBySession,
     sessionId: () => 's1',
     cwd: () => '/tmp/a',
     busy: () => overrides.busy ?? false,
@@ -1068,9 +1067,6 @@ function stubHost(overrides: { busy?: boolean } = {}) {
     contextWindow: () => 65536,
     setContextWindow: () => {},
     thinking: () => '',
-    preset: () => (document.getElementById('tool-preset-quick') as HTMLSelectElement).value,
-    setPreset: (value: string) => { const node = document.getElementById('tool-preset-quick') as HTMLSelectElement | null; if (node) node.value = value; },
-    presetKey: () => 's1',
     request: async (method: string, params?: unknown) => {
       if (method === 'session.stop') { state.stopCalls.push(params); return {}; }
       if (method === 'session.start') { state.startCalls.push(params); return { sessionId: 's1', cwd: '/tmp/a' }; }
@@ -1089,60 +1085,6 @@ function startCalls(): Record<string, unknown>[] {
     .filter(([method]) => method === 'session.start')
     .map(([, , params]) => (params ?? {}) as Record<string, unknown>);
 }
-
-describe('工具预设切换需要重启 worker', () => {
-  it('空闲时直接停止并按新预设重启', async () => {
-    workbench.selectSession('s1', '/tmp/a', 'A');
-    await waitFor(() => expect(document.body.dataset.sessionId).toBe('s1'));
-    const select = document.getElementById('tool-preset-quick') as HTMLSelectElement;
-    select.value = 'read-only';
-    select.dispatchEvent(new Event('change', { bubbles: true }));
-    await waitFor(() => expect(startCalls().some((params) => params.toolPreset === 'read-only')).toBe(true));
-    expect((document.getElementById('tool-preset-quick') as HTMLSelectElement).value).toBe('read-only');
-  });
-
-  it('运行中切换必须先确认，取消则回滚', async () => {
-    const topbar = await import('../../src/modules/topbar');
-    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false);
-    const host = stubHost({ busy: true });
-    (document.getElementById('tool-preset-quick') as HTMLSelectElement).value = 'chat-only';
-    await topbar.changeToolPreset(host);
-    expect(confirm).toHaveBeenCalledTimes(1);
-    expect(confirm.mock.calls[0]?.[0]).toContain('重启');
-    expect(host.stopCalls).toHaveLength(0);
-    expect(host.startCalls).toHaveLength(0);
-    // 取消后必须回到上一个值，不能停在用户刚点的那个。
-    expect((document.getElementById('tool-preset-quick') as HTMLSelectElement).value).toBe('default');
-    confirm.mockRestore();
-  });
-
-  it('运行中确认后会停掉并按新预设重启', async () => {
-    const topbar = await import('../../src/modules/topbar');
-    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true);
-    const host = stubHost({ busy: true });
-    (document.getElementById('tool-preset-quick') as HTMLSelectElement).value = 'full';
-    await topbar.changeToolPreset(host);
-    expect(host.stopCalls).toEqual([{ force: false }]);
-    expect(host.startCalls).toEqual([{ cwd: '/tmp/a', toolPreset: 'full' }]);
-    expect(host.presetBySession().get('s1')).toBe('full');
-    confirm.mockRestore();
-  });
-
-  it('预设按会话隔离', async () => {
-    workbench.selectSession('s1', '/tmp/a', 'A');
-    await waitFor(() => expect(document.body.dataset.sessionId).toBe('s1'));
-    const select = document.getElementById('tool-preset-quick') as HTMLSelectElement;
-    select.value = 'full';
-    select.dispatchEvent(new Event('change', { bubbles: true }));
-    await waitFor(() => expect(startCalls().some((params) => params.toolPreset === 'full')).toBe(true));
-    workbench.selectSession('s2', '/tmp/b', 'B');
-    await waitFor(() => expect(document.body.dataset.sessionId).toBe('s2'));
-    expect(select.value).toBe('default');
-    workbench.selectSession('s1', '/tmp/a', 'A');
-    await waitFor(() => expect(document.body.dataset.sessionId).toBe('s1'));
-    expect(select.value).toBe('full');
-  });
-});
 
 describe('顶栏功能面板', () => {
   it('同一时间只打开一个面板', async () => {

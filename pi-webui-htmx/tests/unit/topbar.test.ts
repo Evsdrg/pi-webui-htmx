@@ -8,8 +8,7 @@ const topbar = shell.slice(shell.indexOf('<header class="topbar">'), shell.index
 const panels = ['panel-info', 'panel-title', 'panel-system', 'panel-tools', 'panel-mc', 'panel-goal'];
 const host: TopbarHost = {
   sessionId: () => '', cwd: () => '', busy: () => false, modelLabel: () => '', contextWindow: () => 0,
-  setContextWindow() {}, thinking: () => '', preset: () => 'default', setPreset() {}, presetKey: () => '',
-  presetBySession: () => new Map(), setTitle() {}, request: vi.fn(async () => ({})) as TopbarHost['request'],
+  setContextWindow() {}, thinking: () => '', setTitle() {}, request: vi.fn(async () => ({})) as TopbarHost['request'],
   notify: vi.fn(), fail: vi.fn(), refreshState: async () => {},
 };
 const button = (action: string) => document.querySelector<HTMLButtonElement>(`.topbar [data-action="${action}"]`)!;

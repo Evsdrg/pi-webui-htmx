@@ -1,6 +1,6 @@
 import { el } from './dom';
 import { record, text } from './stream';
-import type { Method, ToolPreset, WorkerInfo } from '@/types/protocol';
+import type { Method } from '@/types/protocol';
 
 // TopbarHost 是顶栏功能面板需要的 Workbench 能力。
 // 顶栏面板按需加载：首屏不承担这段代码，点击按钮时才 import。
@@ -12,10 +12,6 @@ export interface TopbarHost {
   contextWindow(): number;
   setContextWindow(value: number): void;
   thinking(): string;
-  preset(): string;
-  setPreset(value: string): void;
-  presetKey(): string;
-  presetBySession(): Map<string, string>;
   /** setTitle 记录会话名；侧栏列表负责显示，这里只更新内部状态。 */
   setTitle(title: string): void;
   request<T = unknown>(method: Method, params?: unknown, session?: string): Promise<T>;
@@ -104,34 +100,6 @@ export async function saveLocalTitle(host: TopbarHost): Promise<void> {
     host.notify('会话名称已更新。');
     host.refreshState();
   } catch (error) { host.fail(error); }
-}
-
-// changeToolPreset 切换工具预设。Pi 的工具集只能在拉起进程时通过
-// --tools/--exclude-tools/--no-tools 指定，RPC 没有运行中切换入口，
-// 因此改动必须停掉当前 worker 再用新预设启动；运行中的任务会随之中断，
-// 这一点必须先向用户确认，不能静默重启。
-export async function changeToolPreset(host: TopbarHost): Promise<void> {
-  const preset = host.preset() as ToolPreset;
-  const key = host.presetKey();
-  const previous = host.presetBySession().get(key) ?? '';
-  if (preset === (previous || 'default')) return;
-  if (host.busy() && !window.confirm('切换工具预设需要重启当前会话的工作进程，进行中的任务会中断。确定继续？')) {
-    host.setPreset(previous || 'default');
-    return;
-  }
-  try {
-    if (host.sessionId()) await host.request('session.stop', { force: false }, host.sessionId()).catch(() => {});
-    host.presetBySession().set(key, preset);
-    const info = await host.request<WorkerInfo>('session.start', { cwd: host.cwd(), toolPreset: preset }, host.sessionId());
-    if (info.sessionId && info.sessionId !== host.sessionId()) host.presetBySession().set(info.sessionId, preset);
-    host.notify('工具预设已更新；新预设在下一次启动工作进程时生效。');
-    host.setPreset(preset);
-    await host.refreshState();
-  } catch (error) {
-    host.presetBySession().set(key, previous);
-    host.setPreset(previous || 'default');
-    throw error;
-  }
 }
 
 // renderContextUsage 显示 Pi 的 get_session_stats.contextUsage。

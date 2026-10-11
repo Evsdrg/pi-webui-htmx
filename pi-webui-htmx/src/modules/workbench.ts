@@ -69,8 +69,6 @@ export class Workbench {
    * 不向 Pi 发送 set_thinking，由 Pi 自己按 settings 与模型能力决定。
    */
   private thinkingBySession = new Map<string, string>();
-  /** toolPresetBySession 记住每个会话的工具预设，跨启动沿用。 */
-  private toolPresetBySession = new Map<string, string>();
   private statuses = new Map<string, string>();
   private widgets = new Map<string, { lines: string[]; placement: string }>();
   private commands: { name: string; description: string }[] = [];
@@ -224,11 +222,6 @@ export class Workbench {
       if (!level) { this.notify('思考强度已设为自动：由模型与 Pi 配置决定。'); return; }
       void this.command('session.set_thinking', { level }).catch((err) => this.fail(err));
     }, { signal });
-    // 两个预设入口共用同一处理：先把快捷选择的值同步到面板，再走切换。
-    // 工具预设只有输入栏一个选择器（面板里不再重复一份）。
-    el('tool-preset-quick').addEventListener('change', () => {
-      void this.topbar().then((m) => m.changeToolPreset(this.host)).catch((err) => this.fail(err));
-    }, { signal });
     el('title-form').addEventListener('submit', (event) => { event.preventDefault(); void this.topbar().then((m) => m.saveLocalTitle(this.host)).catch((err) => this.fail(err)); }, { signal });
     // 顶栏功能面板的开关统一走 onClick 里的 [data-action] 委托（见 action()）。
     // 以前这里给每个顶栏按钮单独挂监听：那样只有文档里第一批带该 data-action
@@ -354,13 +347,11 @@ export class Workbench {
   private async ensureWorker(scope: Scope = this.scope.current$()): Promise<Scope> {
     const oldId = this.sessionId;
     if (!oldId && !this.cwd) { await this.newSession(); throw new Error('请先选择工作目录，再发送消息。'); }
-    // 工具预设只在拉起进程时生效，因此每次启动都带上该会话上次的选择。
-    const preset = this.toolPresetBySession.get(this.queueChoiceKey()) ?? '';
     // 「会话默认」（自动压缩/自动重试/运行中发送方式）在启动时对齐：
     // 每个新拉起的工作进程先按默认设置一次，之后的改动即时下发。
     const autoCompaction = readPreference('auto-compaction') !== '0';
     const autoRetry = readPreference('auto-retry') === '1';
-    const info = await this.request<WorkerInfo>('session.start', { cwd: this.cwd, ...(preset ? { toolPreset: preset } : {}) }, oldId);
+    const info = await this.request<WorkerInfo>('session.start', { cwd: this.cwd }, oldId);
     if (!scope.alive()) throw new Error('会话已切换，本条消息未发送；内容已保留，请手动重发。');
     let activeScope = scope;
     if (!oldId) {
@@ -370,9 +361,8 @@ export class Workbench {
       this.cancelSessionFragments();
       activeScope = this.scope.current$();
       this.sessionId = info.sessionId; this.cwd = info.cwd;
-      if (preset) this.toolPresetBySession.set(info.sessionId, preset);
       document.body.dataset.sessionId = this.sessionId;
-      history.replaceState(null, '', `/?session=${encodeURIComponent(info.sessionId)}`);
+      history.replaceState(null, '', `/?session=${encodeURIComponent(this.sessionId)}`);
     }
     this.cwd = info.cwd;
     await this.subscribe();
@@ -561,9 +551,6 @@ export class Workbench {
     const rememberedThinking = this.thinkingBySession.get(id);
     const thinkingSelect = el<HTMLSelectElement>('thinking-select');
     thinkingSelect.value = rememberedThinking && Array.from(thinkingSelect.options).some((option) => option.value === rememberedThinking) ? rememberedThinking : '';
-    // 工具预设在 worker 启动时生效；这里只回显该会话上次的选择。
-    const presetSelect = document.getElementById('tool-preset-quick') as HTMLSelectElement | null;
-    if (presetSelect) presetSelect.value = this.toolPresetBySession.get(id) ?? 'default';
     if (!this.sending) el<HTMLTextAreaElement>('prompt').value = readDraft(this.draftKey());
     document.body.dataset.sessionId = id; this.setRun('idle'); this.notice(''); closeMobileSidebar();
     // URL 里的路径部分要保留：设备前缀部署时文档在 `/d/{id}/`，
@@ -917,11 +904,7 @@ export class Workbench {
       contextWindow: () => this.contextWindow,
       setContextWindow: (value) => { this.contextWindow = value; },
       thinking: () => el<HTMLSelectElement>('thinking-select').value,
-      preset: () => el<HTMLSelectElement>('tool-preset-quick').value,
       setTitle: (title) => { this.sessionTitle = title; },
-      setPreset: (value) => { const node = document.getElementById('tool-preset-quick') as HTMLSelectElement | null; if (node) node.value = value; },
-      presetKey: () => this.queueChoiceKey(),
-      presetBySession: () => this.toolPresetBySession,
       request: (method, params, session) => this.request(method, params, session),
       notify: (message, kind) => this.notify(message, kind),
       fail: (error) => this.fail(error),
@@ -1292,9 +1275,6 @@ export class Workbench {
   private setConnection(online: boolean): void { el('conn-state').textContent = online ? '已连接' : '未连接'; el('conn-state').className = `state state-${online ? 'online' : 'offline'}`; if (online) this.notice(''); this.updateControls(); }
   private setRun(state: RunState): void { this.run = state; el('session-state').textContent = {idle:'就绪',running:'运行中',retrying:'重试中',compacting:'压缩中',waiting_input:'等待确认'}[state]; this.updateControls(); }
   private updateControls(): void { el<HTMLButtonElement>('send-button').disabled = !this.bridge.connected || this.sending || !el<HTMLTextAreaElement>('prompt').value.trim() || (this.modelUnavailable && !this.selectedModel()); el('abort-button').hidden = this.run === 'idle'; const hint = el('queue-hint'); const busy = this.run !== 'idle'; hint.hidden = !busy; if (busy) hint.textContent = this.defaultQueueKind() === 'steering' ? '本轮结束后插入指令' : '排到队列末尾，本轮完成后追加'; el<HTMLSelectElement>('model-select').disabled = busy; el<HTMLSelectElement>('thinking-select').disabled = busy || !this.sessionId; }
-  // queueChoiceKey 供工具预设按会话记忆（会话 id 或「新会话 + cwd」）。
-  // 排队发送方式已改为全局默认（defaultQueueKind），不再按会话取键。
-  private queueChoiceKey(): string { return this.sessionId || `new:${this.cwd}`; }
   // sendQueued 在运行中发送：先把模式同步给桥，再带 streamingBehavior 提交。
   // 不先同步的话，用户改了 radio 但桥仍是旧模式，行为与界面显示不一致。
   private async sendQueued(text: string, kind: 'steering' | 'followUp', images: Attachment[], scope: Scope): Promise<void> {
