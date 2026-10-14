@@ -78,7 +78,12 @@ go run ./cmd/pi-bridge \
   `--extensions` 时，桥拒绝启动并报出数量——不再静默地不带插件运行；确要让某实例不带插件
   时显式加 `--no-extensions`。systemd 部署把公共参数（含 `--extensions`）集中在一处启动脚本里，
   避免两个 unit 各写一遍、改一处漏一处。
-- 不配置 `--ui-dir` 时只提供 API；配置后必须有模板和 Vite 产物，没有内嵌/CDN 兜底。UI rebuild 后重启桥，确保模板、manifest 与哈希资源一致。
+- 不配置 `--ui-dir` 时只提供 API；配置后必须有模板和 Vite 产物，没有内嵌/CDN 兜底。
+  **`--ui-dir` 指向的应当是「被服务目录」，而不是构建输出目录**：`vite build` 会清空
+  `outDir`，把构建目录直接当服务目录会在重建时删掉正在被引用的资源、导致白屏。
+  开发时可以指向检出（`pnpm dev` 重建后会重启桥）；受管部署指向仓库外的已发布副本，
+  由发布脚本在检出里构建后原子写入（见 `pi-webui-htmx/docs/DEVELOPMENT.md` 的开发循环）。
+  改了模板或资源后必须重启桥：它只在启动时读取 manifest、解析模板并快照入口资源名。
 
 ### 受管部署（systemd）
 

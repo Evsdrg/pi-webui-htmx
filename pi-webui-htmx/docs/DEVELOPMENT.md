@@ -59,12 +59,23 @@ dist/                Vite 产物，不提交
 ```bash
 pnpm install --frozen-lockfile
 pnpm dev          # vite build --watch，改 src 后自动重建 dist/
-# 另一个终端：桥指向本目录
+# 另一个终端：桥的 --ui-dir 指向**检出**（开发时它读检出里的 dist）
 cd ../../pi-bridge-go && go run ./cmd/pi-bridge --ui-dir ../pi-webui-htmx ...
 ```
 
-⚠️ **重建 `dist/` 之后必须重启桥**：桥在启动时读取 `ui-manifest.json` 并快照入口资源名，
-不重启会继续引用旧哈希的 assets（页面刷新无效）。这是最容易浪费时间的坑。
+⚠️ **`pnpm build` 会清空 `dist/`**，而 `dist/` 是构建输出：**只在检出里构建，不要构建
+被服务的目录**。本机生产与测试实例的桥由 `--ui-dir` 指向仓库外的已发布副本，更新界面
+走发布流程（在检出里构建 → 校验 → 原子发布 → 重启），不直接改部署目录：
+
+```bash
+cd ../../pi-work/deploy
+./publish-ui.sh            # 构建 + 测试 + 类型 + 契约 + 发布 + 重启两实例
+./publish-ui.sh --no-build # 只发布检出里现有的 dist
+./publish-ui.sh rollback   # 回退到上一次发布前的模板与清单
+```
+
+桥在启动时读取 `ui-manifest.json`、解析全部模板并快照入口资源名，运行中不重读；
+因此发布脚本在**这些内容真的变了**时才重启实例（入口名未变、模板未变时不打扰）。
 
 ## 构建与产物
 
