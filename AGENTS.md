@@ -17,8 +17,12 @@
 
 - Go 1.27.1（`go.mod`）；Node ≥ 20.19，pnpm 11.22（`packageManager` 锁定）
 - Pi：`pi --mode rpc`，开发基准 0.85.1（协议 v1）
-- 本机生产：以 systemd 服务运行，绑在私有组网地址上，由独立 caddy 网关反代终止 TLS
-  （具体地址属部署细节，不写进仓库）；产物放在仓库外，不以任何形式提交
+- 本机生产：以 systemd 服务运行，绑在私有组网（EasyTier）地址上，浏览器经组网
+  **直连 http**（2026-10-15 由「caddy 网关反代终止 TLS」改为本地直连，网关已停用；
+  具体地址属部署细节，不写进仓库）。因此访问是**非安全上下文**——`crypto.randomUUID`、
+  `navigator.clipboard` 均不存在，前端一律走 `src/lib/` 的探测封装，且不得在模块顶层
+  调用它们。`--public-origin` 必须写成实际访问来源（http 来源 → Cookie 不带 `Secure`）
+- 产物放在仓库外，不以任何形式提交
 - 改前端产物后**必须重启桥**（桥在启动时快照 manifest 与入口资源名，刷新页面无效）
 
 ## 硬约束
