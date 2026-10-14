@@ -1,4 +1,5 @@
 // 浏览器只保存有界的在途请求和传输状态，不复制完整会话。
+import { randomId } from '@/lib/random';
 import type { Message, Method, Request } from '@/types/protocol';
 
 export class BridgeError extends Error {
@@ -25,7 +26,9 @@ export class BridgeClient extends EventTarget {
   private backoff = 500;
   private disposed = false;
   private sequence = 0;
-  private readonly prefix = crypto.randomUUID();
+  // 前缀用于把 requestId 在连接间区分开。用 randomId 而不是 crypto.randomUUID：
+  // 后者在非安全上下文（http://<ip> 直连）里不存在，会在构造阶段就抛异常。
+  private readonly prefix = randomId();
   private sent = 0;
 
   constructor(private readonly url: string, private readonly factory: SocketFactory = (url) => new WebSocket(url)) { super(); }

@@ -181,6 +181,21 @@ WS 流式增量、textarea 自适应、xterm、未上传的本地附件缩略图
   不泛放 ws/wss。KaTeX、Mermaid、xterm 的运行时样式需要单独核验。
 - 包清单只读，不渲染远程安装/更新/卸载入口。
 
+### 非安全上下文（本地部署的常态）
+
+本仓的本地部署形态是「桥绑在组网/局域网地址上，浏览器用 `http://<ip>:<port>` 访问」
+（桥不自带 TLS）。那不是**安全上下文**，以下 API 直接不存在，调用即抛异常或静默失败：
+
+| API | 影响面 | 本仓处理 |
+|---|---|---|
+| `crypto.randomUUID` | 模块加载期调用会让整页停摆 | `src/lib/random.ts` 的 `randomId()`，退回 `getRandomValues` |
+| `navigator.clipboard` | 复制按钮静默失败 | `src/lib/clipboard.ts` 的 `copyText()`，退回 `execCommand` |
+| `crypto.subtle`、`showOpenFilePicker` 等 | 用到才需处理 | 同上：先探测能力，再降级 |
+
+**判据**：任何只在安全上下文存在的 API，都要走 `src/lib/` 的探测封装，不要直接调用；
+尤其**不要在模块顶层调用**——那会绕过所有降级逻辑。已有回归测试
+`tests/unit/insecure_context.test.ts`。
+
 ## 资源所有权
 
 | 资源 | 所有者 | 释放时机 |

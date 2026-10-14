@@ -1,4 +1,5 @@
 // 斜杠命令菜单：低频交互（输入 "/" 才用），独立成按需分块，不占首屏预算。
+import { copyText } from '@/lib/clipboard';
 import { el } from './dom';
 
 /** CommandEntry 是一条可插入的斜杠命令。 */
@@ -26,5 +27,6 @@ export function buildCommands(commands: CommandEntry[]): string[] {
 export function copyTurn(button: Element, notify: (message: string) => void): void {
   const turn = button.closest('.turn');
   const parts = [...(turn?.querySelectorAll('.turn-assistant .bubble') ?? [])].map((node) => node.textContent ?? '').filter(Boolean);
-  void navigator.clipboard.writeText(parts.join('\n\n')).then(() => notify('已复制')).catch(() => notify('复制失败'));
+  // copyText 处理非安全上下文（http://<ip> 直连时 navigator.clipboard 不存在）。
+  void copyText(parts.join('\n\n')).then((ok) => notify(ok ? '已复制' : '复制失败'));
 }

@@ -1,4 +1,5 @@
 // 图表只在出现 Mermaid 代码块时加载，使用严格模式和 SVG 净化。
+import { randomId } from '@/lib/random';
 let loading: Promise<typeof import('mermaid')> | null = null;
 let serial = Promise.resolve();
 export function mountMermaid(root: ParentNode = document): void {
@@ -15,7 +16,7 @@ export function mountMermaid(root: ParentNode = document): void {
       const source = node.textContent ?? '';
       try {
         if (source.length > 50_000) throw new Error('图表超出渲染上限');
-        const { svg } = await module.default.render(`diagram-${crypto.randomUUID()}`, source);
+        const { svg } = await module.default.render(`diagram-${randomId()}`, source);
         const target = node.matches('code') ? node.parentElement! : node;
         target.innerHTML = purify.sanitize(svg, { USE_PROFILES:{svg:true,svgFilters:true}, FORBID_TAGS:['foreignObject'] });
         target.className = 'mermaid'; target.dataset.mermaidRendered = '1';
