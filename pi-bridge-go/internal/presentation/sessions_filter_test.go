@@ -24,7 +24,7 @@ func Test会话片段渲染工作区筛选(t *testing.T) {
 			{Cwd: "/opt/projects/beta", Count: 1},
 		},
 	}
-	html, err := r.RenderSessionsPage(list, "", 0)
+	html, err := r.RenderSessionsPage(list, "", 0, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -72,7 +72,7 @@ func Test加载更多带上工作区筛选(t *testing.T) {
 		Cwd:     "/opt/projects/alpha",
 		Cwds:    []sessions.CwdCount{{Cwd: "/opt/projects/alpha", Count: 2}},
 	}
-	html, err := r.RenderSessionsPage(list, "", 0)
+	html, err := r.RenderSessionsPage(list, "", 0, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -91,7 +91,7 @@ func Test加载更多带上工作区筛选(t *testing.T) {
 		Items:   []sessions.Header{{ID: "a1", Cwd: "/opt/projects/alpha", Name: "会话一"}},
 		HasMore: true,
 	}
-	html2, err := r.RenderSessionsPage(plain, "", 0)
+	html2, err := r.RenderSessionsPage(plain, "", 0, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -128,7 +128,7 @@ func moreButtonURL(t *testing.T, html string) string {
 func Test筛选空结果的空态文案(t *testing.T) {
 	r := testRenderer(t)
 	empty := sessions.Listing{Cwd: "/opt/projects/none", Cwds: []sessions.CwdCount{{Cwd: "/opt/projects/none"}}}
-	html, err := r.RenderSessionsPage(empty, "", 0)
+	html, err := r.RenderSessionsPage(empty, "", 0, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -141,7 +141,7 @@ func Test筛选空结果的空态文案(t *testing.T) {
 
 	// 未筛选时的空态保持原文案。
 	none := sessions.Listing{}
-	html2, err := r.RenderSessionsPage(none, "", 0)
+	html2, err := r.RenderSessionsPage(none, "", 0, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -171,7 +171,7 @@ func Test分组视图按工作区折叠(t *testing.T) {
 			{Cwd: "/opt/projects/beta", Count: 1},
 		},
 	}
-	html, err := r.RenderSessionsGrouped(list, "")
+	html, err := r.RenderSessionsGrouped(list, "", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -212,7 +212,7 @@ func Test分组视图保留未标注工作区的会话(t *testing.T) {
 		}}},
 		Cwds: []sessions.CwdCount{{Cwd: "", Count: 2}},
 	}
-	html, err := r.RenderSessionsGrouped(list, "")
+	html, err := r.RenderSessionsGrouped(list, "", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -220,6 +220,59 @@ func Test分组视图保留未标注工作区的会话(t *testing.T) {
 		t.Fatalf("空 cwd 的组要有可读名字，不能渲染成空标题:\\n%s", html)
 	}
 	if !strings.Contains(html, `data-session="x1"`) {
-		t.Fatalf("空 cwd 的会话仍应列出:\\n%s", html)
+		t.Fatalf("空 cwd 的会话仍应列出:\n%s", html)
+	}
+}
+
+// 忙会话在侧栏行上带 data-running 与转圈；空闲的会话不带。
+// 这是「看不到会话活动」的修复：桥把 Manager 的忙闲集合并入渲染。
+func Test会话行标出运行中的会话(t *testing.T) {
+	r := testRenderer(t)
+	list := sessions.Listing{Items: []sessions.Header{
+		{ID: "busy1", Cwd: "/opt/p", Name: "在跑的会话"},
+		{ID: "idle1", Cwd: "/opt/p", Name: "空闲的会话"},
+	}}
+	html, err := r.RenderSessionsPage(list, "", 0, map[string]bool{"busy1": true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 忙的那一行带标记与转圈。
+	if !strings.Contains(html, `data-session="busy1" data-cwd="/opt/p" data-title="在跑的会话" data-running="1"`) {
+		t.Fatalf("忙会话行应带 data-running:\n%s", html)
+	}
+	busyAt := strings.Index(html, `data-session="busy1"`)
+	idleAt := strings.Index(html, `data-session="idle1"`)
+	if busyAt < 0 || idleAt < 0 {
+		t.Fatalf("两行都应渲染:\n%s", html)
+	}
+	// 转圈只出现在忙的那一行里（取该行到下一行之间的片段）。
+	segment := html[busyAt:idleAt]
+	if !strings.Contains(segment, `class="session-spin"`) {
+		t.Fatalf("忙会话行应含转圈元素:\n%s", segment)
+	}
+	idleSegment := html[idleAt:]
+	if strings.Contains(idleSegment, "is-running") {
+		t.Fatalf("空闲会话不该被判为运行中:\n%s", idleSegment)
+	}
+}
+
+// 分组视图与时间线视图对同一会话的呈现必须一致：忙会话同样带标记。
+func Test分组视图标出运行中的会话(t *testing.T) {
+	r := testRenderer(t)
+	list := sessions.Listing{
+		Groups: []sessions.Group{{Cwd: "/opt/p", Total: 1, Items: []sessions.Header{
+			{ID: "busy1", Cwd: "/opt/p", Name: "在跑的会话"},
+		}}},
+		Cwds: []sessions.CwdCount{{Cwd: "/opt/p", Count: 1}},
+	}
+	html, err := r.RenderSessionsGrouped(list, "", map[string]bool{"busy1": true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(html, `data-session="busy1" data-cwd="/opt/p" data-title="在跑的会话" data-running="1"`) {
+		t.Fatalf("分组视图的忙会话行也应带 data-running:\n%s", html)
+	}
+	if !strings.Contains(html, `class="session-spin"`) {
+		t.Fatalf("分组视图的忙会话行应含转圈元素:\n%s", html)
 	}
 }

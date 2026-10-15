@@ -103,8 +103,19 @@ func (q *outboundQueue) reserve(ctx context.Context, n int64) bool {
 	}
 }
 
-// release 归还 n 字节并唤醒等待者。
-// 消费者取走一帧后调用它（含入队被取消时的回滚），这是唯一的归还点。
+// tryReserve 只在预算足够时立即预留，否则返回 false，不等待。
+// 供「丢了也无所谓」的状态类广播使用（见 connection.trySend）。
+func (q *outboundQueue) tryReserve(n int64) bool {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	if q.used+n > outboundQueueLimit {
+		return false
+	}
+	q.used += n
+	return true
+}
+
+// release 归还 n 字节并唤醒等待者。// 消费者取走一帧后调用它（含入队被取消时的回滚），这是唯一的归还点。
 func (q *outboundQueue) release(n int64) {
 	q.mu.Lock()
 	q.used -= n

@@ -123,6 +123,14 @@ type Server struct {
 	operations   chan struct{}
 	claims       *claims
 	tunnelBridge *TunnelBridge
+	// connMu 保护 conns：已接入的 WebSocket 连接集合，用于向所有浏览器
+	// 广播「工作进程忙闲变化」。隧道虚拟连接不在此表内（见 watchWorkers）。
+	connMu sync.Mutex
+	conns  map[*connection]struct{}
+	// workersMu 保护 lastBusy：上一次广播出去的忙会话快照，
+	// 供 watchWorkers 只在变化时广播。
+	workersMu sync.Mutex
+	lastBusy  map[string]bool
 }
 
 // Options 是 Server 的构造参数。
@@ -201,6 +209,8 @@ func New(opts Options) (*Server, error) {
 		connections:     make(chan struct{}, maxConnections),
 		operations:      make(chan struct{}, maxInFlightOperations),
 		claims:          newClaims(claimsMaxHold),
+		conns:           map[*connection]struct{}{},
+		lastBusy:        map[string]bool{},
 	}
 	// magic-context 的只读视图挂在渲染器上：面板是服务端片段，
 	// 由 presentation 负责取数，传输层只管路由与鉴权。
@@ -209,6 +219,7 @@ func New(opts Options) (*Server, error) {
 	if opts.UI != nil {
 		opts.UI.SetMagicContext(magiccontext.NewStore())
 	}
+	go server.watchWorkers()
 	return server, nil
 }
 
@@ -432,6 +443,9 @@ func (s *Server) serveUIFragments(w http.ResponseWriter, r *http.Request, encodi
 				return "", err
 			}
 			selected := r.URL.Query().Get("selected")
+			// 会话索引只描述磁盘上的会话，不知道工作进程状态；这里把
+			// Manager 的忙闲集合合并进来，让侧栏能标出「运行中」的会话。
+			running := busySessions(s.manager.List())
 			// view=workspace 走分组视图：按工作区把会话分组，每组最近几条。
 			// 默认（含 view=timeline）是时间线——看到全部会话不该先做一次选择。
 			if r.URL.Query().Get("view") == "workspace" {
@@ -439,14 +453,14 @@ func (s *Server) serveUIFragments(w http.ResponseWriter, r *http.Request, encodi
 				if err != nil {
 					return "", err
 				}
-				return s.ui.RenderSessionsGrouped(list, selected)
+				return s.ui.RenderSessionsGrouped(list, selected, running)
 			}
 			// cwd 是按工作区筛选：空串表示不筛。
 			list, err := s.store.List(r.Context(), offset, limit, r.URL.Query().Get("cwd"))
 			if err != nil {
 				return "", err
 			}
-			return s.ui.RenderSessionsPage(list, selected, offset)
+			return s.ui.RenderSessionsPage(list, selected, offset, running)
 		})
 
 	// 惰性内容：思考文本与工具结果图片。
@@ -1235,6 +1249,27 @@ func (c *connection) send(m protocol.Message) bool {
 	return true
 }
 
+// trySend 尽最大努力投递一帧状态类消息：预算不足时直接丢弃，绝不等待、
+// 更不因投递失败而断开连接。
+//
+// 与 send 的区别是有意的：send 用于命令回执与订阅事件，投不出去说明连接
+// 已经不可用，取消它是正确的；而侧栏的忙闲广播是**可重放的冗余状态**——
+// 丢一帧下次变化会补上，为它把一条慢速浏览器的连接踢掉则完全不成比例。
+func (c *connection) trySend(m protocol.Message) {
+	b, err := json.Marshal(m)
+	if err != nil || len(b) > outboundFrameLimit || !c.queue.tryReserve(int64(len(b))) {
+		return
+	}
+	select {
+	case c.queue.frames <- b:
+	case <-c.ctx.Done():
+		c.queue.release(int64(len(b)))
+	default:
+		// 帧通道满：回滚预算。这只发生在队列深度耗尽时，不是连接故障。
+		c.queue.release(int64(len(b)))
+	}
+}
+
 // frameFallback 在一条响应超过单帧上限时，把它替换成显式的 limit_exceeded
 // 错误响应，返回替换帧与是否可行。
 //
@@ -1294,8 +1329,10 @@ func (s *Server) serveWS(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithCancel(s.manager.Context())
 	defer cancel()
 	c := &connection{server: s, ws: ws, ctx: ctx, cancel: cancel, queue: newOutboundQueue(32), subs: map[string]*run.Subscription{}, termSubs: map[string]*terminal.Subscription{}, normal: make(chan struct{}, 8), urgent: make(chan struct{}, 2)}
+	s.trackConn(c)
 	go c.writer()
 	defer func() {
+		s.dropConn(c)
 		c.mu.Lock()
 		for id, sub := range c.subs {
 			delete(c.subs, id)

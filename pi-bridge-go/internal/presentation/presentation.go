@@ -440,6 +440,9 @@ type SessionRow struct {
 	Title    string
 	Modified string
 	Cwd      string
+	// Running 表示该会话当前有忙碌的工作进程（运行中/排队/重试/压缩/等待确认）。
+	// 由调用方把 Manager 的忙闲集合合并进来；会话索引本身不知道工作进程状态。
+	Running bool
 }
 
 // SessionsData 驱动侧栏模板。
@@ -477,12 +480,13 @@ type CwdOption struct {
 
 // RenderSessions 渲染侧栏会话列表。
 func (r *Renderer) RenderSessions(list sessions.Listing, selected string) (string, error) {
-	return r.RenderSessionsPage(list, selected, 0)
+	return r.RenderSessionsPage(list, selected, 0, nil)
 }
 
 // RenderSessionsPage 保留翻页偏移，避免第二页之后重复加载同一页。
-func (r *Renderer) RenderSessionsPage(list sessions.Listing, selected string, offset int) (string, error) {
-	items := sessionRows(list.Items)
+// running 是「当前忙碌的会话 ID」集合，nil 表示不标记任何会话（例如无工作进程来源）。
+func (r *Renderer) RenderSessionsPage(list sessions.Listing, selected string, offset int, running map[string]bool) (string, error) {
+	items := sessionRows(list.Items, running)
 	cwds := make([]CwdOption, 0, len(list.Cwds))
 	labels := cwdLabels(list.Cwds)
 	for i, c := range list.Cwds {
@@ -506,7 +510,7 @@ func (r *Renderer) RenderSessionsPage(list sessions.Listing, selected string, of
 // 与时间线视图共用 sessionRows，保证两种视图里同一会话的呈现完全一致
 // （标题取值、时间格式）。组名沿用下拉的短名规则，两个视图对同一个
 // 工作区给出同一个名字——否则用户会以为它们是两个不同的项目。
-func (r *Renderer) RenderSessionsGrouped(list sessions.Listing, selected string) (string, error) {
+func (r *Renderer) RenderSessionsGrouped(list sessions.Listing, selected string, running map[string]bool) (string, error) {
 	counts := make([]sessions.CwdCount, 0, len(list.Groups))
 	for _, g := range list.Groups {
 		counts = append(counts, sessions.CwdCount{Cwd: g.Cwd, Count: g.Total})
@@ -518,12 +522,12 @@ func (r *Renderer) RenderSessionsGrouped(list sessions.Listing, selected string)
 		if label == "" {
 			label = unlabeledWorkspace
 		}
-		groups = append(groups, SessionGroup{Cwd: g.Cwd, Label: label, Total: g.Total, Items: sessionRows(g.Items)})
+		groups = append(groups, SessionGroup{Cwd: g.Cwd, Label: label, Total: g.Total, Items: sessionRows(g.Items, running)})
 	}
 	return r.execute("sessions-grouped.html", SessionsData{Groups: groups, Selected: selected})
 }
 
-func sessionRows(headers []sessions.Header) []SessionRow {
+func sessionRows(headers []sessions.Header, running map[string]bool) []SessionRow {
 	items := make([]SessionRow, 0, len(headers))
 	for _, h := range headers {
 		items = append(items, SessionRow{
@@ -531,6 +535,7 @@ func sessionRows(headers []sessions.Header) []SessionRow {
 			Cwd:      h.Cwd,
 			Title:    sessionTitle(h),
 			Modified: h.Modified.Local().Format("01-02 15:04"),
+			Running:  running[h.ID],
 		})
 	}
 	return items
