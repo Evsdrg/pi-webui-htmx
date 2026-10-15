@@ -35,6 +35,11 @@ function knownModel(model: State['model']): model is ModelChoice {
   return !!model?.provider && !!model.id && model.provider.toLowerCase() !== 'unknown' && model.id.toLowerCase() !== 'unknown';
 }
 
+/** textList 把事件里的一个字段收成字符串数组；非数组或非字符串项一律丢弃。 */
+function textList(value: unknown): string[] {
+  return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : [];
+}
+
 export class Workbench {
   // WS 端点用**相对路径**解析：本地形态下是 `{host}/api/v1/ws`，
   // 经 relay 的设备前缀形态下是 `{host}/d/{id}/api/v1/ws`——
@@ -97,6 +102,12 @@ export class Workbench {
   private searchQuery = '';
   /** contextWindow 记录当前模型的上下文窗口，供「系统」面板显示。 */
   private contextWindow = 0;
+  /** queued 是当前会话的排队消息（steering 插入指令 / followUp 完成后追加）。
+      Pi 的 queue_update 每次都给出**完整队列**，所以这里直接整份替换，不做增量。 */
+  private queued: { steering: string[]; followUp: string[] } = { steering: [], followUp: [] };
+  /** pendingCount 是 Pi 报告的排队条数（session.state.pendingMessageCount）。
+      页面刷新后历史 queue_update 已不在重放窗口里，靠它至少能据实说「有 N 条排队」。 */
+  private pendingCount = 0;
 
   constructor(private readonly bottom: () => void) {}
   start(): void {
@@ -507,6 +518,7 @@ export class Workbench {
     const worker = workers.find((w) => w.sessionId === this.sessionId);
     if (!worker) {
       this.currentModel = undefined; this.modelUnavailable = false; this.renderModel();
+      this.clearQueued();
       this.setRun('idle'); return;
     }
     this.cwd = worker.cwd;
@@ -517,6 +529,10 @@ export class Workbench {
     const wasBusy = this.run !== 'idle';
     const busy = state.isStreaming || state.isCompacting || (state.pendingMessageCount ?? 0) > 0;
     this.setRun(busy ? (state.isCompacting ? 'compacting' : 'running') : 'idle');
+    // 刷新后历史 queue_update 已不在重放窗口内：至少按 Pi 报告的条数据实显示，
+    // 不猜正文（本地有 queue_update 正文时 setQueued 已渲染，这里不覆盖）。
+    this.pendingCount = state.pendingMessageCount ?? 0;
+    if (!this.queued.steering.length && !this.queued.followUp.length) this.renderQueued();
     if (state.sessionName) this.sessionTitle = state.sessionName;
     this.applyStateModel(state);
     if (wasBusy && !busy) await this.settled();
@@ -534,6 +550,8 @@ export class Workbench {
     this.searchFocus = entryId ? { sessionId: id, entryId, epoch: this.scope.epoch } : undefined;
     if (previous && this.bridge.connected) void this.request('session.unsubscribe', undefined, previous).catch(() => {});
     this.sessionId = id; this.subscribed = ''; this.cwd = cwd; this.diskSession = !!id && persisted; this.cursor.reset(); this.live.clear();
+    // 排队消息属于上一个会话：切换后立即清空，新的 queue_update / state 会补上。
+    this.clearQueued();
     this.currentModel = undefined; this.historicalModel = undefined; this.modelIntent = undefined; this.modelUnavailable = false;
     const modelSelect = el<HTMLSelectElement>('model-select');
     modelSelect.querySelectorAll('option[data-runtime-model]').forEach((option) => option.remove());
@@ -733,6 +751,12 @@ export class Workbench {
   private onMessage(message: Message): void {
     if (message.kind === 'response') return;
     if (message.event === 'terminal.output' || message.event === 'bridge.terminal_closed') { this.workspace?.event(message); return; }
+    // 忙闲广播是全局的（不属于任何会话），要在 sessionId 守卫之前处理：
+    // 侧栏要在别的会话、别的浏览器里也显示「运行中」转圈。
+    if (message.kind === 'control' && message.event === 'bridge.workers_changed') {
+      this.applyRunning(record(message.data).running);
+      return;
+    }
     if (message.sessionId !== this.sessionId) return;
     if (message.kind === 'control') {
       if (message.event === 'bridge.subscription_closed') {
@@ -755,6 +779,9 @@ export class Workbench {
     }
     if (event.event !== 'pi.event') return;
     const data = record(event.data);
+    // queue_update 的 steering/followUp 各含**完整队列**：运行中发送的消息
+    // 进了队列就从输入框消失，这里据实把它们列出来（只读）。
+    if (data.type === 'queue_update') this.setQueued(data);
     this.setRun(runStateAfter(this.run, data));
     if (data.type === 'agent_start' && el('live').hidden) this.live.begin();
     this.live.event(data);
@@ -1316,6 +1343,61 @@ export class Workbench {
   private saveCurrentDraft(): void { saveDraft(this.draftKey(), el<HTMLTextAreaElement>('prompt').value); }
   private setConnection(online: boolean): void { el('conn-state').textContent = online ? '已连接' : '未连接'; el('conn-state').className = `state state-${online ? 'online' : 'offline'}`; if (online) this.notice(''); this.updateControls(); }
   private setRun(state: RunState): void { this.run = state; el('session-state').textContent = {idle:'就绪',running:'运行中',retrying:'重试中',compacting:'压缩中',waiting_input:'等待确认'}[state]; this.updateControls(); }
+  /** applyRunning 按桥广播的忙闲快照切换侧栏行的「运行中」转圈。
+      只切 class/data 属性，不整块重渲染侧栏——避免每次忙闲变化都抖动。
+      找不到对应行的会话（未加载到当前页）自然忽略。 */
+  private applyRunning(running: unknown): void {
+    const set = new Set(Array.isArray(running) ? running.filter((id): id is string => typeof id === 'string') : []);
+    for (const row of document.querySelectorAll<HTMLElement>('#session-list [data-session]')) {
+      const active = set.has(row.dataset.session ?? '');
+      row.classList.toggle('is-running', active);
+      if (active) row.dataset.running = '1'; else delete row.dataset.running;
+    }
+  }
+  /** setQueued 用 Pi 的完整队列快照替换本地排队状态并重绘。 */
+  private setQueued(data: Record<string, unknown>): void {
+    this.queued = { steering: textList(data.steering), followUp: textList(data.followUp) };
+    this.renderQueued();
+  }
+  /** clearQueued 清空本地排队状态（切换会话、结束、abort 时调用）。 */
+  private clearQueued(): void {
+    if (!this.queued.steering.length && !this.queued.followUp.length && !this.pendingCount) return;
+    this.queued = { steering: [], followUp: [] };
+    this.pendingCount = 0;
+    this.renderQueued();
+  }
+  /** renderQueued 把排队消息画进输入框上方的条里。 */
+  private renderQueued(): void {
+    const strip = el('pending-strip');
+    strip.replaceChildren();
+    const rows: Array<{ tag: string; body: string }> = [];
+    for (const body of this.queued.steering) rows.push({ tag: '插入指令', body });
+    for (const body of this.queued.followUp) rows.push({ tag: '完成后追加', body });
+    if (!rows.length && this.pendingCount > 0) {
+      // 刷新后历史 queue_update 已不在重放窗口内：据实说明有条数但看不到原文，
+      // 不假装知道内容。
+      const note = document.createElement('div');
+      note.className = 'pending-note';
+      note.textContent = `已排队 ${this.pendingCount} 条（刷新前的原文不可见）`;
+      strip.append(note);
+      strip.hidden = false;
+      return;
+    }
+    for (const row of rows) {
+      const item = document.createElement('div');
+      item.className = 'pending-item';
+      const tag = document.createElement('span');
+      tag.className = 'pending-tag';
+      tag.textContent = row.tag;
+      const body = document.createElement('span');
+      body.className = 'pending-text';
+      body.textContent = row.body;
+      body.title = row.body;
+      item.append(tag, body);
+      strip.append(item);
+    }
+    strip.hidden = rows.length === 0;
+  }
   private updateControls(): void { el<HTMLButtonElement>('send-button').disabled = !this.bridge.connected || this.sending || !el<HTMLTextAreaElement>('prompt').value.trim() || (this.modelUnavailable && !this.selectedModel()); el('abort-button').hidden = this.run === 'idle'; const hint = el('queue-hint'); const busy = this.run !== 'idle'; hint.hidden = !busy; if (busy) hint.textContent = this.defaultQueueKind() === 'steering' ? '本轮结束后插入指令' : '排到队列末尾，本轮完成后追加'; el<HTMLSelectElement>('model-select').disabled = busy; el<HTMLSelectElement>('thinking-select').disabled = busy || !this.sessionId; }
   // sendQueued 在运行中发送：先把模式同步给桥，再带 streamingBehavior 提交。
   // 不先同步的话，用户改了 radio 但桥仍是旧模式，行为与界面显示不一致。

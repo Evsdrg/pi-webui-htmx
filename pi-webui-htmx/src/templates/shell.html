@@ -171,6 +171,10 @@
         <div id="command-menu" class="command-menu" hidden></div>
         <div id="mention-menu" class="command-menu mention-menu" hidden></div>
         <div class="queue-hint" id="queue-hint" hidden></div>
+        {{/* 已排队消息条：运行中发送的消息进 Pi 队列后，正文会从输入框消失，
+             这里据实列出当前排队内容（来源是 Pi 的 queue_update 事件，含完整队列）。
+             元素常驻、由脚本填内容与显隐。 */}}
+        <div class="pending-strip" id="pending-strip" hidden></div>
         <div class="composer-input">
           <label class="sr-only" for="prompt">消息</label>
           <textarea id="prompt" name="text" rows="1" placeholder="消息…输入 / 使用命令，输入 @ 查找文件" maxlength="200000"></textarea>

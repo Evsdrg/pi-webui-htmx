@@ -51,7 +51,8 @@ function mount() {
 <button data-action=models-edit>编辑</button><button data-action=models-reload>重读</button><button data-action=models-save>保存</button><button data-action=models-discover>发现</button><button data-action=models-test>测试</button></dialog>
  <dialog id=mcp-dialog><p id=mcp-status></p><input id=mc-name><select id=mc-transport><option value=stdio>stdio</option><option value=http>http</option></select><input id=mc-command><textarea id=mc-args></textarea><input id=mc-cwd><input id=mc-url><textarea id=mc-env></textarea><textarea id=mc-headers></textarea><select id=mc-exposure><option value=codemode>codemode</option></select><input id=mc-description><input type=checkbox id=mc-enabled checked><button data-action=mcp-save>保存</button><button data-action=mcp-cancel>取消</button></dialog>
  <div id=mcp-slot><table data-mcp-loaded><tr data-mcp-server=fs><td>fs</td><td><button data-action=mcp-probe>探测连接</button><button data-action=mcp-add>新增</button><button data-action=mcp-edit>编辑</button><button data-action=mcp-toggle>禁用</button><button data-action=mcp-delete>删除</button></td></tr></table></div>`;
- for(const id of ['live','conn-state','connection-notice','session-state','session-title','session-cwd','session-list','session-count','turns','older-slot','chat-scroll','welcome','command-menu','ext-status-slot','ext-widgets-before','ext-widgets-after','ext-dialog-slot','usage','toast-root']) {const node=document.createElement('div');node.id=id;document.body.append(node);}
+ for(const id of ['live','conn-state','connection-notice','session-state','session-title','session-cwd','session-list','session-count','turns','older-slot','chat-scroll','welcome','command-menu','ext-status-slot','ext-widgets-before','ext-widgets-after','ext-dialog-slot','usage','toast-root','pending-strip']) {const node=document.createElement('div');node.id=id;document.body.append(node);}
+ document.getElementById('pending-strip')!.hidden = true;
 {for(const id of ['search-query','system-session','tools-session','stats-session','branch-session','goal-session','files-path','git-path','diff-path']){const node=document.createElement('input');node.type='hidden';node.id=id;document.body.append(node);}}
  document.body.insertAdjacentHTML('beforeend', readFileSync('src/templates/shell.html', 'utf8').match(/<template id="thinking-row-template">[\s\S]*?<\/template>/)![0]);
  document.body.dataset.sessionId='s1';
@@ -282,6 +283,80 @@ describe('MCP 面板动作', () => {
     const write = vi.mocked(fake.request).mock.calls.find((c) => c[0] === 'config.mcp.write')!;
     expect((write[2] as { document: { mcpServers: Record<string, unknown> } }).document.mcpServers.fs).toBeUndefined();
     expect(trigger).toHaveBeenCalledWith(document.body, 'mcp-refresh');
+  });
+});
+
+// 侧栏的「运行中」转圈由桥广播 bridge.workers_changed 驱动；前端只切
+// class/data 属性，不整块重渲染侧栏。这是「看不到会话活动」的修复。
+describe('会话活动指示', () => {
+  const broadcast = (running: string[]) => fake.instance!.dispatchEvent(new CustomEvent('message', {
+    detail: { version: 1, kind: 'control', event: 'bridge.workers_changed', data: { running } },
+  }));
+
+  it('广播来的忙会话被标为运行中，移出后取消', () => {
+    document.getElementById('session-list')!.innerHTML =
+      '<div class="session-item" data-session="s1"><a class="session-link" href="?session=s1"><span class="session-title">一</span></a></div>' +
+      '<div class="session-item" data-session="s2"><a class="session-link" href="?session=s2"><span class="session-title">二</span></a></div>';
+    broadcast(['s1']);
+    const s1 = document.querySelector('#session-list [data-session="s1"]')!;
+    const s2 = document.querySelector('#session-list [data-session="s2"]')!;
+    expect(s1.classList.contains('is-running')).toBe(true);
+    expect(s1.getAttribute('data-running')).toBe('1');
+    expect(s2.classList.contains('is-running')).toBe(false);
+    expect(s2.getAttribute('data-running')).toBeNull();
+    // 之后 s1 结束、s2 开始：标记随之翻转。
+    broadcast(['s2']);
+    expect(s1.classList.contains('is-running')).toBe(false);
+    expect(s1.getAttribute('data-running')).toBeNull();
+    expect(s2.classList.contains('is-running')).toBe(true);
+  });
+
+  it('广播不属于当前会话也生效（不能卡在 sessionId 守卫后）', () => {
+    document.getElementById('session-list')!.innerHTML =
+      '<div class="session-item" data-session="other"><a class="session-link" href="?session=other"><span class="session-title">别的会话</span></a></div>';
+    broadcast(['other']);
+    expect(document.querySelector('#session-list [data-session="other"]')!.classList.contains('is-running')).toBe(true);
+  });
+});
+
+// 运行中发送的消息进队列后正文会从输入框消失；queue_update 给出完整队列，
+// 据实列在输入框上方。这是「看不到自己追加了什么」的修复。
+describe('排队消息条', () => {
+  it('queue_update 后列出排队正文并区分两类', () => {
+    emit('queue_update', { steering: ['插入的话'], followUp: ['之后再说'] });
+    const strip = document.getElementById('pending-strip')!;
+    expect(strip.hidden).toBe(false);
+    const items = strip.querySelectorAll('.pending-item');
+    expect(items).toHaveLength(2);
+    expect(items[0].querySelector('.pending-tag')!.textContent).toBe('插入指令');
+    expect(items[0].querySelector('.pending-text')!.textContent).toBe('插入的话');
+    expect(items[1].querySelector('.pending-tag')!.textContent).toBe('完成后追加');
+    expect(items[1].querySelector('.pending-text')!.textContent).toBe('之后再说');
+  });
+
+  it('队列清空后隐藏消息条', () => {
+    emit('queue_update', { steering: ['一'], followUp: [] });
+    expect(document.getElementById('pending-strip')!.hidden).toBe(false);
+    emit('queue_update', { steering: [], followUp: [] });
+    expect(document.getElementById('pending-strip')!.hidden).toBe(true);
+    expect(document.getElementById('pending-strip')!.querySelectorAll('.pending-item')).toHaveLength(0);
+  });
+
+  it('刷新后只有条数时据实说明原文不可见', async () => {
+    // 模拟页面刷新：本地没有 queue_update 正文，但 session.state 报告有条目。
+    fake.request.mockImplementation(async (method: string) => {
+      if (method === 'worker.list') return [{ sessionId: 's1', cwd: '/fixture', busy: true, status: 'running' }];
+      if (method === 'session.state') return { sessionId: 's1', isStreaming: true, isCompacting: false, pendingMessageCount: 2 };
+      if (method === 'session.thinking_levels') return ['off', 'high'];
+      if (method === 'session.ext_status') return { epoch: 'e1', statuses: {} };
+      if (method === 'session.pending_dialogs') return { ids: [] };
+      return {};
+    });
+    await (workbench as unknown as { reconcile(): Promise<void> }).reconcile();
+    const strip = document.getElementById('pending-strip')!;
+    expect(strip.hidden).toBe(false);
+    expect(strip.querySelector('.pending-note')!.textContent).toContain('已排队 2 条');
+    expect(strip.querySelectorAll('.pending-item')).toHaveLength(0);
   });
 });
 

@@ -107,6 +107,16 @@ kbd { font-size:10px; color:var(--text-dim); margin-left:auto; }
 .session-op:hover { background:var(--bg-hover); color:var(--text); }
 .session-op-danger:hover { color:var(--danger); }
 .session-title { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:13px; }
+/* 标题行：转圈 + 标题。转圈常驻占位但默认不显示（visibility 而非 display，
+   避免出现/消失时标题横向跳动）；只有 .is-running 的行让它转起来。 */
+.session-head { display:flex; align-items:center; gap:6px; min-width:0; }
+.session-spin { flex:none; width:11px; height:11px; border:2px solid var(--border); border-top-color:var(--accent); border-radius:50%; visibility:hidden; }
+.session-item.is-running .session-spin { visibility:visible; }
+/* 旋转是「还在进行」的信号，不是装饰；用户要求减少动效时只留静态圆环。 */
+@media (prefers-reduced-motion: no-preference) {
+  .session-item.is-running .session-spin { animation:session-spin 0.8s linear infinite; }
+  @keyframes session-spin { to { transform:rotate(360deg); } }
+}
 .session-meta { font-size:10px; color:var(--text-muted); display:flex; gap:6px; overflow:hidden; white-space:nowrap; }
 .search-snippet { font-size:11px; color:var(--text-muted); overflow:hidden; overflow-wrap:anywhere; display:-webkit-box; -webkit-box-orient:vertical; -webkit-line-clamp:2; }
 .sidebar-footer { display:flex; align-items:center; flex-wrap:wrap; border-top:1px solid var(--border); padding-top:12px; margin-top:8px; gap:4px; }
@@ -412,6 +422,13 @@ input,select,textarea { background:var(--bg); border:1px solid var(--border); bo
 .queue-modes { border:1px solid var(--border); border-radius:5px; padding:10px 12px; margin:12px 0 0; display:grid; gap:8px; }
 .queue-modes legend { font-size:11px; color:var(--text-muted); padding:0 4px; }
 .queue-hint { font-size:11px; color:var(--text-muted); padding:0 2px; }
+/* 已排队消息条：运行中发送的消息进队列后正文会从输入框消失，这里列出它们。
+   每条一行，前缀标出所属队列（插入指令 / 完成后追加），既有进入顺序也有归属。 */
+.pending-strip { display:flex; flex-direction:column; gap:4px; margin:0 0 6px; }
+.pending-item { display:flex; align-items:center; gap:7px; min-width:0; padding:4px 8px; border:1px solid var(--border); border-radius:7px; background:var(--bg-panel); font-size:11px; color:var(--text-muted); }
+.pending-tag { flex:none; padding:1px 6px; border:1px solid var(--border); border-radius:5px; color:var(--text-dim); font-size:10px; }
+.pending-text { flex:1 1 auto; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--text); }
+.pending-note { padding:0 2px; font-size:11px; color:var(--text-dim); }
 .session-action-grid { display:flex; flex-wrap:wrap; gap:6px; margin:10px 0; }
 .session-action-grid .btn { font-size:12px; }
 

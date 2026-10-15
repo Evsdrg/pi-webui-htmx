@@ -1,7 +1,10 @@
 {{range .Items}}
-<div class="session-item{{if eq .ID $.Selected}} selected{{end}}" data-session="{{.ID}}" data-cwd="{{.Cwd}}" data-title="{{.Title}}">
+<div class="session-item{{if eq .ID $.Selected}} selected{{end}}{{if .Running}} is-running{{end}}" data-session="{{.ID}}" data-cwd="{{.Cwd}}" data-title="{{.Title}}"{{if .Running}} data-running="1"{{end}}>
   <a class="session-link" href="?session={{.ID}}">
-    <span class="session-title">{{.Title}}</span>
+    {{/* 转圈是会话活动指示：该会话当前有忙碌的工作进程（空闲但存活的不显示）。
+         元素常驻、由 .is-running 控制显隐，前端收到广播时只切 class/属性，
+         不整块重渲染侧栏。 */}}
+    <span class="session-head"><span class="session-spin" title="运行中" aria-label="运行中"></span><span class="session-title">{{.Title}}</span></span>
     <span class="session-meta"><time>{{.Modified}}</time><span title="{{.Cwd}}">{{.Cwd}}</span></span>
   </a>
   {{/* 改名/删除是行操作：按钮放在链接外（<a> 里嵌按钮是非法 HTML，
