@@ -248,7 +248,19 @@ func (c *Config) npmLatest(ctx context.Context, name string, limits DiscoveryLim
 	limits = normalizeDiscoveryLimits(limits)
 	limits.MaxBytes = min(limits.MaxBytes, maxPackageMetadata)
 	target := c.registryBaseURL + "/" + url.PathEscape(name) + "/latest"
-	body, err := c.fetchJSON(ctx, target, "", "", map[string]string{"Accept": "application/vnd.npm.install-v1+json"}, limits)
+	// 不覆盖 Accept：fetchJSON 默认发 application/json。
+	//
+	// 曾经这里发缩略 packument 媒体类型 application/vnd.npm.install-v1+json。
+	// 那是**包根端点**（/<pkg>）专用的；/latest 这个 dist-tag 端点不支持它，
+	// 会回 406 Not Acceptable，表现为「查询最新版本失败」。该失败还是间歇的：
+	// 命中 CDN 缓存时是 200，回源时才是 406，因此很难复现（真实故障里
+	// @cortexkit/pi-magic-context 失败、pi-goal-x 正常，差别只是缓存命中与否）。
+	// 真实 npm 客户端在 /latest 上也不带这个头。
+	//
+	// 也不改成走包根端点再读 dist-tags.latest：那会拉回整份 packument
+	// （@types/node 2.3MB、typescript 8.7MB），撞上 maxPackageMetadata 上限；
+	// /latest 返回的是几 KB 的版本清单。
+	body, err := c.fetchJSON(ctx, target, "", "", nil, limits)
 	if err != nil {
 		return "", err
 	}

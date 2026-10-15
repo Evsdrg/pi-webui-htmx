@@ -160,6 +160,49 @@ func TestPackages无法确认已安装版本(t *testing.T) {
 	}
 }
 
+// TestPackagesLatest端点不接受缩略媒体类型 是真实 npm registry 行为的反例：
+// 若桥在 /latest 上带 application/vnd.npm.install-v1+json，服务端回 406，
+// 所有包的「最新版本」查询都会失败（缓存命中时表现为间歇性）。
+// 这个头是包根端点 /<pkg> 专用的缩略 packument 媒体类型，/latest 不支持它。
+// 这里让假 registry 与真实 registry 同款：只认 application/json。
+func TestPackagesLatest端点不接受缩略媒体类型(t *testing.T) {
+	dir := t.TempDir()
+	writeSettings(t, dir, `{"packages":["npm:@a/b","npm:plain"]}`)
+	writeInstalled(t, dir, "@a/b", "1.0.0")
+	writeInstalled(t, dir, "plain", "1.0.0")
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasSuffix(r.URL.Path, "/latest") {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		accept := r.Header.Get("Accept")
+		if strings.Contains(accept, "application/vnd.npm.install-v1+json") {
+			// 与真实 registry 一致：缩略媒体类型在 /latest 上不可用。
+			w.WriteHeader(http.StatusNotAcceptable)
+			return
+		}
+		_, _ = w.Write([]byte(`{"version":"1.5.0"}`))
+	}))
+	defer srv.Close()
+	c := NewConfig(dir, DefaultLimits())
+	withRegistry(c, srv)
+	list, err := c.Packages(context.Background(), DiscoveryLimits{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range list {
+		if p.Error != "" {
+			t.Fatalf("%s 最新版本查询不应失败（/latest 不接受缩略媒体类型）: %+v", p.Name, p)
+		}
+		if p.Latest != "1.5.0" {
+			t.Fatalf("%s 应取到 latest=1.5.0: %+v", p.Name, p)
+		}
+		if !p.HasUpdate {
+			t.Fatalf("%s 1.0.0 -> 1.5.0 应判定有更新: %+v", p.Name, p)
+		}
+	}
+}
+
 // TestPackages受限来源不查询 覆盖 alias/file/git 形式：不当成 registry 包。
 func TestPackages受限来源不查询(t *testing.T) {
 	dir := t.TempDir()
