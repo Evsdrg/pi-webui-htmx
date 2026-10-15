@@ -180,8 +180,9 @@ func (w *Worker) Fork(ctx context.Context, entryID string) (ForkReply, error) {
 	if err := w.owner.Rebind(w, state.SessionID); err != nil {
 		return ForkReply{}, err
 	}
-	// Pi 对无 assistant 的分支延迟写盘。身份已切换，索引不可用时
-	// 保守报告未落盘，不能因只读查询失败让调用方误以为 fork 未执行。
+	// Pi 只在分支真正含消息（首条 user 或 assistant）时才建会话文件，
+	// 空分支不落盘。身份已切换，索引不可用时保守报告未落盘，不能因只读
+	// 查询失败让调用方误以为 fork 未执行。
 	_, findErr := w.store.Find(ctx, state.SessionID)
 	return ForkReply{SessionID: state.SessionID, Text: out.Text, Persisted: findErr == nil}, nil
 }

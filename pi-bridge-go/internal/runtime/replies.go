@@ -49,10 +49,11 @@ type EntriesReply struct {
 
 // ForkReply 是 session.fork 的回执。
 //
-// Persisted 表示磁盘索引是否已经能找到新会话。Pi 在分支还没有 assistant
-// 记录时延迟写盘，因此 persisted:false 的新 ID **只在当前 worker 中存在**；
-// 关闭 worker 前没有首条 assistant 回复就无法恢复。调用方不得按这个 ID
-// 直接请求磁盘历史（api/v1/protocol.md「分支与导出」一节）。
+// Persisted 表示磁盘索引是否已经能找到新会话。Pi 只在分支真正含消息
+// （首条 user 或 assistant）时才建会话文件，空分支不落盘，因此
+// persisted:false 的新 ID **只在当前 worker 中存在**；关闭 worker 前没有
+// 首条消息就无法恢复。调用方不得按这个 ID 直接请求磁盘历史
+// （api/v1/protocol.md「分支与导出」一节）。
 type ForkReply struct {
 	SessionID string `json:"sessionId"`
 	// Text 是原用户消息，供新分支的草稿继续编辑。

@@ -1,4 +1,4 @@
-// Command smoke-client 只做 A 阶段冒烟：握手、查询状态、停止，不发送提示词。
+// Command smoke-client 只做冒烟：握手、查询状态、停止，不发送提示词。
 package main
 
 import (

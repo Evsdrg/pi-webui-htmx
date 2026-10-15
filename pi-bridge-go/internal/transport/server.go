@@ -870,9 +870,9 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	switch r.URL.Path {
 	case "/api/v1/capabilities":
-		// 这里只报**实际生效**的东西：以前写死 phase "A"（阶段早已完成，
-		// 发现端点却还在说 A 阶段）与终端的默认限额（CLI 可覆盖，于是
-		// 报给客户端的值与真正执行的值不符）——两者都会误导调用方（B80）。
+		// 这里只报**实际生效**的东西：以前写死一个早已结束的阶段字段 phase
+		// 与终端的默认限额（CLI 可覆盖，于是报给客户端的值与真正执行的值不符）
+		// ——两者都会误导调用方（B80）。
 		terminals, terminalIdle := 0, 0
 		if s.terminals != nil {
 			terminals, terminalIdle = s.terminals.Limits()
@@ -1520,7 +1520,7 @@ func (s *Server) dispatchCommon(ctx context.Context, r protocol.Request, sink co
 			return data, err
 		}
 	}
-	return nil, protocol.E("unsupported_method", "A 阶段未实现该方法")
+	return nil, protocol.E("unsupported_method", "该方法未实现")
 }
 
 // subscribe 处理事件订阅：先做游标补发，再注册有界队列并持续推送。

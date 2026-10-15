@@ -3,7 +3,7 @@
 // 为什么只读、为什么走文件：该插件把自己的权威状态放在
 // <cwd>/.pi/goals/*.md（文件头是一段 JSON 元数据，其后是可编辑正文）与
 // <cwd>/.pi/goals/goal_events.jsonl（append-only 账本）里，不走 Pi 的 UI 通道。
-// 而 Pi 0.85.1 的 RPC 模式会忽略插件注册的 setWidget(key, factory) 工厂函数
+// 而 Pi 的 RPC 模式会忽略插件注册的 setWidget(key, factory) 工厂函数
 // （rpc-mode.js 只接受字符串数组），所以插件自带的仪表盘在 RPC 客户端上根本
 // 到不了——和 magic-context 的 todo 面板是同一个坑。桥按需只读这些文件、
 // 自己渲染，是对任何客户端都成立的路径。

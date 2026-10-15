@@ -23,7 +23,7 @@
 
 | 组件 | 要求 |
 |---|---|
-| [Pi](https://github.com/earendil-works/pi) | 已安装且可执行 `pi --mode rpc`（协议版本 1；开发基准 0.85.1） |
+| [Pi](https://github.com/earendil-works/pi) | 已安装且可执行 `pi --mode rpc`（协议版本 1；开发基准 1.2.0） |
 | Go | 1.27+（构建桥） |
 | Node.js + pnpm | Node ≥ 20.19、pnpm 11（构建前端） |
 

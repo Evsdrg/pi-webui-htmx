@@ -7,10 +7,10 @@ import (
 	"os/exec"
 )
 
-// prepareProcess 在 A 阶段只支持 Linux 进程监督，其他平台显式报错，
+// prepareProcess 目前只支持 Linux 进程监督，其他平台显式报错，
 // 不提供降级的半套实现。
 func prepareProcess(cmd *exec.Cmd) error {
-	return errors.New("A 阶段的进程监督仅支持 Linux")
+	return errors.New("进程监督仅支持 Linux")
 }
 
 // signalGroup 尽力终止子进程；非 Linux 平台不做进程组回收。

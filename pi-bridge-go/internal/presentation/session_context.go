@@ -31,9 +31,11 @@ type ToolInfo struct {
 
 // SessionContext 是导出文件里可供界面使用的那部分活动会话元数据。
 //
-// 为什么绕这一圈：Pi 的 RPC 没有暴露系统提示词和工具定义的命令
+// 为什么绕这一圈：Pi 的 RPC 没有「取回系统提示词与工具定义」的命令
 // （rpc-mode 的命令表里只有 get_state/get_session_stats 等，均不含这两项）。
-// 唯一带着它们的出口是 export_html —— 它把 AgentState 里的 systemPrompt
+// 1.2.0 起提示词与工具也会作为 `system` 条目持久化，可经 get_entries 读到，
+// 但那是**会话已有首轮请求之后**的事；首轮请求之前（以及尚未落盘的会话）
+// 唯一带着它们的出口仍是 export_html——它把 AgentState 里的 systemPrompt
 // 与 tools 一并写进 HTML。因此桥按需导出一次、从中取回，而不是假装能直接问。
 type SessionContext struct {
 	SystemPrompt string

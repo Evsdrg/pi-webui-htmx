@@ -22,7 +22,7 @@
 
 历史页的模型标识来自「沿父链最近的 `model_change`」。尾部窗口扫描时，若窗口最旧一段之前还有 `model_change`、而它落在窗口之外，那一段的起点就取不到值；此时客户端按「页内最近的助手回复」推断模型（这是既有的降级路径，不会显示成错误的模型）。`leafId=…` 的翻页请求若落在窗口之外会触发一次全扫，之后那份完整索引进入缓存。
 
-`session.fork` 成功返回 `{sessionId,text,persisted}`：`text` 是原用户消息，供新分支草稿编辑；`persisted` 表示磁盘索引是否已经找到新 JSONL。Pi 0.85.1 在新分支没有 assistant 记录时延迟写盘，因此 `persisted:false` 的新 ID 只在当前 worker 中存在，关闭 worker 前若没有首条 assistant 回复就不能恢复。UI 不得按新 ID 直接请求磁盘历史；已有文件的分支仍按普通历史加载。`GET /ui/sessions/{id}/history` 对仍有活跃 worker、但磁盘尚无该会话文件的 ID 返回空正文 `204` 与 `X-Session-Unsaved: 1`；真正不存在的 ID、非法叶子仍报错。桥不替 Pi 写入伪造的会话文件。
+`session.fork` 成功返回 `{sessionId,text,persisted}`：`text` 是原用户消息，供新分支草稿编辑；`persisted` 表示磁盘索引是否已经找到新 JSONL。Pi 只在分支真正含消息（首条 user 或 assistant）时才建会话文件，空分支不落盘；因此 `persisted:false` 的新 ID 只在当前 worker 中存在，关闭 worker 前若没有首条消息就不能恢复。UI 不得按新 ID 直接请求磁盘历史；已有文件的分支仍按普通历史加载。`GET /ui/sessions/{id}/history` 对仍有活跃 worker、但磁盘尚无该会话文件的 ID 返回空正文 `204` 与 `X-Session-Unsaved: 1`；真正不存在的 ID、非法叶子仍报错。桥不替 Pi 写入伪造的会话文件。
 
 业务响应默认 no-store；内容哈希静态资产有独立缓存策略。反代部署由 `--public-origin` 显式声明对外来源（S09）：
 声明后桥额外接受该来源的 Host 与 Origin，非环回监听也只在该开关下放行，且只接受私有/overlay 网段地址；
