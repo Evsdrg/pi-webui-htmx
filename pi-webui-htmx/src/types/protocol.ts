@@ -127,6 +127,8 @@ export type Method =
   | "config.packages"
   | "config.settings"
   | "config.trust"
+  | "config.mcp"
+  | "config.mcp.write"
   | "terminal.open"
   | "terminal.input"
   | "terminal.resize"

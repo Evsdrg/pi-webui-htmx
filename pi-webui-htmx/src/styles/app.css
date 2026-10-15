@@ -646,10 +646,25 @@ input,select,textarea { background:var(--bg); border:1px solid var(--border); bo
 .packages td .tag + .tag { margin-left:4px; }
 .tag-warn { border-color:color-mix(in srgb,var(--accent) 40%,transparent); color:var(--accent); }
 .tag-err { border-color:var(--danger-border); background:var(--danger-bg); color:var(--danger); }
+/* 成功态标签（MCP 已连接）：与 tag-warn/tag-err 同族。 */
+.tag-ok { border-color:var(--success-border); color:var(--success); }
 /* diff 头部的新增/删除标签：与 tag-warn/tag-err 同族，绿/红区分增删。 */
 .tag-add { border-color:var(--success-border); color:var(--success); }
 .tag-del { border-color:var(--danger-border); color:var(--danger); }
 .packages-subtitle { margin:18px 0 0; font-size:13px; font-weight:600; }
+
+/* ==== MCP 服务器清单（设置 → MCP）====
+   复用 .packages 表格与 .config-* 控件；这里只补 MCP 专有的行内元素。 */
+.mcp-servers td .tag + .tag { margin-left:4px; }
+.mcp-name { font-weight:600; }
+.mcp-desc { display:block; margin-top:2px; color:var(--text-dim); font-size:11px; }
+.mcp-tools { margin-left:6px; color:var(--text-dim); font-size:11px; }
+.mcp-error { margin-top:4px; color:var(--danger); font-size:11px; overflow-wrap:anywhere; }
+.mcp-note { margin:0; }
+.mcp-errors { padding:8px 10px; border:1px solid var(--danger-border); border-radius:6px; background:var(--danger-bg); }
+.mcp-errors-title { color:var(--danger); font-size:11px; font-weight:600; }
+.mcp-errors-list { margin:4px 0 0; padding-left:18px; color:var(--text-muted); font-size:11px; }
+.mcp-errors-list li { overflow-wrap:anywhere; }
 
 /* 模型树缩进、思考等级映射编辑器、provider/model 字段表单与模型发现
    的样式已拆到 src/styles/models.css（按需加载）。 */

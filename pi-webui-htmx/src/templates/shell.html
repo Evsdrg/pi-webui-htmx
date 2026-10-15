@@ -233,6 +233,7 @@
               <div class="config-side-group-label">本机</div>
               <button class="config-side-item" type="button" data-settings-section="general" aria-current="page"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 7h-9M14 17H5"/><circle cx="7" cy="7" r="3"/><circle cx="17" cy="17" r="3"/></svg><span class="config-side-text">常规</span></button>
               <button class="config-side-item" type="button" data-settings-section="extensions"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.8-3.8a6 6 0 0 1-7.9 7.9l-6.9 6.9a2.1 2.1 0 0 1-3-3l6.9-6.9a6 6 0 0 1 7.9-7.9z"/></svg><span class="config-side-text">扩展</span></button>
+              <button class="config-side-item" type="button" data-settings-section="mcp"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><path d="M17.5 14v7M14 17.5h7"/></svg><span class="config-side-text">MCP</span></button>
             </div>
             {{/* Pi Web 的设置面板还有「技能」与「智能体」两段，两者都要求先选定项目目录。
                  我们桥侧没有对应的只读面，因此不放出这两个入口——放出来点开是空的，
@@ -282,6 +283,11 @@
             </div>
             <p class="config-note">清单来自桥所在机器的 Pi 配置，由 Pi 自己加载，这里只做展示。包（<code>settings.json</code> 的 <code>packages</code>）的安装与卸载请直接改配置；<code>extensions/</code> 目录下的扩展文件由 Pi 自动加载。</p>
             <div id="packages-slot" hx-get="ui/packages" hx-trigger="packages-refresh from:body"><p class="config-empty">正在读取已安装清单…</p></div>
+          </section>
+          {{/* MCP */}}
+          <section class="config-detail-stack" data-settings-panel="mcp" hidden>
+            <p class="config-note">管理桥所在机器的全局 <code>mcp.json</code>：列出、启停、编辑、删除 MCP 服务器。连接状态需点「探测连接」读取。凭据（<code>env</code>/<code>headers</code>/<code>clientSecret</code>）在桥侧打码，页面永远拿不到真实值；项目级 <code>.pi/mcp.json</code> 受信任限制，不在此管理。</p>
+            <div id="mcp-slot" hx-get="ui/mcp" hx-trigger="mcp-refresh from:body" hx-swap="innerHTML"><p class="config-empty">正在读取 MCP 配置…</p></div>
           </section>
         </div>
       </div>
@@ -372,6 +378,40 @@
       <p id="models-status" class="form-error config-feedback" role="status"></p>
       <footer class="config-footer"><span class="status" id="models-foot">模型与凭据只保存在桥所在的机器。</span>
         <div class="config-actions"><button class="config-btn" type="button" data-action="models-reload">重新读取</button><button class="config-btn is-primary" type="button" data-action="models-save">保存</button></div>
+      </footer>
+    </dialog>
+<dialog id="mcp-dialog" class="app-dialog config-panel">
+      <header class="config-panel-head"><h2 id="mcp-dialog-title">MCP 服务器</h2><code class="config-panel-sub" id="mcp-dialog-sub">mcp.json</code><button class="config-close" type="button" data-close-dialog aria-label="关闭 MCP 服务器">×</button></header>
+      <div class="config-detail">
+        <section class="config-detail-stack">
+          <div class="config-field"><label for="mc-name">名称</label><input id="mc-name" type="text" class="mono" placeholder="server-name" spellcheck="false" autocomplete="off">
+            <span class="hint">只能包含字母、数字、下划线与连字符；工具会以 <code>mcp__名称__工具</code> 暴露。</span>
+          </div>
+          <div class="config-field"><label for="mc-transport">传输方式</label>
+            <select id="mc-transport"><option value="stdio">stdio（本地命令）</option><option value="http">http（远程 URL）</option></select>
+          </div>
+          <div class="config-field" data-mcp-transport="stdio"><label for="mc-command">命令</label><input id="mc-command" type="text" class="mono" placeholder="npx" spellcheck="false" autocomplete="off">
+            <span class="hint">新服务器会在下次 Pi 工作进程加载 MCP 时执行该命令——写入配置不等于立即执行。</span>
+          </div>
+          <div class="config-field" data-mcp-transport="stdio"><label for="mc-args">参数（每行一个）</label><textarea id="mc-args" rows="3" class="mono" spellcheck="false" placeholder="-y&#10;@modelcontextprotocol/server-filesystem&#10;."></textarea></div>
+          <div class="config-field" data-mcp-transport="stdio"><label for="mc-cwd">工作目录（可选）</label><input id="mc-cwd" type="text" class="mono" spellcheck="false" autocomplete="off"></div>
+          <div class="config-field" data-mcp-transport="http"><label for="mc-url">URL</label><input id="mc-url" type="text" class="mono" placeholder="https://example.com/mcp" spellcheck="false" autocomplete="off"></div>
+          <div class="config-field" data-mcp-transport="stdio"><label for="mc-env">环境变量（每行 name=value）</label><textarea id="mc-env" rows="2" class="mono" spellcheck="false" placeholder="API_KEY=..."></textarea>
+            <span class="hint">值会打码显示为 <code>***</code>；保留 <code>***</code> 表示沿用磁盘上的原值。以 <code>!</code> 开头的命令型凭据只能保留本机已有表达式。</span>
+          </div>
+          <div class="config-field" data-mcp-transport="http"><label for="mc-headers">自定义头部（每行 name: value）</label><textarea id="mc-headers" rows="2" class="mono" spellcheck="false"></textarea>
+            <span class="hint">处理方式与上面的环境变量相同。</span>
+          </div>
+          <div class="config-field"><label for="mc-exposure">曝光策略</label>
+            <select id="mc-exposure"><option value="codemode">codemode（默认，仅 codemode 脚本可用）</option><option value="deferred">deferred（tool_search 命中后加载）</option><option value="direct">direct（作为内置工具声明）</option><option value="hidden">hidden（注册但不可达）</option></select>
+          </div>
+          <div class="config-field"><label for="mc-description">描述（可选）</label><input id="mc-description" type="text" spellcheck="false" autocomplete="off"></div>
+          <div class="config-field"><label class="switch"><input id="mc-enabled" type="checkbox" checked><span>启用</span></label></div>
+          <p id="mcp-status" class="form-error config-feedback" role="status"></p>
+        </section>
+      </div>
+      <footer class="config-footer"><span class="status" id="mcp-foot">凭据只保存在桥所在的机器，页面永远拿不到真实值。</span>
+        <div class="config-actions"><button class="config-btn" type="button" data-action="mcp-cancel">取消</button><button class="config-btn is-primary" type="button" data-action="mcp-save">保存</button></div>
       </footer>
     </dialog>
 <dialog id="branch-dialog" class="app-dialog branch-dialog"><header class="panel-header"><h2>分支导航</h2><button class="icon-btn" data-close-dialog aria-label="关闭分支导航">×</button></header>

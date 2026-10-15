@@ -85,6 +85,7 @@ export class Workbench {
   private workspace: import('./workspace').Workspace | undefined;
   private models: import('./models').ModelsEditor | undefined;
   private branch: import('./branch').BranchNavigator | undefined;
+  private mcp: import('./mcp').McpEditor | undefined;
   private mention: import('./mention').FileCompleter | undefined;
   private currentModel: ModelChoice | undefined;
   private historicalModel: { provider: string; id: string } | undefined;
@@ -159,9 +160,15 @@ export class Workbench {
       const detail = (event as CustomEvent).detail;
       if (detail?.target?.id === 'packages-slot') packagesLoaded = detail.xhr?.status === 200 && !!detail.target.querySelector('[data-packages-loaded]');
     }, { signal });
+    // MCP 分节与扩展同理：首次切到它时才拉取（探测连接是显式动作，不在加载时做）。
+    let mcpLoaded = false;
+    document.addEventListener('htmx:afterSwap', (event) => {
+      const detail = (event as CustomEvent).detail;
+      if (detail?.target?.id === 'mcp-slot') mcpLoaded = detail.xhr?.status === 200 && !!detail.target.querySelector('[data-mcp-loaded]');
+    }, { signal });
     wireConfigNav('data-settings-section', 'data-settings-panel', (section) => {
-      if (section !== 'extensions' || packagesLoaded) return;
-      window.htmx.trigger(document.body, 'packages-refresh');
+      if (section === 'extensions' && !packagesLoaded) window.htmx.trigger(document.body, 'packages-refresh');
+      if (section === 'mcp' && !mcpLoaded) window.htmx.trigger(document.body, 'mcp-refresh');
     });
     // 模型配置的树点击先问编辑器：命中树节点就由它切面板，
     // 没命中才按通用导航处理（「JSON 源码」那一项）。
@@ -591,6 +598,14 @@ export class Workbench {
       }
     }).catch(() => { /* reconcile 自己会报错 */ });
   }
+  /** 惰性获取 MCP 编辑器（按需分块，不占首屏预算）。 */
+  private async mcpEditor(): Promise<import('./mcp').McpEditor> {
+    if (!this.mcp) {
+      const { McpEditor } = await import('./mcp');
+      this.mcp = new McpEditor(this.bridge, (err) => this.fail(err));
+    }
+    return this.mcp;
+  }
   /** 打开「设置与扩展」并切换到指定分节。模型配置不在这里：它由顶栏与
       * 输入框下方的模型选择器负责，设置面板只管本机外观与已装扩展。 */
   private openSettings(section: string): void {
@@ -604,9 +619,10 @@ export class Workbench {
       panel.hidden = panel.dataset.settingsPanel !== section;
     }
     const sub = document.getElementById('settings-sub');
-    if (sub) sub.textContent = section === 'extensions' ? '已安装的包' : '外观与对话';
+    if (sub) sub.textContent = section === 'extensions' ? '已安装的包' : section === 'mcp' ? 'MCP 服务器' : '外观与对话';
     openDialog('settings-dialog');
     if (section === 'extensions') window.htmx.trigger(document.body, 'packages-refresh');
+    if (section === 'mcp') window.htmx.trigger(document.body, 'mcp-refresh');
     // 「会话默认」控件是全局偏好：每次打开设置时按偏好回显，
     // 避免显示值与实际生效的偏好两处各说各话。
     if (section === 'general') this.syncDefaultControls();
@@ -1108,6 +1124,32 @@ export class Workbench {
       case 'models-discover': await this.models?.discover(); break;
       case 'models-test': await this.models?.test(); break;
       case 'models-catalog': await this.models?.catalog(); break;
+      case 'mcp-refresh': window.htmx.trigger(document.body, 'mcp-refresh'); break;
+      case 'mcp-probe': {
+        // target 用元素而不是字符串：htmx 把裸字符串当 CSS 选择器，
+        // 'mcp-slot' 会被当成标签名而匹配不到，请求根本不发出。
+        const slot = el('mcp-slot');
+        await window.htmx.ajax('post', 'ui/mcp/probe', { source: slot, target: slot, swap: 'innerHTML' });
+        break;
+      }
+      case 'mcp-add': await (await this.mcpEditor()).openAdd(); break;
+      case 'mcp-edit': {
+        const name = button.closest<HTMLElement>('[data-mcp-server]')?.dataset.mcpServer ?? '';
+        if (name) await (await this.mcpEditor()).openEdit(name);
+        break;
+      }
+      case 'mcp-toggle': {
+        const name = button.closest<HTMLElement>('[data-mcp-server]')?.dataset.mcpServer ?? '';
+        if (name) await (await this.mcpEditor()).toggle(name);
+        break;
+      }
+      case 'mcp-delete': {
+        const name = button.closest<HTMLElement>('[data-mcp-server]')?.dataset.mcpServer ?? '';
+        if (name && confirm(`删除 MCP 服务器「${name}」？这会改写 mcp.json。`)) await (await this.mcpEditor()).remove(name);
+        break;
+      }
+      case 'mcp-save': await this.mcp?.save(); break;
+      case 'mcp-cancel': closeDialog('mcp-dialog'); break;
       case 'session-menu': {
         openDialog('session-dialog');
         if (this.sessionId) await this.refreshState();

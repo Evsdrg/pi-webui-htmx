@@ -1,0 +1,47 @@
+{{/* MCP 服务器清单：配置来自全局 ~/.pi/agent/mcp.json（只读展示 + 编辑入口）。
+     连接状态（StateLabel/ToolsText/Error）只在用户点「探测连接」后才有值：
+     `pi mcp list` 会真实连接每台服务器（stdio 拉子进程、http 发请求），
+     因此不做自动探测，由用户显式触发。项目级 .pi/mcp.json 受信任限制，
+     不在本视图内。秘密（env/headers/oauth.clientSecret）由桥打码，永不回传。 */}}
+<div class="config-detail-header">
+  <h3 class="config-detail-title">MCP 服务器</h3>
+  <div class="config-actions">
+    <button class="config-btn" type="button" data-action="mcp-add">新增服务器</button>
+    <button class="config-btn" type="button" data-action="mcp-probe">探测连接</button>
+  </div>
+</div>
+<p class="config-note">清单来自桥所在机器的全局 <code>mcp.json</code>。连接状态需要点「探测连接」才会读取——这一步会真实启动或连接每台服务器，可能耗时数十秒。</p>
+{{if .Note}}<p class="config-note mcp-note">{{.Note}}</p>{{end}}
+{{if .Errors}}
+<div class="mcp-errors">
+  <div class="mcp-errors-title">配置有误，以下条目已被跳过：</div>
+  <ul class="mcp-errors-list">{{range .Errors}}<li>{{.}}</li>{{end}}</ul>
+</div>
+{{end}}
+<table class="packages mcp-servers" data-mcp-loaded>
+  <thead><tr><th>名称</th><th>传输</th>{{if .Probed}}<th>状态</th>{{end}}<th>曝光</th><th>操作</th></tr></thead>
+  <tbody>
+  {{range .Servers}}
+  <tr data-mcp-server="{{.Name}}">
+    <td class="nowrap"><span class="mcp-name">{{.Name}}</span>{{if not .Enabled}}<span class="tag">已禁用</span>{{end}}{{if .Description}}<span class="mcp-desc">{{.Description}}</span>{{end}}</td>
+    <td class="wrap-key">{{.Transport}}</td>
+    {{if $.Probed}}
+    <td class="nowrap">
+      <span class="tag {{.StateClass}}">{{.StateLabel}}</span>
+      {{if .ToolsText}}<span class="mcp-tools" title="{{.ToolsText}}">{{len .Tools}} 个工具</span>{{end}}
+      {{if .Resources}}<span class="tag">含资源</span>{{end}}
+      {{if .Error}}<div class="mcp-error">{{.Error}}</div>{{end}}
+    </td>
+    {{end}}
+    <td class="nowrap"><span class="tag">{{.Exposure}}</span></td>
+    <td class="nowrap">
+      <button class="config-btn" type="button" data-action="mcp-edit">编辑</button>
+      <button class="config-btn" type="button" data-action="mcp-toggle">{{if .Enabled}}禁用{{else}}启用{{end}}</button>
+      <button class="config-btn is-danger" type="button" data-action="mcp-delete">删除</button>
+    </td>
+  </tr>
+  {{else}}
+  <tr><td colspan="{{if .Probed}}5{{else}}4{{end}}" class="muted">还没有配置 MCP 服务器</td></tr>
+  {{end}}
+  </tbody>
+</table>

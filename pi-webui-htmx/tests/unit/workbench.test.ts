@@ -48,7 +48,9 @@ function mount() {
 <input id=mm-id><input id=mm-name><input type=checkbox id=mm-reasoning><input type=checkbox id=mm-image><input id=mm-ctx><input id=mm-max><div id=mm-thinking></div>
 <div id=discover-result></div><aside class=config-side><div class=config-side-list id=models-tree><div id=models-tree-body></div></div></aside>
 <section data-models-panel=provider hidden></section><section data-models-panel=model hidden></section><section data-models-panel=json hidden></section><section data-models-panel=empty hidden></section>
-<button data-action=models-edit>编辑</button><button data-action=models-reload>重读</button><button data-action=models-save>保存</button><button data-action=models-discover>发现</button><button data-action=models-test>测试</button></dialog>`;
+<button data-action=models-edit>编辑</button><button data-action=models-reload>重读</button><button data-action=models-save>保存</button><button data-action=models-discover>发现</button><button data-action=models-test>测试</button></dialog>
+ <dialog id=mcp-dialog><p id=mcp-status></p><input id=mc-name><select id=mc-transport><option value=stdio>stdio</option><option value=http>http</option></select><input id=mc-command><textarea id=mc-args></textarea><input id=mc-cwd><input id=mc-url><textarea id=mc-env></textarea><textarea id=mc-headers></textarea><select id=mc-exposure><option value=codemode>codemode</option></select><input id=mc-description><input type=checkbox id=mc-enabled checked><button data-action=mcp-save>保存</button><button data-action=mcp-cancel>取消</button></dialog>
+ <div id=mcp-slot><table data-mcp-loaded><tr data-mcp-server=fs><td>fs</td><td><button data-action=mcp-probe>探测连接</button><button data-action=mcp-add>新增</button><button data-action=mcp-edit>编辑</button><button data-action=mcp-toggle>禁用</button><button data-action=mcp-delete>删除</button></td></tr></table></div>`;
  for(const id of ['live','conn-state','connection-notice','session-state','session-title','session-cwd','session-list','session-count','turns','older-slot','chat-scroll','welcome','command-menu','ext-status-slot','ext-widgets-before','ext-widgets-after','ext-dialog-slot','usage','toast-root']) {const node=document.createElement('div');node.id=id;document.body.append(node);}
 {for(const id of ['search-query','system-session','tools-session','stats-session','branch-session','goal-session','files-path','git-path','diff-path']){const node=document.createElement('input');node.type='hidden';node.id=id;document.body.append(node);}}
  document.body.insertAdjacentHTML('beforeend', readFileSync('src/templates/shell.html', 'utf8').match(/<template id="thinking-row-template">[\s\S]*?<\/template>/)![0]);
@@ -92,6 +94,8 @@ beforeEach(async () => {
   if(method==='config.models.write')return{written:true};
   if(method==='config.models.discover')return{models:[{id:'gpt-x',name:'GPT X'}]};
   if(method==='config.models.test')return{ok:true,message:'连通正常'};
+  if(method==='config.mcp')return{document:{mcpServers:{fs:{command:'npx',args:['-y','srv']}}}};
+  if(method==='config.mcp.write')return{written:true};
   if(method==='session.pending_dialogs')return{ids:[...pending]};
   if(method==='session.start')return{sessionId:'s1',cwd:'/fixture',epoch:'e1',pid:1,status:'idle',busy:false,seq:0};
   if(method==='session.ui_response'){pending=[];busy=false;emit('agent_settled');return{answered:true};}
@@ -239,6 +243,45 @@ describe('模型配置编辑器', () => {
     await (workbench as unknown as { action(a: string, b: HTMLElement): Promise<void> }).action('models-discover', document.createElement('button'));
     expect(window.htmx.ajax).toHaveBeenCalledWith('post', 'ui/models/discover', expect.objectContaining({ values: expect.objectContaining({baseUrl:'https://api.example.com/v1'}) }));
     expect(document.getElementById('discover-result').querySelector('script')).toBeNull();
+  });
+});
+
+// 回归：MCP「探测连接」按钮曾把 htmx 的 target 写成裸字符串 'mcp-slot'。
+// htmx 把字符串当 CSS 选择器，'mcp-slot' 是标签名而非 id，匹配不到任何元素，
+// 请求根本不发出——界面上没有任何反应，日志里也没有请求。必须传元素。
+describe('MCP 面板动作', () => {
+  it('探测连接以元素为 target 触发 POST 片段', async () => {
+    const ajax = window.htmx.ajax as unknown as ReturnType<typeof vi.fn>;
+    ajax.mockClear();
+    const button = document.querySelector('[data-action=mcp-probe]') as HTMLElement;
+    await (workbench as unknown as { action(a: string, b: HTMLElement): Promise<void> }).action('mcp-probe', button);
+    const call = ajax.mock.calls.find((c) => c[1] === 'ui/mcp/probe');
+    expect(call).toBeTruthy();
+    const options = call![2] as { source: unknown; target: unknown };
+    expect(options.target).toBe(document.getElementById('mcp-slot'));
+    expect(options.source).toBe(document.getElementById('mcp-slot'));
+  });
+
+  it('删除服务器前确认，取消则不写盘', async () => {
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false);
+    const before = vi.mocked(fake.request).mock.calls.filter((c) => c[0] === 'config.mcp.write').length;
+    const button = document.querySelector('[data-action=mcp-delete]') as HTMLElement;
+    await (workbench as unknown as { action(a: string, b: HTMLElement): Promise<void> }).action('mcp-delete', button);
+    expect(confirmSpy).toHaveBeenCalled();
+    expect(vi.mocked(fake.request).mock.calls.filter((c) => c[0] === 'config.mcp.write').length).toBe(before);
+  });
+
+  it('确认后删除服务器写回文档并刷新列表', async () => {
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
+    const trigger = vi.mocked(window.htmx.trigger);
+    trigger.mockClear();
+    const button = document.querySelector('[data-action=mcp-delete]') as HTMLElement;
+    await (workbench as unknown as { action(a: string, b: HTMLElement): Promise<void> }).action('mcp-delete', button);
+    expect(confirmSpy).toHaveBeenCalled();
+    await waitFor(() => expect(vi.mocked(fake.request).mock.calls.some((c) => c[0] === 'config.mcp.write')).toBe(true));
+    const write = vi.mocked(fake.request).mock.calls.find((c) => c[0] === 'config.mcp.write')!;
+    expect((write[2] as { document: { mcpServers: Record<string, unknown> } }).document.mcpServers.fs).toBeUndefined();
+    expect(trigger).toHaveBeenCalledWith(document.body, 'mcp-refresh');
   });
 });
 
