@@ -16,7 +16,8 @@
 ## 固定环境
 
 - Go 1.27.1（`go.mod`）；Node ≥ 20.19，pnpm 11.22（`packageManager` 锁定）
-- Pi：`pi --mode rpc`，开发基准 0.85.1（协议 v1）
+- Pi：`pi --mode rpc`，开发基准 1.2.0（协议 v1；2026-10-15 由 0.87.1 升级，桥的
+  RPC 命令面、CLI 参数、扩展钩子与会话事件均无变化，capabilities 的 `piBaseline` 随之更新）
 - 本机生产：以 systemd 服务运行，绑在私有组网（EasyTier）地址上，浏览器经组网
   **直连 http**（2026-10-15 由「caddy 网关反代终止 TLS」改为本地直连，网关已停用；
   具体地址属部署细节，不写进仓库）。因此访问是**非安全上下文**——`crypto.randomUUID`、
