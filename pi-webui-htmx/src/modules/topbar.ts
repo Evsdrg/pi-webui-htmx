@@ -125,8 +125,8 @@ export function renderContextUsage(host: TopbarHost, usage: unknown): void {
 
 // renderUsage 填充底栏用量条，并同步顶栏上下文占比。
 //
-// Pi 0.85.1 的 get_session_stats 在会话含失败回合时会整体失败；这时用量条留空，
-// 但上下文窗口仍来自 session.state 的模型元数据，必须继续显示，并说明占比未知。
+// 统计整体失败时用量条留空，但上下文窗口仍来自 session.state 的模型元数据，
+// 必须继续显示，并说明占比未知。
 export async function renderUsage(host: TopbarHost, sessionId: string): Promise<void> {
   let stats: Record<string, unknown> = {};
   try { stats = record(await host.request('session.stats', undefined, sessionId)); } catch { stats = {}; }

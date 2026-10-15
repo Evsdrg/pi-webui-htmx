@@ -2,7 +2,7 @@
   "$comment": "UI 包契约。桥在启动时读取本文件；字段缺失或版本不兼容时拒绝加载该 UI 包，而不是带着不确定的模板跑。",
   "uiVersion": "0.2.0",
   "protocolVersion": 1,
-  "piBaseline": "0.85.1",
+  "piBaseline": "1.2.0",
   "templates": {
     "shell": "templates/shell.html",
     "sessions": "templates/sessions.html",
