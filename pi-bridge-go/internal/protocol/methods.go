@@ -69,6 +69,7 @@ var specs = map[string]Spec{
 	"config.models.raw": {Method: "config.models.raw", Class: ClassRead},
 	"config.settings":   {Method: "config.settings", Class: ClassRead},
 	"config.trust":      {Method: "config.trust", Class: ClassRead},
+	"config.mcp":        {Method: "config.mcp", Class: ClassRead},
 	"terminal.list":     {Method: "terminal.list", Class: ClassRead},
 
 	// 读取当前 worker 状态。
@@ -142,6 +143,7 @@ var specs = map[string]Spec{
 
 	// 持久配置与删除。
 	"config.models.write": {Method: "config.models.write", Class: ClassConfig, NeedsIntent: true},
+	"config.mcp.write":    {Method: "config.mcp.write", Class: ClassConfig, NeedsIntent: true},
 	"sessions.delete":     {Method: "sessions.delete", Class: ClassDelete, NeedsIntent: true},
 
 	// 终端。

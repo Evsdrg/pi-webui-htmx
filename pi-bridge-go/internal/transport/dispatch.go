@@ -569,6 +569,24 @@ func (s *Server) dispatchConfig(ctx context.Context, r protocol.Request) (any, e
 			return nil, err
 		}
 		return s.piConfig.Trust()
+
+	case "config.mcp":
+		if err := decodeEmpty(r.Params); err != nil {
+			return nil, err
+		}
+		return s.piConfig.MCP()
+
+	case "config.mcp.write":
+		var p struct {
+			Document map[string]any `json:"document"`
+		}
+		if err := protocol.Decode(r.Params, &p); err != nil {
+			return nil, err
+		}
+		if err := s.piConfig.WriteMCP(p.Document); err != nil {
+			return nil, err
+		}
+		return writtenReply{Written: true}, nil
 	}
 	return nil, errUnhandled(r.Method)
 }

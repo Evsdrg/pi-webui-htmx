@@ -204,6 +204,10 @@ func serve() error {
 	}
 
 	piConfig := management.NewConfig(*agentDir, management.DefaultLimits())
+	// MCP 探测要运行 `pi mcp list --json`：需要 Pi 可执行文件路径，
+	// 以及一个工作目录（项目级 .pi/mcp.json 按 cwd 解析）。
+	piConfig.SetPiBinary(*binary)
+	piConfig.SetWorkspace(*root)
 	handler, err := transport.New(transport.Options{
 		Manager: manager, Store: store, Terminals: terminals, Files: files,
 		Config: piConfig, Discovery: management.DefaultDiscoveryLimits(),

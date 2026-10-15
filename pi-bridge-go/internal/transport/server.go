@@ -64,6 +64,7 @@ var SupportedMethods = []string{
 	"config.models", "config.models.raw", "config.models.write",
 	"config.models.discover", "config.models.test", "config.catalog",
 	"config.packages", "config.settings", "config.trust",
+	"config.mcp", "config.mcp.write",
 	"terminal.open", "terminal.input", "terminal.resize", "terminal.close", "terminal.list",
 	"files.list", "files.index", "files.stat", "files.read", "files.image", "files.roots",
 	"git.status", "git.diff",
@@ -548,6 +549,19 @@ func (s *Server) serveUIFragments(w http.ResponseWriter, r *http.Request, encodi
 			return s.ui.RenderPackages(packageRows(pkgs), extensionRows(exts))
 		})
 
+	case path == "/ui/mcp":
+		return s.renderFragment(w, encoding, func() (string, error) {
+			reply, err := s.piConfig.MCP()
+			if err != nil {
+				return "", err
+			}
+			return s.ui.RenderMCP(presentation.MCPData{
+				Servers: mcpRows(reply.Servers, nil),
+				Errors:  reply.Errors,
+				Note:    reply.Note,
+			})
+		})
+
 	case path == "/ui/files":
 		return s.renderFragment(w, encoding, func() (string, error) {
 			root := r.URL.Query().Get("path")
@@ -823,6 +837,10 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.serveModelProbe(w, r, encoding)
 		return
 	}
+	if r.Method == http.MethodPost && r.URL.Path == "/ui/mcp/probe" {
+		s.serveMCPProbe(w, r, encoding)
+		return
+	}
 	if r.Method != http.MethodGet {
 		writeError(w, encoding, 405, protocol.E("invalid_request", "请求方法不被允许"))
 		return
@@ -984,6 +1002,69 @@ func packageRows(pkgs []management.PackageInfo) []presentation.PackageRow {
 		})
 	}
 	return rows
+}
+
+// mcpRows 把 config.mcp 的服务器摘要与（可选的）探测结果合并成渲染行。
+// probes 为 nil 表示未探测；此时 Probed 为假，模板不显示连接列。
+func mcpRows(servers []management.MCPServerInfo, probe *management.MCPProbe) []presentation.MCPServerRow {
+	byName := map[string]management.MCPServerProbe{}
+	if probe != nil {
+		for _, p := range probe.Servers {
+			byName[p.Name] = p
+		}
+	}
+	rows := make([]presentation.MCPServerRow, 0, len(servers))
+	for _, s := range servers {
+		row := presentation.MCPServerRow{
+			Name:         s.Name,
+			Transport:    s.Transport,
+			Enabled:      s.Enabled,
+			Exposure:     s.Exposure,
+			ToolExposure: s.ToolExposure,
+			Description:  s.Description,
+			Scope:        s.Scope,
+			Source:       s.Source,
+		}
+		if probe != nil {
+			row.Probed = true
+			if p, ok := byName[s.Name]; ok {
+				row.State = p.State
+				row.Tools = p.Tools
+				row.Error = p.Error
+				row.Resources = p.Resources
+			} else {
+				// 探测未回报这台服务器（例如超时被截断）：显式标注，不假装在线。
+				row.State = "unknown"
+			}
+			row.StateLabel, row.StateClass = mcpStateLabel(row.State)
+			row.ToolsText = strings.Join(row.Tools, "、")
+		}
+		rows = append(rows, row)
+	}
+	return rows
+}
+
+// mcpStateLabel 把 Pi 的连接状态翻成中文标签与配色类。
+// 未知状态按「未知」处理，不猜成在线。
+func mcpStateLabel(state string) (string, string) {
+	switch state {
+	case "connected":
+		return "已连接", "tag-ok"
+	case "connecting":
+		return "连接中", "tag-warn"
+	case "needs-auth":
+		return "需要登录", "tag-warn"
+	case "disconnected":
+		return "已断开", "tag-warn"
+	case "failed":
+		return "连接失败", "tag-err"
+	case "closed":
+		return "已关闭", "tag-err"
+	case "disabled":
+		return "已禁用", "tag"
+	default:
+		return "未知", "tag-warn"
+	}
 }
 
 func searchHits(matches []sessions.Match) []presentation.SearchHit {

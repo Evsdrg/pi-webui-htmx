@@ -1183,6 +1183,46 @@ func (r *Renderer) RenderPackages(packages []PackageRow, extensions []ExtensionR
 	return r.execute("packages.html", PackagesData{Packages: packages, Extensions: extensions})
 }
 
+// MCPServerRow 是 MCP 服务器清单的一行。
+//
+// 配置字段（Name/Transport/Enabled/Exposure/…）来自 mcp.json；连接字段
+// （State/Tools/Error/Resources）只在用户点「探测连接」后才有值，Probed
+// 用来区分「未探测」与「探测后为空」。
+type MCPServerRow struct {
+	Name         string
+	Transport    string
+	Enabled      bool
+	Exposure     string
+	ToolExposure map[string]string
+	Description  string
+	Scope        string
+	Source       string
+	State        string
+	// StateLabel 与 StateClass 是连接状态的中文标签与标签配色类，
+	// 由 Go 侧计算，模板不做状态到样式的映射。
+	StateLabel string
+	StateClass string
+	Tools      []string
+	ToolsText  string
+	Error      string
+	Resources  bool
+	Probed     bool
+}
+
+// MCPData 驱动 MCP 管理面板。
+// Note 是 Pi 的信任提示（项目级配置被忽略时出现）；Errors 是配置错误清单。
+type MCPData struct {
+	Servers []MCPServerRow
+	Errors  []string
+	Note    string
+	Probed  bool
+}
+
+// RenderMCP 渲染 MCP 服务器清单。Probed 为真时行里带连接状态与工具数。
+func (r *Renderer) RenderMCP(data MCPData) (string, error) {
+	return r.execute("mcp.html", data)
+}
+
 // FileRow 是文件浏览的一行。
 // Size 是原始字节数，格式化由渲染层负责（模板只展示结果）。
 type FileRow struct {

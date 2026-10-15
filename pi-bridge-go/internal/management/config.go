@@ -37,6 +37,10 @@ type Config struct {
 	registryBaseURL string
 	// catalogURL 是模型目录（models.dev）的来源，可用 SetCatalogURL 覆盖。
 	catalogURL string
+	// piBin 是 Pi 可执行文件路径，仅 MCP 探测用（`pi mcp list --json`）。
+	piBin string
+	// workspace 是 MCP 探测的工作目录（项目级配置按 cwd 解析）。
+	workspace string
 }
 
 const defaultRegistryBaseURL = "https://registry.npmjs.org"
@@ -273,7 +277,13 @@ func (c *Config) WriteModels(doc map[string]any) error {
 }
 
 func (c *Config) replaceModels(body []byte) error {
-	file, err := os.CreateTemp(c.agentDir, ".models-*.tmp")
+	return c.replaceConfig("models.json", body)
+}
+
+// replaceConfig 用临时文件 + Sync + Rename + 目录 Sync 可靠替换 agentDir 下的配置文件。
+// 临时文件落在同一目录，Rename 才具备原子性。
+func (c *Config) replaceConfig(name string, body []byte) error {
+	file, err := os.CreateTemp(c.agentDir, "."+name+".*.tmp")
 	if err != nil {
 		return protocol.E("pi_error", "创建配置临时文件失败")
 	}
@@ -288,7 +298,7 @@ func (c *Config) replaceModels(body []byte) error {
 	if err := file.Close(); err != nil {
 		return protocol.E("pi_error", "关闭配置临时文件失败")
 	}
-	if err := os.Rename(file.Name(), filepath.Join(c.agentDir, "models.json")); err != nil {
+	if err := os.Rename(file.Name(), filepath.Join(c.agentDir, name)); err != nil {
 		return protocol.E("pi_error", "替换配置文件失败")
 	}
 	dir, err := os.Open(c.agentDir)

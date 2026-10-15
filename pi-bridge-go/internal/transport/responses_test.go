@@ -5,6 +5,8 @@ import (
 	"sort"
 	"strings"
 	"testing"
+
+	"pi-bridge-go/internal/management"
 )
 
 // 回执形状的线上契约。
@@ -40,6 +42,7 @@ func Test回执形状(t *testing.T) {
 		{[]string{"session.ui_response"}, answeredReply{}, []string{"answered"}},
 		{[]string{"config.models.discover", "config.catalog"}, modelsReply{}, []string{"models"}},
 		{[]string{"config.packages"}, packagesReply{}, []string{"packages"}},
+		{[]string{"config.mcp"}, management.MCPReply{}, []string{"servers", "document", "errors"}},
 		{[]string{"terminal.open"}, terminalOpenedReply{},
 			[]string{"terminalId", "cwd", "pid", "cols", "rows"}},
 		{[]string{"terminal.list"}, terminalsReply{}, []string{"terminals"}},

@@ -6,7 +6,7 @@
 
 | 方法 | 执行类别 | 目标来源 | 预算/期限族 |
 |---|---|---|---|
-| `worker.list`、`terminal.list`、`config.models`、`config.models.raw`、`config.settings`、`config.trust` | 本地只读 | 认证设备/配置域 | 元数据读取 |
+| `worker.list`、`terminal.list`、`config.models`、`config.models.raw`、`config.settings`、`config.trust`、`config.mcp` | 本地只读 | 认证设备/配置域 | 元数据读取 |
 | `session.state`、`session.models`、`session.thinking_levels`、`session.stats`、`session.last_assistant`、`session.commands`、`session.tree`、`session.fork_messages`、`session.entries`、`session.bash_output`、`session.pending_dialogs`、`session.ext_status` | 当前 worker 读取 | request.sessionId → 固定 worker 实例 | RPC 读取；tree/entries/output 后续改有界数据通道；ext_status 是插件状态行快照（按 worker 隔离） |
 | `sessions.search`、`files.list`、`files.index`、`files.stat`、`files.read`、`files.image`、`files.roots`、`git.status`、`git.diff` | 文件/目录只读 | 受管目录或 params.path | 磁盘/Git，字节、目录、匹配和时间预算 |
 | `config.models.discover`、`config.models.test`、`config.catalog`、`config.packages` | 联网读取 | 审核后的 origin/配置域 | 出站并发、总时长和响应字节 |
@@ -15,7 +15,7 @@
 | `session.prompt`、`session.steer`、`session.follow_up`、`session.bash` | 一次性执行 | 固定 worker | 持久 intent；接受与完成分开 |
 | `session.set_model`、`session.cycle_model`、`session.set_thinking`、`session.cycle_thinking`、`session.set_queue_mode`、`session.compact`、`session.set_auto_compaction`、`session.set_auto_retry`、`session.set_name`、`session.navigate` | 状态变更 | 固定 worker | 持久 intent；compact 独立长操作期限；navigate 经桥内扩展命令通道，忙会话拒绝 |
 | `session.new`、`session.switch`、`session.fork`、`session.clone` | 身份事务 | 源 worker + 目标预留/transition | 持久 intent、身份核验与事件边界 |
-| `config.models.write` | 持久配置变更 | 设备/配置 revision | intent、配置锁、原子写入 |
+| `config.models.write`、`config.mcp.write` | 持久配置变更 | 设备/配置 revision | intent、配置锁、原子写入 |
 | `sessions.delete` | 持久删除 | params.sessionId | 与 start 共用预留，不按 request.sessionId 猜目标 |
 | `terminal.open` | 进程资源创建 | 受管 cwd/固定 shell | intent、进程配额/启动期限 |
 | `terminal.input`、`terminal.resize` | 临时输入/最新状态 | 固定 terminal 实例 | 有界输入；不逐批 Sync，不重发输入 |
@@ -35,8 +35,9 @@
 | GET `/api/v1/sessions`、`/api/v1/sessions/{id}/history` | Store 只读 | 目录/字节/并发/取消；0 worker |
 | GET `/`、`/assets/*` | UI 外壳/资产 | 同一构建代次、缓存/压缩、路径限制 |
 | GET `/ui/sessions`、`/ui/sessions/{id}/history`、`/ui/sessions/{id}/lazy` | Store + presentation | 与 JSON API 同一读取服务，不能单独绕过扫描预算 |
-| GET `/ui/models`、`/ui/packages` | management + presentation | 配置域/出站读取预算；packages 不是本地廉价操作（含 npm 查询）；另列 `<agent-dir>/extensions` 下自动加载的扩展文件（只读目录结构） |
+| GET `/ui/models`、`/ui/packages`、`/ui/mcp` | management + presentation | 配置域/出站读取预算；packages 不是本地廉价操作（含 npm 查询）；另列 `<agent-dir>/extensions` 下自动加载的扩展文件（只读目录结构）；`/ui/mcp` 只读全局 `mcp.json`（项目级配置受信任限制，不在视图内） |
 | POST `/ui/models/discover`、`/ui/models/test` | management + presentation | 复用出站策略与全局操作槽；64KiB表单，认证/Host/Origin先于路由，拒绝打码/命令型凭据 |
+| POST `/ui/mcp/probe` | management + presentation | 复用全局操作槽；运行 `pi mcp list --json` 会真实连接每台服务器（stdio 拉子进程/http 发请求），受探测超时约束，输出按已知秘密值二次脱敏 |
 | GET `/ui/dirs`、`/ui/mc`、`/ui/mc/content` | workspace / magiccontext + presentation | 目录沙箱；记忆只读、正文65536字符上限、分页动作服务端生成 |
 | GET `/ui/goal` | goal（只读）+ presentation | 只读本工作区 `.pi/goals` 的目标文件与账本；不启动 worker；不写任何目标文件 |
 | GET `/ui/files`、`/ui/file-image`、`/ui/diff` | workspace + presentation | 文件沙箱、实际 reader 上限、Git runner |
