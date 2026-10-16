@@ -8,6 +8,12 @@
             hx-target="#session-list" hx-swap="innerHTML" hx-include="#search-query"
             title="{{if .Cwd}}{{.Cwd}}{{else}}未标注工作区的会话{{end}}">{{.Label}}</button>
     <span class="cwd-group-count">{{.Total}}</span>
+    {{/* 在此工作区直接新建会话。空 cwd 组（未标注工作区）不渲染：
+         cwd="" 不是合法工作区，桥会以「必须是绝对路径」拒绝。
+         用 data-action 而不是 hx-get——建会话要写 workbench 的 cwd/会话状态、
+         可能收起移动端侧栏并聚焦输入框，这些是片段交换做不到的。 */}}
+    {{if .Cwd}}<button type="button" class="session-op cwd-group-new" data-action="new-session-here"
+            data-cwd="{{.Cwd}}" title="在此工作区新建会话" aria-label="在此工作区新建会话（{{.Label}}）">＋</button>{{end}}
   </h3>
   {{range .Items}}
   <div class="session-item{{if eq .ID $.Selected}} selected{{end}}{{if .Running}} is-running{{end}}" data-session="{{.ID}}" data-cwd="{{.Cwd}}" data-title="{{.Title}}"{{if .Running}} data-running="1"{{end}}>

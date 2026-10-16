@@ -782,6 +782,10 @@ export class Workbench {
     // queue_update 的 steering/followUp 各含**完整队列**：运行中发送的消息
     // 进了队列就从输入框消失，这里据实把它们列出来（只读）。
     if (data.type === 'queue_update') this.setQueued(data);
+    // 会话被改名（Pi 的 set_session_name，也可能来自 /mcp 等外部会话）：
+    // 侧栏标题由服务端渲染，必须重新拉一次列表；否则本地只更新了 sessionTitle，
+    // 侧栏仍显示旧名（「改名不生效」的另一半原因，桥侧那半是索引缓存）。
+    if (data.type === 'session_info_changed') this.onSessionRenamed(text(data.name));
     this.setRun(runStateAfter(this.run, data));
     if (data.type === 'agent_start' && el('live').hidden) this.live.begin();
     this.live.event(data);
@@ -1105,6 +1109,16 @@ export class Workbench {
     }
     switch (action) {
       case 'new': await this.newSession(); break;
+      // 「按工作区」分组视图的组头按钮：cwd 已知，直接在该工作区开新会话，
+      // 不弹目录选择器（见 new-session.ts 的 startSessionIn）。
+      case 'new-session-here': {
+        const cwd = button.dataset.cwd ?? '';
+        if (!cwd) break;
+        const m = await import('./new-session');
+        if (this.abort.signal.aborted) break;
+        m.startSessionIn(this.newSessionHost(), cwd);
+        break;
+      }
       case 'latest': this.bottom(); break;
       case 'refresh-sessions': this.refreshSessions(); break;
       case 'models-refresh': window.htmx.trigger(document.body, 'models-refresh'); break;
@@ -1358,6 +1372,13 @@ export class Workbench {
   private setQueued(data: Record<string, unknown>): void {
     this.queued = { steering: textList(data.steering), followUp: textList(data.followUp) };
     this.renderQueued();
+  }
+  /** onSessionRenamed 处理 Pi 的 set_session_name 落地。
+      侧栏标题由服务端渲染（含桥侧索引重读），所以必须重新拉列表；
+      本地 sessionTitle 只用于「会话操作」等流程，单改它不会让侧栏变化。 */
+  private onSessionRenamed(name: string): void {
+    if (name) this.sessionTitle = name;
+    this.refreshSessions();
   }
   /** clearQueued 清空本地排队状态（切换会话、结束、abort 时调用）。 */
   private clearQueued(): void {

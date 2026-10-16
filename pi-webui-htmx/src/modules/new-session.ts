@@ -88,6 +88,19 @@ export async function openNewSession(host: Host): Promise<void> {
   host.syncButton();
 }
 
+/** 在指定工作区直接新建会话，跳过目录选择器。
+ *
+ * 用于「按工作区」分组视图的组头按钮：cwd 已知（来自磁盘索引里的真实路径），
+ * 没有可选的余地，再弹一次目录对话框是多余的。核心动作与 submitNewSession
+ * 一致——切到一个未落盘的新会话并带上该 cwd；真正启动工作进程是发首条消息时的事。
+ */
+export function startSessionIn(host: Host, cwd: string): void {
+  const target = cwd.trim();
+  if (!target) return;
+  host.selectSession('', target, '新会话');
+  el<HTMLTextAreaElement>('prompt').focus();
+}
+
 /** 提交新建会话对话框：确认目录、切换会话，并把首条草稿/模型意图带过去。 */
 export function submitNewSession(host: Host): void {
   const cwd = el<HTMLInputElement>('cwd-input').value.trim();

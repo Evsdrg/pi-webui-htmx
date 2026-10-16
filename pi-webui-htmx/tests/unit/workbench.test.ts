@@ -360,6 +360,45 @@ describe('排队消息条', () => {
   });
 });
 
+// 改名不生效的「前端那一半」：侧栏标题由服务端渲染，收到 Pi 的
+// session_info_changed 后必须重新拉列表，只改本地 sessionTitle 侧栏不会变。
+describe('会话改名后刷新侧栏', () => {
+  it('收到 session_info_changed 触发 sessions-refresh', () => {
+    const trigger = vi.mocked(window.htmx.trigger);
+    trigger.mockClear();
+    emit('session_info_changed', { name: '新标题' });
+    expect(trigger).toHaveBeenCalledWith(document.body, 'sessions-refresh');
+  });
+
+  it('改名事件同时更新本地标题', () => {
+    emit('session_info_changed', { name: '本地也要更新' });
+    expect((workbench as unknown as { title(): string }).title()).toBe('本地也要更新');
+  });
+});
+
+// 「按工作区」分组视图的组头按钮：cwd 已知时直接在该工作区开新会话。
+describe('在此工作区新建会话', () => {
+  it('按 data-cwd 切到该工作区的新会话，不弹目录对话框', async () => {
+    const button = document.createElement('button');
+    button.dataset.action = 'new-session-here';
+    button.dataset.cwd = '/opt/projects/alpha';
+    document.body.append(button);
+    await workbench.action('new-session-here', button);
+    // 新会话的 cwd 应落在该工作区；对话框不应被打开。
+    expect((workbench as unknown as { cwd: string }).cwd).toBe('/opt/projects/alpha');
+    expect(document.getElementById('new-dialog')!.hasAttribute('open')).toBe(false);
+  });
+
+  it('缺少 data-cwd 时不做任何事', async () => {
+    const before = (workbench as unknown as { cwd: string }).cwd;
+    const button = document.createElement('button');
+    button.dataset.action = 'new-session-here';
+    document.body.append(button);
+    await workbench.action('new-session-here', button);
+    expect((workbench as unknown as { cwd: string }).cwd).toBe(before);
+  });
+});
+
 describe('工作区面板的展开状态', () => {
   it('点面板内部的关闭按钮也会更新页眉控制按钮', async () => {
     const shell = document.createElement('div'); shell.id = 'workbench'; document.body.append(shell);

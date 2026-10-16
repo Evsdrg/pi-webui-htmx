@@ -76,6 +76,10 @@ kbd { font-size:10px; color:var(--text-dim); margin-left:auto; }
 .cwd-group-name { flex:1 1 auto; min-width:0; padding:2px 0; border:0; background:transparent; color:var(--text-dim); font-size:11px; font-weight:600; text-align:left; text-overflow:ellipsis; overflow:hidden; white-space:nowrap; }
 .cwd-group-name:hover { color:var(--accent); }
 .cwd-group-count { flex:0 0 auto; color:var(--text-dim); font-size:11px; }
+/* 组头里的「在此工作区新建会话」：复用 .session-op 的 22×22 图标按钮外形，
+   只补一个加号的字号与悬停语义色（否则继承到 11px 会显得很小）。 */
+.cwd-group-new { font-size:14px; line-height:1; }
+.cwd-group-new:hover { color:var(--accent); }
 .cwd-group-more { width:calc(100% - 16px); margin:2px 8px 6px; padding:5px 8px; font-size:11px; }
 .cwd-filter { display:block; width:100%; margin:0 0 10px; padding:6px 9px; font-size:12px; color:var(--text-muted); background:var(--bg); border:1px solid var(--border); border-radius:8px; text-overflow:ellipsis; }
 .cwd-filter:hover { background:var(--bg-hover); }
