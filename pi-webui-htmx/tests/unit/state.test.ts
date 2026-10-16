@@ -15,7 +15,17 @@ it('丢弃标记只在结尾剥离', () => {
   expect(stripDroppedMarker('[dropped ]')).toBe('');
   expect(stripDroppedMarker('讨论 [dropped ] 这个词')).toBe('讨论 [dropped ] 这个词');
 });
-it('agent_end 不提前结束运行，settled 才结束', () => { expect(runStateAfter('running',{type:'agent_end'})).toBe('running'); expect(runStateAfter('running',{type:'agent_settled'})).toBe('idle'); expect(runStateAfter('running',{type:'auto_retry_start'})).toBe('retrying'); });
+it('回合结束：settled 是权威信号，agent_end(willRetry=false) 兜底', () => {
+  // 权威路径：agent_settled 结束运行。
+  expect(runStateAfter('running',{type:'agent_settled'})).toBe('idle');
+  // 兜底路径：结算事件可能在途中丢失，界面不能因此永久停在「运行中」
+  // （否则模型下拉一直禁用、「从此处编辑」被 busy 挡住的观感会一直存在）。
+  // agent_end 带 willRetry=false 表示这一轮不再重试，可安全收尾。
+  expect(runStateAfter('running',{type:'agent_end',willRetry:false})).toBe('idle');
+  // willRetry=true 是重试前兆（同一轮的延续），不得提前结束。
+  expect(runStateAfter('running',{type:'agent_end',willRetry:true})).toBe('running');
+  expect(runStateAfter('running',{type:'auto_retry_start'})).toBe('retrying');
+});
 it('只有需要回答的扩展事件进入等待状态', () => { for (const method of ['notify','setStatus','setWidget']) expect(runStateAfter('running',{type:'extension_ui_request',method})).toBe('running'); for (const method of ['select','confirm','input','editor']) expect(runStateAfter('running',{type:'extension_ui_request',method})).toBe('waiting_input'); });
 it('补发事件去重，且事件流不能自己切换 epoch', () => {
   const cursor = new EventCursor();

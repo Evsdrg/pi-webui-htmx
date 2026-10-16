@@ -55,6 +55,9 @@ export class Workbench {
   private scope = new SessionScope(this.sessionId);
   private cwd = '';
   private run: RunState = 'idle';
+  // settledByEnd 标记「本轮已由 agent_end 兜底收尾」，用于吞掉紧随其后的
+  // agent_settled，避免同一轮刷新历史两次。
+  private settledByEnd = false;
   private sending = false;
   private diskSession = !!this.sessionId;
   private cursor = new EventCursor();
@@ -550,6 +553,9 @@ export class Workbench {
     this.searchFocus = entryId ? { sessionId: id, entryId, epoch: this.scope.epoch } : undefined;
     if (previous && this.bridge.connected) void this.request('session.unsubscribe', undefined, previous).catch(() => {});
     this.sessionId = id; this.subscribed = ''; this.cwd = cwd; this.diskSession = !!id && persisted; this.cursor.reset(); this.live.clear();
+    // 兜底收尾标记属于上一个会话的那一轮：切会话后必须清掉，否则它会把
+    // 新会话的第一个 agent_settled 误当成「已被 agent_end 收尾过」而吞掉。
+    this.settledByEnd = false;
     // 排队消息属于上一个会话：切换后立即清空，新的 queue_update / state 会补上。
     this.clearQueued();
     this.currentModel = undefined; this.historicalModel = undefined; this.modelIntent = undefined; this.modelUnavailable = false;
@@ -786,10 +792,28 @@ export class Workbench {
     // 侧栏标题由服务端渲染，必须重新拉一次列表；否则本地只更新了 sessionTitle，
     // 侧栏仍显示旧名（「改名不生效」的另一半原因，桥侧那半是索引缓存）。
     if (data.type === 'session_info_changed') this.onSessionRenamed(text(data.name));
+    // 收尾动作（刷新历史、清实时层）本来只绑在 agent_settled 上。但结算事件
+    // 只是一条小事件，一旦在途中丢失，界面就永久停在「运行中」：模型下拉被
+    // 禁用、「从此处编辑」被 busy 挡住，只有中止或重启才恢复。agent_end
+    // （willRetry=false）是同一轮更早、更可靠的收尾信号，用它兜底：
+    //   - 正常回合：agent_end 先到并收尾一次，随后的 agent_settled 不再重复
+    //     （settledByEnd 标记消费掉它）；
+    //   - 结算事件丢失：只有 agent_end 到，收尾照常发生。
+    // agent_settled 仍是无条件收尾（它是权威信号，也覆盖「空闲态收到结算」
+    // 这类测试与重连场景）。
+    const wasRunning = this.run !== 'idle';
     this.setRun(runStateAfter(this.run, data));
     if (data.type === 'agent_start' && el('live').hidden) this.live.begin();
     this.live.event(data);
-    if (data.type === 'agent_settled') void this.settled().catch((err) => this.fail(err));
+    // 新一轮开始：清掉上一轮的兜底标记，它只能指代当前这一轮（否则一轮
+    // 丢结算留下的 true 会吞掉此后某轮的权威结算，那一轮的历史就不刷新了）。
+    if (data.type === 'agent_start') this.settledByEnd = false;
+    if (data.type === 'agent_end' && data.willRetry === false) {
+      if (wasRunning) { this.settledByEnd = true; void this.settled().catch((err) => this.fail(err)); }
+    } else if (data.type === 'agent_settled') {
+      if (this.settledByEnd) this.settledByEnd = false;
+      else void this.settled().catch((err) => this.fail(err));
+    }
     if (data.type === 'extension_ui_request') this.extension(data);
   }
   private async settled(): Promise<void> {

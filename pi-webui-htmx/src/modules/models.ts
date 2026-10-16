@@ -526,6 +526,10 @@ export class ModelsEditor {
       if (this.abort.signal.aborted) return;
       el('models-status').textContent = '快照已保存；后续编辑仍保留在本页。';
       this.renderTree();
+      // 输入栏的模型下拉来自 ui/models（磁盘投影）。保存后必须重拉一次，
+      // 否则刚添加的模型不会出现在下拉里，用户以为没保存成功。桥侧同时会让
+      // 空闲 worker 重读配置（config.models.write 的副作用），新模型可立刻选用。
+      window.htmx.trigger(document.body, 'models-refresh');
     } catch (error) {
       if (this.abort.signal.aborted) return;
       this.onError(error);

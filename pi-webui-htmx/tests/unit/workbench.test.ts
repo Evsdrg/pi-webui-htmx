@@ -436,6 +436,33 @@ describe('中止提示跟随真正的运行状态', () => {
   });
 });
 
+describe('结算事件丢失时用 agent_end 兜底结束回合', () => {
+  it('只收到 agent_end(willRetry=false) 也回到就绪并刷新历史', async () => {
+    fake.request.mockImplementation(async (method: string) => {
+      if (method === 'worker.list') return [{ sessionId: 's1', cwd: '/fixture', busy: false }];
+      if (method === 'session.state') return { sessionId: 's1', sessionName: '隔离会话', isStreaming: false, isCompacting: false, autoCompactionEnabled: true };
+      if (method === 'session.stats') return {};
+      return {};
+    });
+    busy = true; emit('agent_start');
+    expect(document.getElementById('session-state')?.textContent).toBe('运行中');
+    // 结算事件丢失：只来 agent_end。界面必须自行结束这一轮。
+    busy = false; emit('agent_end', { willRetry: false });
+    await waitFor(() => expect(document.getElementById('session-state')?.textContent).toBe('就绪'));
+    // 随后迟到的权威结算不得再收尾一次（否则历史被刷新两遍）。
+    const before = vi.mocked(fake.request).mock.calls.length;
+    emit('agent_settled');
+    await Promise.resolve();
+    expect(vi.mocked(fake.request).mock.calls.length).toBe(before);
+  });
+
+  it('agent_end(willRetry=true) 不结束运行', () => {
+    busy = true; emit('agent_start');
+    emit('agent_end', { willRetry: true });
+    expect(document.getElementById('session-state')?.textContent).toBe('运行中');
+  });
+});
+
 describe('订阅关闭提示只保留到状态核对结束', () => {
   function closeSubscription(): void {
     fake.instance!.dispatchEvent(new CustomEvent('message', { detail: {
