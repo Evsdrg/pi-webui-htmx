@@ -116,7 +116,10 @@ func serve() error {
 		}
 	}
 	exportDir := filepath.Join(absolute, "exports")
-	for _, dir := range []string{absolute, sessionDir, *agentDir, exportDir} {
+	// 工作进程日志目录：Pi 子进程的 stderr 落在这里（有界轮转）。
+	// 此前它被指向 /dev/null，Pi 的进程级报错不进任何日志。
+	logDir := filepath.Join(absolute, "logs")
+	for _, dir := range []string{absolute, sessionDir, *agentDir, exportDir, logDir} {
 		if err = os.MkdirAll(dir, 0700); err != nil {
 			return err
 		}
@@ -180,6 +183,9 @@ func serve() error {
 	}
 	cfg.ReloadExt = reloadExt
 	cfg.ReloadResultDir = reloadResults
+	// Pi 子进程的 stderr 落进有界轮转日志：进程级报错（供应商 5xx、模型未找到、
+	// 扩展加载失败）此前被 /dev/null 吞掉，只能靠会话 JSONL 的投影反推。
+	cfg.WorkerLog = run.NewWorkerLog(logDir, run.DefaultLogLimits())
 	files, err := workspace.NewFiles(policy, workspace.DefaultLimits())
 	if err != nil {
 		return err

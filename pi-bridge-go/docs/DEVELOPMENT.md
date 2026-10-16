@@ -230,8 +230,37 @@ bash 事件流上，而 `pi.Client.Call` 出于配对需要会过滤掉这个键
   不要从桥侧代码「推」出载荷形状。
 - `FAKE_PI_ARGS_FILE`：写启动参数，用于断言启动参数里没有 CLI 工具开关、
   桥内工具集扩展已随 `-e` 下发。
+- `FAKE_PI_STDERR`：启动时把给定文本写到 stderr，用于验证桥接管了子进程
+  的 stderr（此前它被指向 `/dev/null`）。
+- `FAKE_PI_SET_MODEL_ERROR`：让 `set_model` 以 Pi 的错误响应失败，用于验证
+  「已送达 Pi 但执行失败」的命令会把原因记进桥日志。
 - `FAKE_PI_SCRIPT` / `FAKE_PI_DELAY_METHOD` / `FAKE_PI_FORBID_ENV`：
   控制行为与启动环境断言。
+
+### 报错落在哪里（排查会话失败的第一站）
+
+桥本身的日志很少（`slog` 只在启动、隧道转发失败与命令失败处输出）。查
+「某个会话为什么失败」要按下面的顺序看，**别只看 journald**：
+
+| 落点 | 位置 | 内容 |
+|---|---|---|
+| 工作进程日志 | `<state-dir>/logs/worker.log`（轮转 `worker.1.log`…） | Pi 子进程的 stderr：供应商 4xx/5xx、模型未找到、扩展加载失败。有界（单文件 2 MiB、留 2 份）、单行截断，写失败只降级不影响会话 |
+| 桥回执 | `<state-dir>/receipts/receipts.jsonl` | 命令级结果：`ok`/`pending`/`error`/`rejected`/`unknown`。只记类别，**不含错误文本**——它是去重与对账的依据 |
+| journald | `journalctl -u pi-bridge` | 桥启动行、命令失败原因（`WARN 命令失败 方法=… 错误码=… 错误=…`） |
+| 会话 JSONL | `~/.pi/agent/sessions/**/*.jsonl` | 模型与工具报错的投影（也是会话正文，唯一权威） |
+
+两条设计约束：
+
+- **回执不塞自由文本**：它是跨重启去重与对账的依据，字段语义必须稳定。
+  失败原因记进 journald（上表第 3 行），两者职责分开。
+- **`rejected` 不记日志**：`busy`、`resync_required`、`limit_exceeded` 等
+  「命令从未送达 Pi」的一类大多是正常控制流（重同步与忙拒绝会被频繁触发），
+  全记会把日志淹掉。只有「已送达 Pi 但执行失败」（`error`/`unknown`）才记。
+
+命令失败日志只写方法、错误码、会话与错误文本，**绝不写 `params`**——它可能
+含用户正文或凭据（`Test命令失败日志不含请求参数` 从反面钉住）。工作进程日志
+的轮转与降级行为由 `internal/runtime/workerlog_test.go` 覆盖，端到端由
+`Test失败命令原因端到端落进桥日志` 与 `Test工作进程stderr落入日志文件` 覆盖。
 
 ### 变更覆盖度怎么核（mutation 复核）
 

@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -53,6 +54,9 @@ type Config struct {
 	// ReloadExt 是桥内「配置重载」扩展的绝对路径；为空表示未启用 config.reload。
 	// ReloadResultDir 存放各 worker 的一次性结果文件（由扩展写入）。
 	ReloadExt, ReloadResultDir string
+	// WorkerLog 接收 Pi 子进程的 stderr。为 nil 时退回 /dev/null，
+	// 即「进程级报错不进日志」的老行为（测试默认不开，避免污染夹具）。
+	WorkerLog *WorkerLog
 }
 
 // Defaults 给出默认限额与超时（capabilities 的 replay 声明也引用它，见 transport）。
@@ -490,6 +494,9 @@ type Worker struct {
 	// reloadResultPath 是本 worker 的配置重载结果文件（扩展写入、桥读取）。
 	// 为空表示 config.reload 未启用。
 	reloadResultPath string
+	// logWriter 是这个 worker 的 stderr 落点；进程退出时关闭以冲刷尾串。
+	// 为空表示未启用工作进程日志（stderr 走 /dev/null）。
+	logWriter *workerLogWriter
 }
 
 // newReplayRing 按配置构造补发环。
@@ -1059,15 +1066,30 @@ func launch(cfg Config, cwd, file string) (*Worker, error) {
 		outW.Close()
 		return nil, err
 	}
+	// stderr 落点：配了 WorkerLog 就写进有界轮转文件，否则退回 /dev/null
+	// （老行为：进程级报错不进日志）。
+	//
+	// 必须先把 Writer 准备好再 Start：exec 会在 Start 时把该 fd 交给子进程，
+	// 之后子进程的任何写入都经它成行落到日志里。
+	var stderr io.Writer = null
+	var logWriter *workerLogWriter
+	tag := hex.EncodeToString(epoch)[:8]
+	if cfg.WorkerLog != nil {
+		logWriter = cfg.WorkerLog.Writer(tag)
+		stderr = logWriter
+	}
 	cmd.Stdin = inR
 	cmd.Stdout = outW
-	cmd.Stderr = null
+	cmd.Stderr = stderr
 	if err = cmd.Start(); err != nil {
 		inR.Close()
 		inW.Close()
 		outR.Close()
 		outW.Close()
 		null.Close()
+		if logWriter != nil {
+			_ = logWriter.Close()
+		}
 		return nil, protocol.E("worker_exited", fmt.Sprintf("无法启动 Pi 可执行文件：%T", err))
 	}
 	inR.Close()
@@ -1087,6 +1109,7 @@ func launch(cfg Config, cwd, file string) (*Worker, error) {
 		replay:         events.NewRing(cfg.ReplayItems, int64(cfg.ReplayBytes)),
 		store:          cfg.Store,
 		navResultPath:  navResultPath,
+		logWriter:      logWriter,
 	}
 	if cfg.CaptureExt != "" && cfg.CaptureResultDir != "" {
 		w.captureResultDir = cfg.CaptureResultDir
@@ -1147,6 +1170,11 @@ func launch(cfg Config, cwd, file string) (*Worker, error) {
 		if navResultPath != "" {
 			// 结果文件只服务于活着的 worker，进程退出即清理。
 			_ = os.Remove(navResultPath)
+		}
+		// cmd.Wait 返回时 exec 的 stderr 拷贝协程已结束，之后不再有 Write；
+		// 此时关闭可安全冲刷「没有换行结尾」的尾串（那往往是最后的报错）。
+		if w.logWriter != nil {
+			_ = w.logWriter.Close()
 		}
 		close(w.done)
 	}()

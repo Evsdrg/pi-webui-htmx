@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"sync"
 	"time"
 
@@ -166,6 +167,35 @@ func isNotExecuted(err error) bool {
 	return ok
 }
 
+// logCommandFailure 把命令失败的原因记进桥日志。
+//
+// 为什么需要它
+// ------------
+// 回执只记 outcome（ok/error/rejected/unknown）——那是去重与对账的依据，
+// 不能塞自由文本。于是具体错误文本此前没有任何落点：排查「session.stop
+// 为什么失败」「set_model 报了什么」时无从下手，只能看到「失败过一次」。
+//
+// 为什么不是每条失败都记
+// ----------------------
+// 「未送达」的一类（rejected：busy、resync_required、limit_exceeded …）
+// 大多是正常控制流——重同步与忙拒绝会被频繁触发（实测 subscribe 一类就有
+// 数十次），全记会把日志淹掉，反而看不到真正的故障。只记「已送达 Pi 但
+// 执行失败」（error / unknown）这一类。
+//
+// 只记方法、错误码与文本，绝不记 params：params 可能含用户正文或凭据。
+func (s *Server) logCommandFailure(method, sessionID string, err error) {
+	switch outcomeFor(err) {
+	case storage.OutcomeError, storage.OutcomeUnknown:
+	default:
+		return
+	}
+	slog.Warn("命令失败",
+		"方法", method,
+		"错误码", errorCodeOf(err),
+		"会话", sessionID,
+		"错误", err.Error())
+}
+
 // outcomeFor 把命令结果映射成回执类别。
 func outcomeFor(err error) storage.Outcome {
 	if err == nil {
@@ -267,6 +297,7 @@ func (s *Server) runCommand(c connSink, req protocol.Request) {
 	data, err := c.dispatch(ctx, req)
 	if err != nil {
 		s.metrics.CommandFailed(req.Method, errorCodeOf(err))
+		s.logCommandFailure(req.Method, req.SessionID, err)
 	}
 	// 终态回执必须在**发送响应之前**落盘并释放 claim。
 	// 否则会出现这样的窗口：客户端收到响应后立刻用同一 requestId 重发，

@@ -55,6 +55,11 @@ func main() {
 			os.Exit(71)
 		}
 	}
+	// 可选地把一段文本写到 stderr，用于验证桥确实接管了子进程的 stderr
+	// （此前它被指向 /dev/null，进程级报错不进任何日志）。
+	if v := os.Getenv("FAKE_PI_STDERR"); v != "" {
+		fmt.Fprint(os.Stderr, v)
+	}
 	script := map[string]bool{}
 	if v := os.Getenv("FAKE_PI_SCRIPT"); v != "" {
 		for _, name := range strings.Split(v, ",") {
@@ -209,6 +214,12 @@ func main() {
 				"cancelled": false, "sessionId": next, "text": "分叉出的消息",
 			}})
 		case "set_model":
+			// FAKE_PI_SET_MODEL_ERROR 让 set_model 以 Pi 的错误响应失败，
+			// 用来验证「已送达 Pi 但执行失败」的命令会把原因记进桥日志。
+			if msg := os.Getenv("FAKE_PI_SET_MODEL_ERROR"); msg != "" {
+				emit(frame{Type: "response", ID: cmd.ID, Success: false, Error: msg})
+				continue
+			}
 			emit(frame{Type: "response", ID: cmd.ID, Success: true, Data: map[string]any{
 				"id": "new-model", "name": "新模型", "provider": cmd.Message,
 			}})
