@@ -279,6 +279,7 @@ bash 事件流上，而 `pi.Client.Call` 出于配对需要会过滤掉这个键
 | `session.set_queue_mode` 零覆盖 | `Test排队方式命令端到端` |
 | 目录搜索词不回显 | `Test模型目录片段按查询过滤` |
 | 402 一律判为余额不足 | `TestAssistantError按类别投影` |
+| 状态码只认行首前缀 | `TestAssistantError按类别投影`（`CPA-Responses API error (429): …` 这类代理信封此前漏判，见下） |
 | `fields` 里的 id 覆盖顶层 id | `TestCall忽略fields里的id与type` |
 
 复检口令：改动测试策略（比如要重新引入 `t.Parallel`）后，挑几个

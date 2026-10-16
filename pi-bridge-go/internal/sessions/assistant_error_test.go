@@ -35,6 +35,57 @@ func TestAssistantError按类别投影(t *testing.T) {
 			message: "429 too many requests",
 			want:    "模型请求失败：供应商限流（HTTP 429），请稍后重试。",
 		},
+		// 代理包装过的错误：状态码不在行首，而是写在括号里。实测两种信封
+		// （CPA 本地代理与 OpenAI 兼容上游）都是这个形态，此前一律漏判成
+		// 通用提示——「供应商限流」的专门文案写了却打不开。
+		{
+			name: "CPA 代理包装的 429", stopReason: "error",
+			message: `CPA-Responses API error (429): {"code":"upstream_429","message":"upstream_429","type":"upstream_error"}`,
+			want:    "模型请求失败：供应商限流（HTTP 429），请稍后重试。",
+		},
+		{
+			name: "OpenAI 代理包装的 429", stopReason: "error",
+			message: `OpenAI API error (429): {"code":"rate_limit_reached","message":"rate_limit_reached","type":"upstream_error"}`,
+			want:    "模型请求失败：供应商限流（HTTP 429），请稍后重试。",
+		},
+		{
+			name: "括号式 402 且余额不足", stopReason: "error",
+			message: `OpenAI API error (402): {"message":"insufficient balance (1008)","type":"upstream_error"}`,
+			want:    "模型请求失败：供应商余额不足（HTTP 402），请检查额度或稍后重试。",
+		},
+		{
+			name: "括号式 401", stopReason: "error",
+			message: `OpenAI API error (401): {"message":"Invalid API key"}`,
+			want:    "模型请求失败：供应商拒绝认证，请检查模型凭据。",
+		},
+		{
+			name: "括号式 403", stopReason: "error",
+			message: `CPA-Responses API error (403): {"message":"forbidden"}`,
+			want:    "模型请求失败：供应商拒绝认证，请检查模型凭据。",
+		},
+		{
+			name: "HTTP 形态的状态码", stopReason: "error",
+			message: "HTTP 429 Too Many Requests",
+			want:    "模型请求失败：供应商限流（HTTP 429），请稍后重试。",
+		},
+		// 反例：不得靠裸子串找状态码。错误体里常有 "upstream_429" 这类
+		// code 字符串，裸匹配会把 400 误判成限流、把用户引向错误方向。
+		{
+			name: "括号式 400 正文含 429 字样不得误判限流", stopReason: "error",
+			message: `CPA-Responses API error (400): {"code":"upstream_429_like_code","message":"invalid_parameter"}`,
+			want:    generic,
+		},
+		// 反例：通用错误体里出现 `(400)` 这类，仍应走通用提示（400 无专门文案）。
+		{
+			name: "括号式 400 走通用", stopReason: "error",
+			message: `CPA-Responses API error (400): {"code":"invalid_parameter","message":"invalid_parameter"}`,
+			want:    generic,
+		},
+		{
+			name: "括号式 500 走通用", stopReason: "error",
+			message: `OpenAI API error (500): {"code":"do_request_failed","type":"upstream_error"}`,
+			want:    generic,
+		},
 		{
 			name: "401 认证失败", stopReason: "error",
 			message: "401 invalid api key",

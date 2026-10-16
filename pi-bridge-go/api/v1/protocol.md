@@ -183,7 +183,7 @@ GET /ui/sessions/{id}/lazy?kind=tool-image&entryId=ENTRY&blockIndex=1
 GET /ui/sessions/{id}/lazy?kind=user-image&entryId=USER_ENTRY&blockIndex=1
 ```
 
-thinking 返回 JSON；tool-image 与 user-image 分别只允许 toolResult/user 角色并返回图片字节。索引/格式/字节均校验，SVG 不作为受支持的图片。用户附件只在历史 HTML 中生成定位按钮，不内嵌 base64，点击时才取原图；定位必须保留每个真实 entryId，不能拿整轮最后 assistant 代替。Pi 的 `stopReason:"error"` 可能以空内容 assistant 写盘而不让 prompt RPC 抛错，历史与实时预览必须显示失败；只投影已知的安全类别（如 HTTP 402 余额不足、429 限流），不回显上游错误正文或 request_id。目标使用同一已验证文件索引读取正文，不缓存整份内容。
+thinking 返回 JSON；tool-image 与 user-image 分别只允许 toolResult/user 角色并返回图片字节。索引/格式/字节均校验，SVG 不作为受支持的图片。用户附件只在历史 HTML 中生成定位按钮，不内嵌 base64，点击时才取原图；定位必须保留每个真实 entryId，不能拿整轮最后 assistant 代替。Pi 的 `stopReason:"error"` 可能以空内容 assistant 写盘而不让 prompt RPC 抛错，历史与实时预览必须显示失败；只投影已知的安全类别（如 HTTP 402 余额不足、429 限流），不回显上游错误正文或 request_id。状态码按**位置形态**识别（行首 `429 …`、括号 `… error (429): …`、`HTTP 429`）而非裸子串——错误体的 JSON 里常带 `"code":"upstream_429"` 这类字符串，裸匹配会把 400 误判成限流；本地 CPA 代理与 OpenAI 兼容上游都用括号信封，只认行首前缀会让专门文案打不开。目标使用同一已验证文件索引读取正文，不缓存整份内容。
 
 ### 服务端渲染片段
 
