@@ -368,6 +368,19 @@ func New(dir string, p *workspace.Policy, limits Limits) (*Store, error) {
 func (s *Store) Index() *Index { return s.index }
 func (s *Store) Close() error  { return s.root.Close() }
 
+// NoteExternalRename 通知索引：某个会话的标题被外部改写（Pi 的 set_session_name）。
+//
+// 为什么必须显式通知，而不能靠目录戳自动发现：Pi 把重命名作为一条 session_info
+// **追加到会话文件尾部**，而那些文件几乎都躺在 cwd 编码的子目录里。往子目录内的
+// 文件追加内容不改变顶层文件数、也不改变任何顶层条目的 mtime（父目录 mtime 只在
+// 直接子项增删时变化），因此 Index.fresh 的顶层戳判定看不见这次写入，会继续复用
+// 缓存；而 titleForPage 一旦读过就置 titleRead、之后直接返回旧的缓存标题。两者
+// 叠加的后果就是「改完名侧栏不变」。
+//
+// 桥在收到 Pi 的 session_info_changed 事件时调用这里，让下一次列表重建索引、
+// 重新读回标题。
+func (s *Store) NoteExternalRename() { s.index.Invalidate() }
+
 // Dir 返回受管会话目录的绝对路径，供启动 Pi 时指定 --session-dir。
 func (s *Store) Dir() string { return s.dir }
 

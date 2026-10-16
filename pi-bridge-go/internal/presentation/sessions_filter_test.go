@@ -276,3 +276,31 @@ func Test分组视图标出运行中的会话(t *testing.T) {
 		t.Fatalf("分组视图的忙会话行应含转圈元素:\n%s", html)
 	}
 }
+
+// 分组标题下要有「在此工作区新建会话」按钮，并带上该组的 cwd。
+// 空 cwd 的组（未标注工作区）不渲染该按钮：空 cwd 不是合法工作区，
+// 传下去会被桥以「必须是绝对路径」拒绝。
+func Test分组标题带在此工作区新建会话按钮(t *testing.T) {
+	r := testRenderer(t)
+	list := sessions.Listing{
+		Groups: []sessions.Group{
+			{Cwd: "/opt/p", Total: 1, Items: []sessions.Header{{ID: "s1", Cwd: "/opt/p", Name: "一"}}},
+			{Cwd: "", Total: 1, Items: []sessions.Header{{ID: "x1", Cwd: "", Name: "旧会话"}}},
+		},
+		Cwds: []sessions.CwdCount{{Cwd: "/opt/p", Count: 1}, {Cwd: "", Count: 1}},
+	}
+	html, err := r.RenderSessionsGrouped(list, "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(html, `data-action="new-session-here"`) {
+		t.Fatalf("分组视图应有「在此工作区新建会话」按钮:\n%s", html)
+	}
+	if !strings.Contains(html, `data-cwd="/opt/p"`) {
+		t.Fatalf("按钮应带该组的 cwd:\n%s", html)
+	}
+	// 空 cwd 组不渲染按钮：整份片段里只应出现一次 new-session-here。
+	if got := strings.Count(html, `data-action="new-session-here"`); got != 1 {
+		t.Fatalf("只有非空 cwd 的组才渲染新建按钮，实际出现 %d 次:\n%s", got, html)
+	}
+}

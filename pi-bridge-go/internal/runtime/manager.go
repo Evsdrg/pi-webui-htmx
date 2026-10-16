@@ -594,6 +594,15 @@ func (w *Worker) event(raw json.RawMessage) {
 			raw = localized
 		}
 	}
+	// Pi 改名后只把一条 session_info 追加到会话文件尾部，而桥的会话索引靠
+	// 「顶层目录戳」判新鲜度——子目录内文件的追加既不改顶层文件数、也不改任何
+	// 顶层条目的 mtime，索引看不见这次写入、会继续复用缓存标题。Pi 为此发出
+	// session_info_changed（rpc-mode 把它透传到事件流），这里据此主动失效索引，
+	// 让下一次列表重建并读回新标题。放在取 worker 锁之前：它与 worker 状态无关，
+	// 且 Pi 是「先落盘再发事件」，此刻文件已含新名字。
+	if ev.Type == "session_info_changed" && w.cfg.Store != nil {
+		w.cfg.Store.NoteExternalRename()
+	}
 	w.mu.Lock()
 	switch ev.Type {
 	case "agent_start", "compaction_start", "auto_retry_start", "summarization_retry_scheduled":
