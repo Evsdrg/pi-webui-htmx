@@ -50,6 +50,9 @@ type Config struct {
 	// read-only/full 预设的内置工具名单经它（配合 PI_WEBUI_ACTIVE_TOOLS）施加，
 	// 以避开 Pi --tools 白名单连带禁用扩展工具的问题。
 	ToolsExt string
+	// ReloadExt 是桥内「配置重载」扩展的绝对路径；为空表示未启用 config.reload。
+	// ReloadResultDir 存放各 worker 的一次性结果文件（由扩展写入）。
+	ReloadExt, ReloadResultDir string
 }
 
 // Defaults 给出默认限额与超时（capabilities 的 replay 声明也引用它，见 transport）。
@@ -194,6 +197,44 @@ func (m *Manager) StopSession(id string, force bool) (bool, error) {
 		return true, err
 	}
 	return true, nil
+}
+
+// ReloadIdle 让所有空闲的受管工作进程重新读取配置，返回成功重载的数量。
+//
+// 用于「写配置（models.json / mcp.json）之后」：Pi 的 ModelRuntime 只在进程
+// 创建时读一次配置，新加的 provider/模型不在内存快照里，set_model 会一直报
+// Model not found，直到 worker 重启。这里主动触发扩展 reload，新配置立刻生效。
+//
+// 只处理空闲 worker：reload 会重启扩展与资源，忙 worker 上的重载会打断正在
+// 进行的回合。忙的 worker 跳过即可——它下一次空闲时由回收器回收，重启后自然
+// 读到新配置；这条路径不追求「忙会话也立刻生效」。
+//
+// 逐个尝试且互不影响：某个 worker 重载失败（扩展未启用、进程正退出）只记为该
+// 个失败，不阻断其它 worker。
+func (m *Manager) ReloadIdle(ctx context.Context) (int, int) {
+	m.mu.Lock()
+	ws := make([]*Worker, 0, len(m.workers))
+	for _, w := range m.workers {
+		ws = append(ws, w)
+	}
+	m.mu.Unlock()
+	ok, failed := 0, 0
+	for _, w := range ws {
+		// 忙检查与重载都在 Reload 内部持锁完成；这里先粗筛一次，
+		// 避免为每个忙 worker 白走一遍命令注册表查询。
+		w.mu.Lock()
+		busy := w.busyLocked() || w.closing || w.reloadResultPath == ""
+		w.mu.Unlock()
+		if busy {
+			continue
+		}
+		if err := w.Reload(ctx); err != nil {
+			failed++
+			continue
+		}
+		ok++
+	}
+	return ok, failed
 }
 
 // List 返回当前受管工作进程状态。
@@ -446,6 +487,9 @@ type Worker struct {
 	// captureResultDir 是本 worker 的运行时捕获结果目录（按会话 id 命名文件）。
 	// 为空表示未启用捕获，/ui/system 与 /ui/tools 回退到 export_html 基线。
 	captureResultDir string
+	// reloadResultPath 是本 worker 的配置重载结果文件（扩展写入、桥读取）。
+	// 为空表示 config.reload 未启用。
+	reloadResultPath string
 }
 
 // newReplayRing 按配置构造补发环。
@@ -577,11 +621,12 @@ func (w *Worker) publishLocked(event string, data any) {
 // event 处理来自 Pi 的原始事件，更新运行状态并转发给订阅者。
 func (w *Worker) event(raw json.RawMessage) {
 	var ev struct {
-		Type     string   `json:"type"`
-		ID       string   `json:"id"`
-		Method   string   `json:"method"`
-		Steering []string `json:"steering"`
-		FollowUp []string `json:"followUp"`
+		Type      string   `json:"type"`
+		ID        string   `json:"id"`
+		Method    string   `json:"method"`
+		Steering  []string `json:"steering"`
+		FollowUp  []string `json:"followUp"`
+		WillRetry bool     `json:"willRetry"`
 	}
 	if json.Unmarshal(raw, &ev) != nil {
 		return
@@ -616,6 +661,19 @@ func (w *Worker) event(raw json.RawMessage) {
 			w.status = statusIdle
 		}
 		w.lastActivity = time.Now()
+	case "agent_end":
+		// 兜底：agent_end 是同一轮里更早、更可靠的收尾信号。结算事件
+		// （agent_settled）只是一条小事件，一旦在途中丢失，active 就永远为真，
+		// busyLocked() 恒真会让 session.navigate（「从此处编辑」）一直以 busy
+		// 拒绝，用户再也点不动编辑，只有中止或重启才恢复。willRetry 为真表示
+		// 这一轮还会重试，那是同一轮的延续，不能提前置假。
+		if !ev.WillRetry {
+			w.active = false
+			if !w.waitingInput {
+				w.status = statusIdle
+			}
+			w.lastActivity = time.Now()
+		}
 	case "queue_update":
 		w.queued = len(ev.Steering)+len(ev.FollowUp) > 0
 	}
@@ -965,6 +1023,10 @@ func launch(cfg Config, cwd, file string) (*Worker, error) {
 	if cfg.ToolsExt != "" {
 		args = append(args, "-e", cfg.ToolsExt)
 	}
+	// 桥内配置重载扩展：同样用显式 -e 下发（不受 --no-extensions 影响）。
+	if cfg.ReloadExt != "" {
+		args = append(args, "-e", cfg.ReloadExt)
+	}
 	if !cfg.Extensions {
 		args = append(args, "--no-extensions", "--no-skills", "--no-prompt-templates", "--no-themes", "--no-context-files")
 	}
@@ -982,6 +1044,12 @@ func launch(cfg Config, cwd, file string) (*Worker, error) {
 	if cfg.CaptureExt != "" && cfg.CaptureResultDir != "" {
 		// 按会话 id 写入结果目录，扩展与桥对同一份目录达成一致。
 		env = append(env, "PI_WEBUI_CAPTURE_DIR="+cfg.CaptureResultDir)
+	}
+	reloadResultPath := ""
+	if cfg.ReloadExt != "" && cfg.ReloadResultDir != "" {
+		// 每个 worker 一份结果文件（同跳转扩展的理由：并发会互相覆盖）。
+		reloadResultPath = filepath.Join(cfg.ReloadResultDir, hex.EncodeToString(epoch)+".json")
+		env = append(env, "PI_WEBUI_RELOAD_RESULT="+reloadResultPath)
 	}
 	cmd.Env = childenv.Filter(env)
 	if err := prepareProcess(cmd); err != nil {
@@ -1036,6 +1104,9 @@ func launch(cfg Config, cwd, file string) (*Worker, error) {
 	}
 	if cfg.CaptureExt != "" && cfg.CaptureResultDir != "" {
 		w.captureResultDir = cfg.CaptureResultDir
+	}
+	if reloadResultPath != "" {
+		w.reloadResultPath = reloadResultPath
 	}
 	w.owner = nil // 由 Manager.Start 在入表前赋值
 	w.client = pi.New(inW, outR, cfg.MaxFrame, w.event)

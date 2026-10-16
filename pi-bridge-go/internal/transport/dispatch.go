@@ -23,7 +23,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"path/filepath"
+	"time"
+
 	"pi-bridge-go/internal/pi"
 
 	"pi-bridge-go/internal/protocol"
@@ -481,10 +484,31 @@ func (s *Server) dispatchSessionOps(ctx context.Context, r protocol.Request) (an
 	return nil, errUnhandled(r.Method)
 }
 
+// reloadIdleWorkers 在配置写盘后让空闲 worker 重新读取配置，使新配置立刻
+// 生效（Pi 的模型快照只在进程创建时读一次，否则新模型要等 worker 重启才可见）。
+//
+// 尽力而为：重载失败只记日志，绝不改变写入结果——配置已经落盘，最坏情况就是
+// 回到「重启后才生效」的旧行为。用独立超时，避免个别慢 worker 拖长写配置的
+// 响应；ctx 可能已被上层取消，所以不直接复用它的取消。
+func (s *Server) reloadIdleWorkers(ctx context.Context) {
+	if s.manager == nil {
+		return
+	}
+	reloadCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), reloadTimeout)
+	defer cancel()
+	ok, failed := s.manager.ReloadIdle(reloadCtx)
+	if failed > 0 {
+		slog.Info("配置写盘后部分工作进程未能重载", "成功", ok, "失败", failed)
+	}
+}
+
+// reloadTimeout 是配置写盘后批量重载的总预算。
+// 单次 reload 只是一条扩展命令往返，正常在毫秒级；给足余量即可。
+const reloadTimeout = 10 * time.Second
+
 // dispatchConfig 处理配置读写与供应商查询。不触碰 Pi 进程，
 // 唯一的出站请求发生在 config.models.discover / config.catalog。
 func (s *Server) dispatchConfig(ctx context.Context, r protocol.Request) (any, error) {
-	_ = ctx
 	switch r.Method {
 	case "config.models":
 		if err := decodeEmpty(r.Params); err != nil {
@@ -508,6 +532,10 @@ func (s *Server) dispatchConfig(ctx context.Context, r protocol.Request) (any, e
 		if err := s.piConfig.WriteModels(p.Config); err != nil {
 			return nil, err
 		}
+		// 写盘后让空闲 worker 重新读取配置：否则新加的模型不在 Pi 的内存
+		// 快照里，set_model 会一直报 Model not found，直到 worker 重启。
+		// 重载失败不影响写入结果（配置已落盘，下次启动照常读到）。
+		s.reloadIdleWorkers(ctx)
 		return writtenReply{Written: true}, nil
 
 	case "config.models.discover":
@@ -586,6 +614,8 @@ func (s *Server) dispatchConfig(ctx context.Context, r protocol.Request) (any, e
 		if err := s.piConfig.WriteMCP(p.Document); err != nil {
 			return nil, err
 		}
+		// 同 models.write：让空闲 worker 重读配置，MCP 服务器变更立刻生效。
+		s.reloadIdleWorkers(ctx)
 		return writtenReply{Written: true}, nil
 	}
 	return nil, errUnhandled(r.Method)

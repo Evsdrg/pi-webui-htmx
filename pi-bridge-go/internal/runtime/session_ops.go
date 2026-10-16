@@ -12,6 +12,78 @@ import (
 // navigateCommandName 是桥内跳转扩展注册的命令名（见 navigate-ext.mjs）。
 const navigateCommandName = "pi-webui-navigate"
 
+// reloadCommandName 是桥内配置重载扩展注册的命令名（见 reload-ext.mjs）。
+const reloadCommandName = "pi-webui-reload"
+
+// Reload 让当前 Pi 进程重新读取配置（models.json 等）。
+//
+// Pi 的 ModelRuntime 在进程创建时只读一次 models.json，之后新增的
+// provider/模型不在内存快照里：get_available_models 与 set_model 都读那份
+// 快照，于是刚添加的模型会报 Model not found，直到工作进程重启。RPC 命令表
+// 没有刷新模型的命令，但扩展命令上下文提供了 reload（内部会重读配置与资源），
+// 因此走桥内扩展：命中命令后不发给模型、不写 transcript，结果经结果文件回传。
+// reload 保留会话身份、当前模型与思考等级（实测），比停掉 worker 再拉起更轻。
+func (w *Worker) Reload(ctx context.Context) error {
+	// 与 Navigate 共用同一把锁：两者都是「忙检查 → prompt 内部命令 → 读结果文件」
+	// 的 check-then-act，串行化可避免同一 worker 上两条内部命令交错。
+	w.navMu.Lock()
+	defer w.navMu.Unlock()
+	w.mu.Lock()
+	if w.closing {
+		w.mu.Unlock()
+		return protocol.E("worker_exited", "工作进程正在关闭")
+	}
+	if w.busyLocked() {
+		w.mu.Unlock()
+		return protocol.E("busy", "会话正在运行，请先等待当前回合结束")
+	}
+	resultPath := w.reloadResultPath
+	w.mu.Unlock()
+	if resultPath == "" {
+		return protocol.E("unsupported", "该实例未启用配置重载")
+	}
+	// 自查扩展已注册：prompt 对未知斜杠命令的兜底是「当普通消息发给模型」，
+	// 扩展缺失时盲发会把命令文本写进会话正文（比报错糟糕得多）。
+	cmds, err := w.Commands(ctx)
+	if err != nil {
+		return err
+	}
+	registered := false
+	for _, c := range cmds {
+		if c["name"] == reloadCommandName {
+			registered = true
+			break
+		}
+	}
+	if !registered {
+		return protocol.E("unsupported", "重载扩展未在 Pi 中注册，请检查桥内扩展")
+	}
+	// 先清掉旧结果：扩展失败未写文件时必须报错，而不是把上一次的成功当成这次。
+	_ = os.Remove(resultPath)
+	if _, err := w.call(ctx, "prompt", map[string]any{"message": "/" + reloadCommandName}, true); err != nil {
+		return err
+	}
+	raw, err := os.ReadFile(resultPath)
+	if err != nil {
+		return protocol.E("pi_error", "重载扩展未返回结果，请确认 Pi 已加载桥内扩展")
+	}
+	var out struct {
+		OK    bool   `json:"ok"`
+		Error string `json:"error"`
+	}
+	if json.Unmarshal(raw, &out) != nil {
+		return protocol.E("pi_error", "重载扩展返回的结果无效")
+	}
+	if !out.OK {
+		msg := out.Error
+		if msg == "" {
+			msg = "重载失败"
+		}
+		return protocol.E("pi_error", msg)
+	}
+	return nil
+}
+
 // Models 返回当前配置可用的模型列表。
 // 只投影前端需要的字段，不透传供应商私有配置。
 func (w *Worker) Models(ctx context.Context) ([]map[string]any, error) {

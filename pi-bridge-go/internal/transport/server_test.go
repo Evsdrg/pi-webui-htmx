@@ -100,6 +100,14 @@ func newTestServerTuned(t *testing.T, commandTimeout time.Duration, termOpts ...
 	}
 	cfg.CaptureExt = captureExt
 	cfg.CaptureResultDir = captureResults
+	// 配置重载扩展同样与生产同路径：写 models.json/mcp.json 后让空闲 worker
+	// 重读配置，新模型不必等 worker 重启。
+	reloadExt, reloadResults, err := run.InstallReloadExt(state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.ReloadExt = reloadExt
+	cfg.ReloadResultDir = reloadResults
 	m := run.New(cfg)
 	t.Cleanup(m.Close)
 

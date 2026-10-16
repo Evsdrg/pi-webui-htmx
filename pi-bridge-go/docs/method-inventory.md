@@ -15,7 +15,7 @@
 | `session.prompt`、`session.steer`、`session.follow_up`、`session.bash` | 一次性执行 | 固定 worker | 持久 intent；接受与完成分开 |
 | `session.set_model`、`session.cycle_model`、`session.set_thinking`、`session.cycle_thinking`、`session.set_queue_mode`、`session.compact`、`session.set_auto_compaction`、`session.set_auto_retry`、`session.set_name`、`session.navigate` | 状态变更 | 固定 worker | 持久 intent；compact 独立长操作期限；navigate 经桥内扩展命令通道，忙会话拒绝 |
 | `session.new`、`session.switch`、`session.fork`、`session.clone` | 身份事务 | 源 worker + 目标预留/transition | 持久 intent、身份核验与事件边界 |
-| `config.models.write`、`config.mcp.write` | 持久配置变更 | 设备/配置 revision | intent、配置锁、原子写入 |
+| `config.models.write`、`config.mcp.write` | 持久配置变更 | 设备/配置 revision | intent、配置锁、原子写入；写盘后让空闲 worker 重读配置（见 DEVELOPMENT 的「模型快照只在进程创建时读一次」） |
 | `sessions.delete` | 持久删除 | params.sessionId | 与 start 共用预留，不按 request.sessionId 猜目标 |
 | `terminal.open` | 进程资源创建 | 受管 cwd/固定 shell | intent、进程配额/启动期限 |
 | `terminal.input`、`terminal.resize` | 临时输入/最新状态 | 固定 terminal 实例 | 有界输入；不逐批 Sync，不重发输入 |

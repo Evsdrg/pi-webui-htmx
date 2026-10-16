@@ -172,6 +172,14 @@ func serve() error {
 		return err
 	}
 	cfg.ToolsExt = toolsExt
+	// 配置重载扩展：写 models.json/mcp.json 后让当前 worker 重新读取配置，
+	// 使新模型立刻可用，而不必等 worker 重启（见 reload-ext.mjs）。
+	reloadExt, reloadResults, err := run.InstallReloadExt(absolute)
+	if err != nil {
+		return err
+	}
+	cfg.ReloadExt = reloadExt
+	cfg.ReloadResultDir = reloadResults
 	files, err := workspace.NewFiles(policy, workspace.DefaultLimits())
 	if err != nil {
 		return err

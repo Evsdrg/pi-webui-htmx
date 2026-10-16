@@ -164,6 +164,17 @@ func main() {
 				emit(frame{Type: "response", ID: cmd.ID, Success: true})
 				continue
 			}
+			// 桥的内部配置重载命令：与真机上桥内 reload 扩展一致——
+			// 不触发 agent 事件，只把结果写进 PI_WEBUI_RELOAD_RESULT。
+			if strings.HasPrefix(cmd.Message, "/pi-webui-reload") {
+				if path := os.Getenv("PI_WEBUI_RELOAD_RESULT"); path != "" {
+					if b, err := json.Marshal(map[string]any{"ok": true}); err == nil {
+						_ = os.WriteFile(path, b, 0600)
+					}
+				}
+				emit(frame{Type: "response", ID: cmd.ID, Success: true})
+				continue
+			}
 			if script["replay_burst"] {
 				emit(frame{Type: "agent_start"})
 				emit(frame{Type: "response", ID: cmd.ID, Success: true})
@@ -224,6 +235,9 @@ func main() {
 			cmds := []map[string]any{{"name": "demo", "description": "演示", "source": "extension"}}
 			if os.Getenv("FAKE_PI_NAV_UNREGISTERED") == "" {
 				cmds = append(cmds, map[string]any{"name": "pi-webui-navigate", "description": "桥内部命令", "source": "extension"})
+			}
+			if os.Getenv("FAKE_PI_RELOAD_UNREGISTERED") == "" {
+				cmds = append(cmds, map[string]any{"name": "pi-webui-reload", "description": "桥内部命令", "source": "extension"})
 			}
 			emit(frame{Type: "response", ID: cmd.ID, Success: true, Data: map[string]any{"commands": cmds}})
 		case "get_tree":
