@@ -621,12 +621,11 @@ func (w *Worker) publishLocked(event string, data any) {
 // event 处理来自 Pi 的原始事件，更新运行状态并转发给订阅者。
 func (w *Worker) event(raw json.RawMessage) {
 	var ev struct {
-		Type      string   `json:"type"`
-		ID        string   `json:"id"`
-		Method    string   `json:"method"`
-		Steering  []string `json:"steering"`
-		FollowUp  []string `json:"followUp"`
-		WillRetry bool     `json:"willRetry"`
+		Type     string   `json:"type"`
+		ID       string   `json:"id"`
+		Method   string   `json:"method"`
+		Steering []string `json:"steering"`
+		FollowUp []string `json:"followUp"`
 	}
 	if json.Unmarshal(raw, &ev) != nil {
 		return
@@ -661,19 +660,6 @@ func (w *Worker) event(raw json.RawMessage) {
 			w.status = statusIdle
 		}
 		w.lastActivity = time.Now()
-	case "agent_end":
-		// 兜底：agent_end 是同一轮里更早、更可靠的收尾信号。结算事件
-		// （agent_settled）只是一条小事件，一旦在途中丢失，active 就永远为真，
-		// busyLocked() 恒真会让 session.navigate（「从此处编辑」）一直以 busy
-		// 拒绝，用户再也点不动编辑，只有中止或重启才恢复。willRetry 为真表示
-		// 这一轮还会重试，那是同一轮的延续，不能提前置假。
-		if !ev.WillRetry {
-			w.active = false
-			if !w.waitingInput {
-				w.status = statusIdle
-			}
-			w.lastActivity = time.Now()
-		}
 	case "queue_update":
 		w.queued = len(ev.Steering)+len(ev.FollowUp) > 0
 	}

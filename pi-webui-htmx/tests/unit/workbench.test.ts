@@ -358,6 +358,51 @@ describe('排队消息条', () => {
     expect(strip.querySelector('.pending-note')!.textContent).toContain('已排队 2 条');
     expect(strip.querySelectorAll('.pending-item')).toHaveLength(0);
   });
+
+  it('读状态期间到达的事件不得让运行态恢复被放弃', async () => {
+    // 刷新页面或切入一个正在输出（流式）的会话时：读 session.state 期间
+    // 几乎必然有新事件到达。若 reconcile 因 seq 变化直接放弃，运行态就
+    // 永远不会被恢复成「运行中」——中止按钮不出现、会话菜单的「释放工作
+    // 进程」又被桥以 busy 拒绝，用户就再也停不掉这个会话。
+    // refreshState 早就记过这条教训（「一流式输出就会让刷新永远放弃」）。
+    fake.request.mockImplementation(async (method: string) => {
+      if (method === 'worker.list') return [{ sessionId: 's1', cwd: '/fixture', busy: true, status: 'running' }];
+      if (method === 'session.state') {
+        // 读状态期间到达一条流式事件（模拟真实时序）。
+        emit('message_update', { assistantMessageEvent: { type: 'text_delta', delta: 'x' } });
+        return { sessionId: 's1', isStreaming: true, isCompacting: false, pendingMessageCount: 0, thinkingLevel: 'off' };
+      }
+      if (method === 'session.thinking_levels') return ['off', 'high'];
+      if (method === 'session.ext_status') return { epoch: 'test', statuses: {} };
+      if (method === 'session.pending_dialogs') return { ids: [] };
+      return {};
+    });
+    await (workbench as unknown as { reconcile(): Promise<void> }).reconcile();
+    expect(document.getElementById('session-state')!.textContent).toBe('运行中');
+    // 中止按钮必须可见，否则用户无法停止这个会话。
+    expect(document.getElementById('abort-button')!.hasAttribute('hidden')).toBe(false);
+  });
+
+  it('读状态期间收到收尾事件后，迟到的快照不得把会话重新显成运行中', async () => {
+    // 反向风险：若为了修复上一用例而无条件按快照回写，读状态期间已经收到的
+    // 权威收尾（agent_settled）会被迟到的 isStreaming=true 快照覆盖，界面重新
+    // 变成「运行中」，同样停不掉。判据必须是「运行态有没有被事件改写」。
+    fake.request.mockImplementation(async (method: string) => {
+      if (method === 'worker.list') return [{ sessionId: 's1', cwd: '/fixture', busy: true, status: 'running' }];
+      if (method === 'session.state') {
+        emit('agent_settled'); // 读状态期间这一轮已经结束
+        return { sessionId: 's1', isStreaming: true, isCompacting: false, pendingMessageCount: 0, thinkingLevel: 'off' };
+      }
+      if (method === 'session.thinking_levels') return ['off', 'high'];
+      if (method === 'session.ext_status') return { epoch: 'test', statuses: {} };
+      if (method === 'session.pending_dialogs') return { ids: [] };
+      return {};
+    });
+    // 先进入运行态，模拟「正在运行」的会话。
+    busy = true; emit('agent_start');
+    await (workbench as unknown as { reconcile(): Promise<void> }).reconcile();
+    expect(document.getElementById('session-state')!.textContent).toBe('就绪');
+  });
 });
 
 // 改名不生效的「前端那一半」：侧栏标题由服务端渲染，收到 Pi 的
@@ -436,30 +481,17 @@ describe('中止提示跟随真正的运行状态', () => {
   });
 });
 
-describe('结算事件丢失时用 agent_end 兜底结束回合', () => {
-  it('只收到 agent_end(willRetry=false) 也回到就绪并刷新历史', async () => {
-    fake.request.mockImplementation(async (method: string) => {
-      if (method === 'worker.list') return [{ sessionId: 's1', cwd: '/fixture', busy: false }];
-      if (method === 'session.state') return { sessionId: 's1', sessionName: '隔离会话', isStreaming: false, isCompacting: false, autoCompactionEnabled: true };
-      if (method === 'session.stats') return {};
-      return {};
-    });
+describe('回合结束只认 agent_settled', () => {
+  it('agent_end 不结束回合（它是每次子运行的收尾）', () => {
+    // 一个用户回合内 agent_start/agent_end 可因自动压缩、续跑出现多次；
+    // 若把它当回合结束，界面会在半途切回就绪（中止按钮消失，反而停不掉会话）。
     busy = true; emit('agent_start');
+    emit('agent_end', { willRetry: false });
     expect(document.getElementById('session-state')?.textContent).toBe('运行中');
-    // 结算事件丢失：只来 agent_end。界面必须自行结束这一轮。
-    busy = false; emit('agent_end', { willRetry: false });
-    await waitFor(() => expect(document.getElementById('session-state')?.textContent).toBe('就绪'));
-    // 随后迟到的权威结算不得再收尾一次（否则历史被刷新两遍）。
-    const before = vi.mocked(fake.request).mock.calls.length;
-    emit('agent_settled');
-    await Promise.resolve();
-    expect(vi.mocked(fake.request).mock.calls.length).toBe(before);
-  });
-
-  it('agent_end(willRetry=true) 不结束运行', () => {
-    busy = true; emit('agent_start');
-    emit('agent_end', { willRetry: true });
-    expect(document.getElementById('session-state')?.textContent).toBe('运行中');
+    expect(document.getElementById('abort-button')!.hasAttribute('hidden')).toBe(false);
+    // 随后的权威结算才结束这一回合。
+    busy = false; emit('agent_settled');
+    expect(document.getElementById('session-state')?.textContent).toBe('就绪');
   });
 });
 
@@ -1756,3 +1788,4 @@ describe('发送中的重复提交与失败恢复', () => {
     await waitFor(() => expect(fake.request).toHaveBeenCalledWith('session.prompt', 's1', { text: '第二条' }, 30_000));
   });
 });
+

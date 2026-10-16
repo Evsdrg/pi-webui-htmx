@@ -15,14 +15,11 @@ it('丢弃标记只在结尾剥离', () => {
   expect(stripDroppedMarker('[dropped ]')).toBe('');
   expect(stripDroppedMarker('讨论 [dropped ] 这个词')).toBe('讨论 [dropped ] 这个词');
 });
-it('回合结束：settled 是权威信号，agent_end(willRetry=false) 兜底', () => {
-  // 权威路径：agent_settled 结束运行。
+it('回合结束只认 agent_settled，agent_end 不是回合结束', () => {
   expect(runStateAfter('running',{type:'agent_settled'})).toBe('idle');
-  // 兜底路径：结算事件可能在途中丢失，界面不能因此永久停在「运行中」
-  // （否则模型下拉一直禁用、「从此处编辑」被 busy 挡住的观感会一直存在）。
-  // agent_end 带 willRetry=false 表示这一轮不再重试，可安全收尾。
-  expect(runStateAfter('running',{type:'agent_end',willRetry:false})).toBe('idle');
-  // willRetry=true 是重试前兆（同一轮的延续），不得提前结束。
+  // agent_end 是每次**子运行**的收尾，一个用户回合内可因自动压缩/续跑出现多次；
+  // 拿它判回合结束会在半途把界面切回就绪（中止按钮消失，反而停不掉会话）。
+  expect(runStateAfter('running',{type:'agent_end',willRetry:false})).toBe('running');
   expect(runStateAfter('running',{type:'agent_end',willRetry:true})).toBe('running');
   expect(runStateAfter('running',{type:'auto_retry_start'})).toBe('retrying');
 });

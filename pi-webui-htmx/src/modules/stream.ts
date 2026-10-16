@@ -11,14 +11,12 @@ export function runStateAfter(state: RunState, event: Record<string, unknown>): 
   switch (event.type) {
     case 'agent_start': return 'running';
     case 'agent_settled': return 'idle';
-    // agent_end 是兜底：settled 才是权威的最终结束信号，但它只是一条小事件，
-    // 一旦在途中丢失，界面就会永久停在「运行中」，模型下拉与「从此处编辑」
-    // 都被 busy 挡住。willRetry=false 表示这一轮不再重试，可以安全收尾；
-    // willRetry=true 是重试前兆（同一轮的延续），保持运行态。
-    case 'agent_end': return event.willRetry === false ? 'idle' : state;
     case 'auto_retry_start': return 'retrying';
     case 'compaction_start': case 'auto_compaction_start': return 'compacting';
     case 'extension_ui_request': return ['confirm', 'select', 'input', 'editor'].includes(text(event.method)) ? 'waiting_input' : state;
+    // agent_end 不是「回合结束」：它是每次**子运行**的收尾，一个用户回合内可能
+    // 出现多次（自动压缩、续跑）。只有 agent_settled 才是一次用户回合的最终结束；
+    // 丢失时的兜底由 reconcile 轮询承担（见 Workbench.reconcile）。
     default: return state;
   }
 }
