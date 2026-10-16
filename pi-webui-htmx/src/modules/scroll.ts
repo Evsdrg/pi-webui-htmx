@@ -53,12 +53,25 @@ export function mountScroll(): { bottom(): void; dispose(): void } {
   document.addEventListener('htmx:afterSwap', (event) => {
     const target = (event as CustomEvent).detail?.target as HTMLElement | undefined;
     if (target?.id !== 'turns' || !pending) return;
-    const saved = pending; pending = null; delete scroller.dataset.resetScroll;
-    if (saved.reset || (saved.atBottom && !saved.prepend)) { bottom(); return; }
-    mark();
-    anchor = saved.anchor;
-    if (!anchor || !restoreAnchor(scroller, anchor)) scroller.scrollTop = saved.prepend ? restoreDistance(scroller, saved.distance) : saved.top;
-    pinned = isAtBottom(scroller); updateButton();
+    const saved = pending; delete scroller.dataset.resetScroll;
+    // 还原不能在这次派发里做：htmx 换入 #turns 之后，正文的 markdown 同步渲染仍在
+    // 同一次 afterSwap 派发中执行，只是注册顺序在本模块之后（见 entry/app.ts）。
+    // 此刻量锚点差额，量到的是「原始文本尚未格式化」的过渡布局——#turns 更矮、
+    // 锚点在流内偏上；渲染完成后布局复原，这笔补偿就成了净位移。反复重同步
+    // （事件被省略 / resync_required）每次都叠一次，视图于是被匀速拉向顶部。
+    // ResizeObserver 也兜不住：过渡态与稳定态在同一帧内先矮后高，净变化为零。
+    // 推到下一帧：排在全部 afterSwap 处理器之后、绘制之前，布局已是终态。
+    // pending 保留到那一刻，RO 才不会被过渡布局误导；若期间又换入一次，
+    // pending 已被新的覆盖，这次回调据此让位（旧代次不落地）。
+    requestAnimationFrame(() => {
+      if (abort.signal.aborted || pending !== saved) return;
+      pending = null;
+      if (saved.reset || (saved.atBottom && !saved.prepend)) { bottom(); return; }
+      mark();
+      anchor = saved.anchor;
+      if (!anchor || !restoreAnchor(scroller, anchor)) scroller.scrollTop = saved.prepend ? restoreDistance(scroller, saved.distance) : saved.top;
+      pinned = isAtBottom(scroller); updateButton();
+    });
   }, { signal: abort.signal });
   // Markdown、图片和流式文本异步增高时也保持阅读位置。
   const observer = new ResizeObserver(() => {
