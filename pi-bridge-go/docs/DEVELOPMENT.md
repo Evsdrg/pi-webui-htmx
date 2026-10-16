@@ -280,6 +280,9 @@ bash 事件流上，而 `pi.Client.Call` 出于配对需要会过滤掉这个键
 | 目录搜索词不回显 | `Test模型目录片段按查询过滤` |
 | 402 一律判为余额不足 | `TestAssistantError按类别投影` |
 | 状态码只认行首前缀 | `TestAssistantError按类别投影`（`CPA-Responses API error (429): …` 这类代理信封此前漏判，见下） |
+| 冷却与限流不分（`429 …cooling down` 判成限流） | `TestAssistantError按类别投影`（前者是「没有可用凭据」，动作是检查凭据；后者是等一会儿） |
+| 流中断被 5xx 抢先（`(500) empty_stream` 判成服务端故障） | `TestAssistantError按类别投影`（根因是流断了，不是服务端故障） |
+| 「请求中断」文案把用户引向供应商 | `TestAssistantError按类别投影`（实测该类多发生在本地代理重启时，措辞不得说「检查供应商连接」） |
 | `fields` 里的 id 覆盖顶层 id | `TestCall忽略fields里的id与type` |
 
 复检口令：改动测试策略（比如要重新引入 `t.Parallel`）后，挑几个
