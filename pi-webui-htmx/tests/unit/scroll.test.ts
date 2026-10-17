@@ -54,3 +54,69 @@ it('换入历史按稳定布局还原，不在过渡布局上补偿', () => {
   scroll.dispose();
   expect(top).toBe(1000);
 });
+
+// 反例：桥的订阅被摘除（慢消费者）后，前端会重读历史并整块换入 #turns。
+// 与翻页不同，重读历史是 append 语义、只回最后一屏；用户若正读在更早的位置，
+// 锚点里的 turn 根本不在新片段里，restoreAnchor 返回 false。此时若回退到
+// 「在旧 DOM 上量出的 scrollTop」，那是个远超新内容高度的偏移，浏览器把它
+// 夹到最大值——视觉上就是跳到顶部。反复重同步即「每隔一会儿拉一次」。
+it('重同步换入后锚点不在新片段里时，保持距底部距离而不是跳回顶部', () => {
+  document.body.innerHTML = '<button id="jump-latest"></button><div id="chat-scroll"><div id="welcome"></div><div id="older-slot"></div><div id="turns"><article data-turn-id="old-1"></article></div><div id="live"></div></div>';
+  const scroller = document.getElementById('chat-scroll') as HTMLElement;
+  const turns = document.getElementById('turns') as HTMLElement;
+  const old1 = document.querySelector<HTMLElement>('[data-turn-id="old-1"]')!;
+  // 旧 DOM：内容很高，用户读在中间（距底部 3000px）
+  let height = 9000;
+  let top = 6000;
+  Object.defineProperty(scroller, 'scrollHeight', { get: () => height, configurable: true });
+  Object.defineProperty(scroller, 'clientHeight', { value: 500, configurable: true });
+  Object.defineProperty(scroller, 'scrollTop', { get: () => top, set: (v: number) => { top = Math.max(0, Math.min(height - 500, v)); }, configurable: true });
+  vi.spyOn(scroller, 'getBoundingClientRect').mockReturnValue({ top: 0 } as DOMRect);
+  vi.spyOn(old1, 'getBoundingClientRect').mockReturnValue({ top: -100, bottom: 100 } as DOMRect);
+  vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} });
+  const frames: FrameRequestCallback[] = [];
+  vi.stubGlobal('requestAnimationFrame', (cb: FrameRequestCallback) => { frames.push(cb); return frames.length; });
+  vi.stubGlobal('cancelAnimationFrame', () => {});
+  const scroll = mountScroll();
+  document.dispatchEvent(new CustomEvent('htmx:beforeSwap', { detail: { target: turns, xhr: { getResponseHeader: () => 'append' }, shouldSwap: true } }));
+  // 换入的只是最后 50 条：高度骤降到 2000，旧的 turn 不见了
+  turns.replaceChildren();
+  const fresh = document.createElement('article');
+  fresh.dataset.turnId = 'new-1';
+  turns.appendChild(fresh);
+  height = 2000; top = Math.min(top, height - 500);
+  document.dispatchEvent(new CustomEvent('htmx:afterSwap', { detail: { target: turns } }));
+  for (const cb of frames.splice(0)) cb(0);
+  scroll.dispose();
+  // 距底部 3000 无法保持（新内容更矮），退而求其次应贴到底部附近；绝不能是 0
+  expect(top).toBeGreaterThan(0);
+});
+
+// 反例：beforeSwap 被守卫拒绝（代次不匹配）时不会触发 afterSwap，
+// 于是 dataset 上的 resetScroll 永远留着，下一次真正换入就会把视图拽到底部。
+it('被拒绝的换入不会把 resetScroll 留给下一次', () => {
+  document.body.innerHTML = '<button id="jump-latest"></button><div id="chat-scroll"><div id="welcome"></div><div id="older-slot"></div><div id="turns"><article data-turn-id="a"></article></div><div id="live"></div></div>';
+  const scroller = document.getElementById('chat-scroll') as HTMLElement;
+  const turns = document.getElementById('turns') as HTMLElement;
+  const a = document.querySelector<HTMLElement>('[data-turn-id="a"]')!;
+  let height = 5000; let top = 2000;
+  Object.defineProperty(scroller, 'scrollHeight', { get: () => height, configurable: true });
+  Object.defineProperty(scroller, 'clientHeight', { value: 500, configurable: true });
+  Object.defineProperty(scroller, 'scrollTop', { get: () => top, set: (v: number) => { top = v; }, configurable: true });
+  vi.spyOn(scroller, 'getBoundingClientRect').mockReturnValue({ top: 0 } as DOMRect);
+  vi.spyOn(a, 'getBoundingClientRect').mockReturnValue({ top: -100, bottom: 100 } as DOMRect);
+  vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} });
+  const frames: FrameRequestCallback[] = [];
+  vi.stubGlobal('requestAnimationFrame', (cb: FrameRequestCallback) => { frames.push(cb); return frames.length; });
+  vi.stubGlobal('cancelAnimationFrame', () => {});
+  const scroll = mountScroll();
+  // 第一次：被守卫拒绝（shouldSwap=false），htmx 不换入、也不会有 afterSwap
+  scroller.dataset.resetScroll = 'true';
+  document.dispatchEvent(new CustomEvent('htmx:beforeSwap', { detail: { target: turns, xhr: { getResponseHeader: () => 'append' }, shouldSwap: false } }));
+  // 第二次：正常换入，用户仍停留在原位
+  document.dispatchEvent(new CustomEvent('htmx:beforeSwap', { detail: { target: turns, xhr: { getResponseHeader: () => 'append' }, shouldSwap: true } }));
+  document.dispatchEvent(new CustomEvent('htmx:afterSwap', { detail: { target: turns } }));
+  for (const cb of frames.splice(0)) cb(0);
+  scroll.dispose();
+  expect(top).toBe(2000);
+});

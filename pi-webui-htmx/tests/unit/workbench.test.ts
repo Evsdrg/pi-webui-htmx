@@ -524,6 +524,40 @@ describe('订阅关闭提示只保留到状态核对结束', () => {
     busy = false; emit('agent_settled');
     expect(document.getElementById('connection-notice')?.textContent).toContain('补发窗口');
   });
+
+  // 摘除原因决定处置方向：队列满＝本页渲染太慢，字节超限＝单条事件撞预算。
+  // 只说「订阅已结束」时用户无从判断，也无法与桥侧 WARN 对应。
+  it('摘除原因写进提示，并与桥侧日志用同一组取值', () => {
+    busy = true; emit('agent_start');
+    fake.instance!.dispatchEvent(new CustomEvent('message', { detail: {
+      version: 1, kind: 'control', event: 'bridge.subscription_closed', sessionId: 's1',
+      data: { resyncRequired: true, reason: 'queue_full' },
+    } }));
+    const text = document.getElementById('connection-notice')?.textContent ?? '';
+    expect(text).toContain('正在核对任务状态');
+    expect(text).toContain('渲染没跟上');
+  });
+
+  it('未知或缺省原因时退回通用提示，不出现空括号', () => {
+    busy = true; emit('agent_start');
+    fake.instance!.dispatchEvent(new CustomEvent('message', { detail: {
+      version: 1, kind: 'control', event: 'bridge.subscription_closed', sessionId: 's1',
+      data: { resyncRequired: true },
+    } }));
+    const text = document.getElementById('connection-notice')?.textContent ?? '';
+    expect(text).toBe('实时订阅已结束，正在核对任务状态。');
+  });
+
+  it('带原因的提示同样在收尾后撤掉', () => {
+    busy = true; emit('agent_start');
+    fake.instance!.dispatchEvent(new CustomEvent('message', { detail: {
+      version: 1, kind: 'control', event: 'bridge.subscription_closed', sessionId: 's1',
+      data: { resyncRequired: true, reason: 'byte_limit' },
+    } }));
+    expect(document.getElementById('connection-notice')?.textContent).toContain('单条事件体积过大');
+    busy = false; emit('agent_settled');
+    expect(document.getElementById('connection-notice')?.textContent).toBe('');
+  });
 });
 
 describe('附件事件中的 FileList 必须同步快照', () => {

@@ -14,6 +14,18 @@ import type { Scope } from './scope';
 const DIALOGS = new Set(['select','confirm','input','editor']);
 const ABORT_PENDING_NOTICE = '已请求中止，等待 Pi 完成清理。';
 const SUBSCRIPTION_CHECK_NOTICE = '实时订阅已结束，正在核对任务状态。';
+// 摘除原因对应的补充说明。前缀与 SUBSCRIPTION_CHECK_NOTICE 保持一致，
+// 清空提示的判断才能用一个 startsWith 覆盖全部变体。
+const SUBSCRIPTION_REASON_NOTE: Record<string, string> = {
+  queue_full: '（本页渲染没跟上事件速率）',
+  byte_limit: '（单条事件体积过大）',
+};
+function subscriptionClosedNotice(reason: unknown): string {
+  const note = typeof reason === 'string' ? SUBSCRIPTION_REASON_NOTE[reason] : undefined;
+  return note ? `${SUBSCRIPTION_CHECK_NOTICE}${note}` : SUBSCRIPTION_CHECK_NOTICE;
+}
+/** 是否是「订阅已结束」这一类提示（含带原因的变体）。 */
+function isSubscriptionNotice(text: string): boolean { return text.startsWith(SUBSCRIPTION_CHECK_NOTICE); }
 // RESYNC_NOTICE：实时流不再可信、正从持久历史重建时的统一提示。
 const RESYNC_NOTICE = '实时事件已超出补发窗口，已重新读取历史；生成中的缺失内容将在本轮完成后同步。';
 
@@ -548,7 +560,7 @@ export class Workbench {
     if (state.sessionName) this.sessionTitle = state.sessionName;
     this.applyStateModel(state);
     if (wasBusy && !busy) await this.settled();
-    else if (!busy && el('connection-notice').textContent === SUBSCRIPTION_CHECK_NOTICE) this.notice('');
+    else if (!busy && isSubscriptionNotice(el('connection-notice').textContent ?? '')) this.notice('');
     await this.refreshThinking(state.thinkingLevel);
     this.refreshQueueState(state);
     await this.refreshDialogs();
@@ -774,8 +786,11 @@ export class Workbench {
       if (message.event === 'bridge.subscription_closed') {
         // 提示仍保留到状态核对结束（既有语义）；重订与重读走同一合并窗口，
         // 订阅被反复摘除时不得形成高频循环（见 runResync）。
+        // 原因决定后续处置方向：队列满说明本页渲染太慢（要降帧），
+        // 字节超限说明撞上了单条大事件（与渲染速度无关）。带上原因，
+        // 用户与日志才能对上桥侧那条 WARN。
         this.subscribed = '';
-        if (this.run !== 'idle') this.notice(SUBSCRIPTION_CHECK_NOTICE);
+        if (this.run !== 'idle') this.notice(subscriptionClosedNotice(record(message.data).reason));
         if (this.resyncDeferred()) return;
         this.runResync();
       }
@@ -810,7 +825,8 @@ export class Workbench {
   }
   private async settled(): Promise<void> {
     this.setRun('idle'); this.live.finish(); this.diskSession = true;
-    if ([ABORT_PENDING_NOTICE, SUBSCRIPTION_CHECK_NOTICE].includes(el('connection-notice').textContent ?? '')) this.notice('');
+    const notice = el('connection-notice').textContent ?? '';
+    if (notice === ABORT_PENDING_NOTICE || isSubscriptionNotice(notice)) this.notice('');
     const id = this.sessionId;
     await this.refreshHistory();
     if (id !== this.sessionId) return;

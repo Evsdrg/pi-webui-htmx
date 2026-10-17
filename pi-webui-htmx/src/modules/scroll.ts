@@ -47,13 +47,20 @@ export function mountScroll(): { bottom(): void; dispose(): void } {
   scroller.addEventListener('touchstart', () => { anchor = null; }, { passive: true, signal: abort.signal });
   document.addEventListener('htmx:beforeSwap', (event) => {
     const detail = (event as CustomEvent).detail as { target?: HTMLElement; xhr?: XMLHttpRequest; shouldSwap?: boolean };
-    if (detail.target?.id !== 'turns' || detail.shouldSwap === false) return;
-    pending = { atBottom: isAtBottom(scroller), anchor: captureAnchor(scroller), distance: captureDistance(scroller), top: scroller.scrollTop, prepend: detail.xhr?.getResponseHeader('X-Scroll-Mode') === 'prepend', reset: scroller.dataset.resetScroll === 'true' };
+    if (detail.target?.id !== 'turns') return;
+    // 标记读一次就清：这条响应可能被守卫拒绝（shouldSwap=false，代次不匹配），
+    // 那样不会再有 afterSwap，标记会一直留着，把**下一次**换入拽到底部。
+    // reset 的语义是「下一次换入从底部开始」，不是「直到成功为止」。
+    const reset = scroller.dataset.resetScroll === 'true';
+    if (reset) delete scroller.dataset.resetScroll;
+    // 被拒绝的换入不产生新布局，不登记待还原状态（否则一次被拒会留下过期的 top）。
+    if (detail.shouldSwap === false) return;
+    pending = { atBottom: isAtBottom(scroller), anchor: captureAnchor(scroller), distance: captureDistance(scroller), top: scroller.scrollTop, prepend: detail.xhr?.getResponseHeader('X-Scroll-Mode') === 'prepend', reset };
   }, { signal: abort.signal });
   document.addEventListener('htmx:afterSwap', (event) => {
     const target = (event as CustomEvent).detail?.target as HTMLElement | undefined;
     if (target?.id !== 'turns' || !pending) return;
-    const saved = pending; delete scroller.dataset.resetScroll;
+    const saved = pending;
     // 还原不能在这次派发里做：htmx 换入 #turns 之后，正文的 markdown 同步渲染仍在
     // 同一次 afterSwap 派发中执行，只是注册顺序在本模块之后（见 entry/app.ts）。
     // 此刻量锚点差额，量到的是「原始文本尚未格式化」的过渡布局——#turns 更矮、
