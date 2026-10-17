@@ -426,6 +426,22 @@ type Subscription struct {
 	ch     chan queuedEvent
 	bytes  atomic.Int64
 	once   sync.Once
+	// dropReason 记录这一订阅为什么被摘除。慢消费者被摘除是设计行为
+	// （绝不阻塞 Pi 输出），但客户端只会看到「实时订阅已结束」，事后必须能
+	// 分辨是哪条限额触发的——否则只能靠猜。空串表示未被摘除。
+	dropReason atomic.Value
+}
+
+// 订阅被摘除的原因。值与协议错误码无关，只用于诊断上报。
+const (
+	DropReasonQueueFull = "queue_full"
+	DropReasonByteLimit = "byte_limit"
+)
+
+// DropReason 返回订阅被摘除的原因；未被摘除时为空串。
+func (s *Subscription) DropReason() string {
+	reason, _ := s.dropReason.Load().(string)
+	return reason
 }
 
 // Next 取下一条事件；订阅被关闭时要求客户端重新同步，而不是静默续传。
@@ -606,6 +622,7 @@ func (w *Worker) publishLocked(event string, data any) {
 		if s.bytes.Add(n) > int64(w.cfg.SubscriberBytes) {
 			s.bytes.Add(-n)
 			delete(w.subs, s)
+			s.dropReason.Store(DropReasonByteLimit)
 			close(s.ch)
 			if w.cfg.Metrics != nil {
 				w.cfg.Metrics.EventDropped()
@@ -617,6 +634,7 @@ func (w *Worker) publishLocked(event string, data any) {
 		default:
 			s.bytes.Add(-n)
 			delete(w.subs, s)
+			s.dropReason.Store(DropReasonQueueFull)
 			close(s.ch)
 			if w.cfg.Metrics != nil {
 				w.cfg.Metrics.EventDropped()

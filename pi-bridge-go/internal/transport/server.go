@@ -19,6 +19,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"log/slog"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -1555,7 +1556,10 @@ func (s *Server) subscribeWithReplay(c connSink, r protocol.Request) (any, error
 	}
 	if !ok {
 		// 补发不了就明确要求重新同步，不伪造无损恢复。
+		// 这同样是「用户看到提示却不知为何」的一环：游标已被补发环淘汰。
 		s.metrics.ReplayMiss()
+		slog.Warn("事件补发失败，已要求客户端重新同步", "会话", r.SessionID,
+			"epoch", p.Epoch, "afterSeq", after)
 		return nil, protocol.E("resync_required", "事件游标已失效，请重新读取持久历史后再订阅")
 	}
 	if len(items) > 0 {
@@ -1576,6 +1580,7 @@ func (s *Server) subscribeWithReplay(c connSink, r protocol.Request) (any, error
 				return nil, protocol.E("conflict", "连接已关闭")
 			}
 			s.metrics.ReplayMiss()
+			slog.Warn("事件补发超时，已要求客户端重新同步", "会话", r.SessionID, "条数", len(items))
 			return nil, protocol.E("resync_required", "事件补发超时，请重新读取持久历史后再订阅")
 		}
 	}
@@ -1585,8 +1590,18 @@ func (s *Server) subscribeWithReplay(c connSink, r protocol.Request) (any, error
 		for {
 			m, err := sub.Next(c.connContext())
 			if err != nil {
+				// 连接自己断了不是「订阅被摘」：用户没在看，重同步会由重连触发。
 				if c.connContext().Err() == nil {
-					c.send(protocol.Message{Version: 1, Kind: "control", SessionID: r.SessionID, Event: "bridge.subscription_closed", Data: map[string]bool{"resyncRequired": true}})
+					// 摘除原因是诊断的关键：队列满与字节上限是两种完全不同的
+					// 处置（前者降渲染频率，后者要处理单条大事件）。此前只上报
+					// resyncRequired，事后无从分辨，这里一并给出并留一行日志。
+					reason := sub.DropReason()
+					slog.Warn("实时订阅被摘除，已要求客户端重新同步",
+						"会话", r.SessionID, "原因", reason)
+					c.send(protocol.Message{
+						Version: 1, Kind: "control", SessionID: r.SessionID, Event: "bridge.subscription_closed",
+						Data: map[string]any{"resyncRequired": true, "reason": reason},
+					})
 				}
 				return
 			}

@@ -144,7 +144,9 @@ Pi 原事件通过 `pi.event` 传递并绑定基线版本；不是跨 agent 通�
 6. omitted/resync 立即重读持久历史并标记 live 缺口；不伪造丢失 delta。
 7. 已受理任务独立于连接寿命；未知结果客户端只对账，不自动重发 prompt/bash 等变更命令。
 
-**当前传输边界：** WS 出站缓冲 32 帧、tunnel 虚拟连接 64 帧，均额外限制待发送字节为 1 MiB、单帧 512 KiB。连接发送者短暂拥塞时有界等待；同一批 replay 共用 5 秒截止时间，超时返回 `resync_required` 并释放订阅，而不是仅因队列瞬时满就断连接。worker 自身的订阅队列仍有独立条数/字节预算，高速事件可能触发 `bridge.subscription_closed`；UI 应核对 `session.state` 与磁盘历史，不得把断开的实时片段冒充完整。订阅确认的身份数据仍待客户端显式消费，不承诺无损跨连接恢复。
+**当前传输边界：** WS 出站缓冲 32 帧、tunnel 虚拟连接 64 帧，均额外限制待发送字节为 1 MiB、单帧 512 KiB。连接发送者短暂拥塞时有界等待；同一批 replay 共用 5 秒截止时间，超时返回 `resync_required` 并释放订阅，而不是仅因队列瞬时满就断连接。worker 自身的订阅队列仍有独立条数/字节预算（默认 32 条 / 1 MiB），高速事件可能触发 `bridge.subscription_closed`；UI 应核对 `session.state` 与磁盘历史，不得把断开的实时片段冒充完整。订阅确认的身份数据仍待客户端显式消费，不承诺无损跨连接恢复。
+
+`bridge.subscription_closed` 的 `data` 为 `{resyncRequired: true, reason}`，其中 `reason` 取值 `queue_full`（待发队列条数超限）或 `byte_limit`（待发字节超限），空串表示非摘除路径（如 worker 关闭）。两者处置不同：前者说明前端消费太慢、应降低渲染频率；后者说明有单条大事件撞上了预算。桥对同一次摘除写一行 WARN，含会话 id 与原因，便于事后把「用户看到提示」追溯到具体阈值。补发失败（游标已被补发环淘汰）与补发超时也各有一行 WARN。
 
 ## 5. 历史与资源
 
