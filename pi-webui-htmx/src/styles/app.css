@@ -237,7 +237,9 @@ kbd { font-size:10px; color:var(--text-dim); margin-left:auto; }
 .thinking-block[open] > summary { margin-bottom:2px; }
 /* 图标保持最浅一档常色：ZCode 的思考图标不随展开变色，层级交给文本。 */
 .thinking-block .thinking-icon { flex:0 0 auto; color:var(--text-dim); }
-.live .live-think-block > summary { font-size:11px; color:var(--text-muted); cursor:pointer; }
+/* 实时思考块的标题行与历史同构（图标 + 「思考」）：沿用 .thinking-block 的
+   行内布局，只补展开态下与正文的间隔。 */
+.live .live-think-block > summary { gap:6px; margin-bottom:2px; cursor:pointer; }
 .thinking-block .thinking-preview { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .thinking-block[open] .thinking-preview { display:none; }
 .thinking-block .thinking-body { min-width:0; color:var(--text-muted); }

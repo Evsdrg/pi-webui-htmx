@@ -121,6 +121,10 @@ describe('实时思考块的标题', () => {
     const block = root.querySelector('.live-think')?.closest('details.thinking-block') ?? null;
     expect(block).not.toBeNull();
     expect(block?.querySelector('summary')?.textContent).toContain('思考');
+    // 标题必须和历史侧同构：灯泡图标 + 「思考」文案，而不只是一个词。
+    // 2026-10-18 截图：实时层只剩「思考」两个字，图标的空位与「思考」标签都丢了。
+    expect(block?.querySelector('summary .thinking-icon')).not.toBeNull();
+    expect(block?.querySelector('summary .thinking-preview')?.textContent).toBe('思考');
     // 后续增量仍落在同一标题下的正文里。
     view.event({ type: 'message_update', assistantMessageEvent: { type: 'thinking_delta', delta: '，再看文件' } });
     expect(root.querySelectorAll('details.thinking-block').length).toBe(1);

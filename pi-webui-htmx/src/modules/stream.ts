@@ -83,6 +83,22 @@ function toolPreview(toolName: string, args: Record<string, unknown>): string {
 
 // 实时工具输出的保留上限：只留尾部（命令输出的错误通常在末尾），
 // 超限时前缀标明省略。结算后的历史视图仍会显示全部。
+// thinkingIcon 构造灯泡图标，与 src/templates/history.html 里的那一份同形。
+// 用 createElementNS 而不是 innerHTML：实时层与 markdown 管线一样，不把
+// 字符串当 HTML 注入（即便这里是常量）。
+function thinkingIcon(): SVGSVGElement {
+  const ns = 'http://www.w3.org/2000/svg';
+  const svg = document.createElementNS(ns, 'svg');
+  for (const [k, v] of Object.entries({ width: '14', height: '14', viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', 'stroke-width': '2', 'stroke-linecap': 'round', 'stroke-linejoin': 'round', 'aria-hidden': 'true', class: 'thinking-icon' })) svg.setAttribute(k, v);
+  const path = document.createElementNS(ns, 'path');
+  path.setAttribute('d', 'M9.5 2A5.5 5.5 0 0 0 4 7.5c0 1.7.78 3.21 2 4.21V14a1 1 0 0 0 1 1h5a1 1 0 0 0 1-1v-2.29c1.22-1 2-2.51 2-4.21A5.5 5.5 0 0 0 9.5 2z');
+  const l1 = document.createElementNS(ns, 'line');
+  l1.setAttribute('x1', '7'); l1.setAttribute('y1', '18'); l1.setAttribute('x2', '12'); l1.setAttribute('y2', '18');
+  const l2 = document.createElementNS(ns, 'line');
+  l2.setAttribute('x1', '8'); l2.setAttribute('y1', '21'); l2.setAttribute('x2', '11'); l2.setAttribute('y2', '21');
+  svg.append(path, l1, l2);
+  return svg;
+}
 const TOOL_OUTPUT_LIMIT = 20_000;
 function toolOutput(body: string): string {
   if (body.length <= TOOL_OUTPUT_LIMIT) return body;
@@ -454,16 +470,20 @@ export class LiveView {
     }
     this.scheduleThinkMarkdown();
   }
-  // createThinkingBlock 建一个带标题行的思考块：标题与历史侧同款
-  // （图标 + 「思考」），正文容器挂 markdown 渲染钩子。
-  // 图标与文案都由 CSS ::before 生成：这段代码在首屏包里，预算余量已见底，
-  // 少建两个元素就是少几十字节。summary 为空壳，只承担折叠/展开与左对齐。
+  // createThinkingBlock 建一个带标题行的思考块，结构与历史模板同构：
+  // summary 里是灯泡图标 + 「思考」标签。正文容器挂 markdown 渲染钩子。
+  // 图标路径与 history.html 里那段保持一致——两侧同一个视觉标记，
+  // 改一处就要改另一处（thinking_indent 反例锁住了结构，不锁路径）。
   private createThinkingBlock(): HTMLDetailsElement {
     const block = document.createElement('details');
     block.className = 'thinking-block live-think-block';
     block.open = true;
     const summary = document.createElement('summary');
-    summary.textContent = '思考';
+    const icon = thinkingIcon();
+    const label = document.createElement('span');
+    label.className = 'thinking-preview';
+    label.textContent = '思考';
+    summary.append(icon, label);
     block.append(summary);
     return block;
   }
