@@ -97,6 +97,17 @@ function toolDetailSeed(toolName: string, args: Record<string, unknown>): string
   return path || '工具已开始执行';
 }
 
+// 展开详情分成两块：调用本身（命令/路径）与输出。早先只有一块，输出一到
+// 就把命令覆盖掉——运行期展开看不到自己跑了什么，与历史侧同一个毛病。
+// 没有可识别参数的工具（参数不是 command/path）不给命令块，只显示输出。
+function toolCommand(toolName: string, args: Record<string, unknown>): string {
+  if (toolName === 'bash') return text(args.command);
+  const path = text(args.path);
+  if (path) return path;
+  const rest = Object.keys(args).length ? JSON.stringify(args) : '';
+  return rest.length > 600 ? `${rest.slice(0, 600)}…` : rest;
+}
+
 // droppedMarker 是提供商把模型文本丢弃后留下的占位标记（实测只有 "[dropped ]"）。
 // 它没有语义，显示出来只会像乱码；只在文本结尾剥离，不碰中间疑似字样。
 const droppedMarker = /\s*\[dropped\s*\]\s*$/;
@@ -288,10 +299,14 @@ export class LiveView {
     const args = record(event.args);
     preview.textContent = toolPreview(name, args);
     summary.append(label, preview); row.append(summary);
-    const detail = document.createElement('pre'); detail.className = 'tool-detail';
-    // 初始详情给命令/路径本身，展开就能看到完整调用；输出到达后由
-    // update/end 替换为累积输出。
-    detail.textContent = toolDetailSeed(name, args);
+    // 命令块先落一次，输出块留空等 update/end 填——两者互不覆盖。
+    const command = toolCommand(name, args);
+    if (command) {
+      const head = document.createElement('pre'); head.className = 'tool-detail tool-command';
+      head.textContent = command; row.append(head);
+    }
+    const detail = document.createElement('pre'); detail.className = 'tool-detail tool-output';
+    detail.textContent = command ? '' : toolDetailSeed(name, args);
     row.append(detail); work.items.append(row);
   }
   // findToolRow 按 toolCallId 定位工具行；缺 ID 时退回最后一个运行中的行。
@@ -318,7 +333,7 @@ export class LiveView {
     this.toolFrame = requestAnimationFrame(() => {
       this.toolFlushScheduled = false;
       for (const [target, content] of this.pendingToolOutput) {
-        const pre = target.querySelector('.tool-detail');
+        const pre = target.querySelector('.tool-output');
         if (pre) pre.textContent = content;
       }
       this.pendingToolOutput.clear();
@@ -332,7 +347,7 @@ export class LiveView {
     this.pendingToolOutput.delete(row);
     const body = messageText(record(event.result));
     if (body) {
-      const pre = row.querySelector('.tool-detail');
+      const pre = row.querySelector('.tool-output');
       if (pre) pre.textContent = toolOutput(body);
     }
     row.dataset.state = 'done';

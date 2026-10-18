@@ -27,7 +27,7 @@
         {{if $item.Step.Duration}}<span class="tool-duration">{{workDuration $item.Step.Duration}}</span>{{end}}
         <svg class="tool-chevron" width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="3.5 2 6.5 5 3.5 8" /></svg>
       </summary>
-      <pre class="tool-detail">{{$item.Step.Detail}}</pre>
+      {{if $item.Step.Command}}<pre class="tool-detail tool-command">{{$item.Step.Command}}</pre><pre class="tool-detail tool-output">{{$item.Step.Detail}}</pre>{{else}}<pre class="tool-detail">{{$item.Step.Detail}}</pre>{{end}}
       {{if and $item.Step.EntryID $item.Step.Images}}{{range $item.Step.Images}}<button class="lazy-block" data-lazy="tool-image" data-entry-id="{{$item.Step.EntryID}}" data-block-index="{{.}}">查看工具图片</button>{{end}}{{end}}
       </details>{{else}}<details class="thinking-block">
       <summary>
@@ -47,7 +47,7 @@
     <div class="process-body">
     {{range $item := $block.Items}}{{if eq $item.Kind "tool"}}<details class="tool-call" data-ok="{{if $item.Step.OK}}true{{else}}false{{end}}" data-entry-id="{{$item.Step.EntryID}}">
       <summary><span class="tool-name">{{if $item.Step.Name}}{{$item.Step.Name}}{{else}}{{$item.Step.Kind}}{{end}}</span><span class="tool-preview">{{$item.Step.Preview}}</span>{{if $item.Step.Duration}}<span class="tool-duration">{{workDuration $item.Step.Duration}}</span>{{end}}</summary>
-      <pre class="tool-detail">{{$item.Step.Detail}}</pre>
+      {{if $item.Step.Command}}<pre class="tool-detail tool-command">{{$item.Step.Command}}</pre><pre class="tool-detail tool-output">{{$item.Step.Detail}}</pre>{{else}}<pre class="tool-detail">{{$item.Step.Detail}}</pre>{{end}}
       </details>{{else}}<details class="thinking-block">
       <summary><span class="thinking-preview">思考</span>{{if $item.Thinking.Duration}}<span class="thinking-duration">· 持续了 {{workDuration $item.Thinking.Duration}}</span>{{end}}</summary>
       <div class="thinking-body"><button class="lazy-block" data-lazy="thinking" data-entry-id="{{$item.Thinking.EntryID}}" data-block-index="{{$item.Thinking.BlockIndex}}" hx-get="ui/sessions/{{$.SessionID}}/lazy?kind=thinking&amp;format=html&amp;entryId={{$item.Thinking.EntryID}}&amp;blockIndex={{$item.Thinking.BlockIndex}}" hx-target="this" hx-swap="outerHTML" hx-sync="this:drop" hx-disabled-elt="this">载入思考内容</button></div>

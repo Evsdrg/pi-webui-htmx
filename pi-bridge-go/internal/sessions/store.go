@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"pi-bridge-go/internal/protocol"
 	"pi-bridge-go/internal/workspace"
@@ -121,6 +122,11 @@ type Entry struct {
 	Timestamp time.Time `json:"timestamp"`
 	// ToolName 是工具结果对应的工具名；非工具结果为空。
 	ToolName string `json:"toolName,omitempty"`
+	// ToolCall 是这次工具调用**做了什么**的摘要（bash 是命令、文件工具是路径），
+	// 来自上一条 assistant 消息里 toolCall 块的 arguments，按 toolCallId 关联。
+	// 工具结果的正文只有输出（`3\n`、`Successfully wrote to …`），没有它，
+	// 历史里就只剩「输出了什么」而看不到「执行了什么」。
+	ToolCall string `json:"toolCall,omitempty"`
 	// Failed 表示工具结果报错，与 Pi Web 的 isError 同义。
 	// 工具块的边框与配色由它决定。
 	Failed bool `json:"failed,omitempty"`
@@ -135,6 +141,11 @@ type Entry struct {
 // 解码，单个字段的畸形只降级它自己，不会把整条消息清零。
 func ProjectEntries(raw []json.RawMessage) []Entry {
 	out := make([]Entry, 0, len(raw))
+	// calls 记录本页里已出现的 toolCall 摘要，按 toolCallId 索引：
+	// toolResult 只带 id 与输出，命令/路径在之前的 assistant 消息里。
+	// 同一页内按出现顺序登记即可——toolCall 一定写在其结果之前；
+	// 结果落在页面窗口之外时查不到，退化为只显示输出（不发散猜测）。
+	calls := make(map[string]string, len(raw))
 	for _, r := range raw {
 		var item struct {
 			Type      string          `json:"type"`
@@ -157,9 +168,13 @@ func ProjectEntries(raw []json.RawMessage) []Entry {
 			case "assistant":
 				e.Kind, e.Text = KindAssistant, pm.text
 				e.Error, e.Usage = pm.errText, pm.usage
+				for id, summary := range pm.calls {
+					calls[id] = summary
+				}
 			case "toolResult":
 				e.Kind, e.Text = KindTool, pm.text
 				e.ToolName, e.Failed = pm.toolName, pm.failed
+				e.ToolCall = calls[pm.toolCallID]
 			default:
 				e.Kind, e.Text = KindOther, pm.text
 			}
@@ -182,6 +197,11 @@ type projectedMessage struct {
 	usage    *Usage
 	toolName string
 	failed   bool
+	// calls 是这条 assistant 消息里每个 toolCall 的摘要，按调用 id 索引。
+	// 工具结果的正文只有输出，命令/路径全在这里（见 Entry.ToolCall）。
+	calls map[string]string
+	// toolCallID 是 toolResult 指向的调用 id，用于把 calls 关联回来。
+	toolCallID string
 }
 
 // projectMessage 扫一遍 message，把投影需要的字段一次解出来。
@@ -198,6 +218,7 @@ func projectMessage(raw json.RawMessage) projectedMessage {
 		Command      json.RawMessage `json:"command"`
 		Output       json.RawMessage `json:"output"`
 		ToolName     json.RawMessage `json:"toolName"`
+		ToolCallID   json.RawMessage `json:"toolCallId"`
 		IsError      json.RawMessage `json:"isError"`
 		StopReason   json.RawMessage `json:"stopReason"`
 		ErrorMessage json.RawMessage `json:"errorMessage"`
@@ -225,11 +246,84 @@ func projectMessage(raw json.RawMessage) projectedMessage {
 	case "assistant":
 		pm.errText = assistantError(decodeString(fields.StopReason), decodeString(fields.ErrorMessage))
 		pm.usage = parseUsage(fields.Usage)
+		pm.calls = projectToolCalls(fields.Content)
 	case "toolResult":
 		pm.toolName = decodeString(fields.ToolName)
 		pm.failed = decodeBool(fields.IsError)
+		pm.toolCallID = decodeString(fields.ToolCallID)
 	}
 	return pm
+}
+
+// projectToolCalls 取出 assistant 消息里每个 toolCall 的「做了什么」摘要，
+// 按调用 id 索引，供后面的 toolResult 关联。
+//
+// 摘要按工具类型挑最有信息量的字段：bash 是 command（多行只取首行），
+// 文件类是 path，其余退回参数 JSON 原文的前缀——宁可粗一点，也不要出现
+// 「只有输出、不知道执行了什么」的行。
+func projectToolCalls(content json.RawMessage) map[string]string {
+	if shapeOf(content) != shapeArray {
+		return nil
+	}
+	var blocks []struct {
+		Type      string          `json:"type"`
+		ID        string          `json:"id"`
+		Name      string          `json:"name"`
+		Arguments json.RawMessage `json:"arguments"`
+	}
+	if json.Unmarshal(content, &blocks) != nil {
+		return nil
+	}
+	var out map[string]string
+	for _, b := range blocks {
+		if b.Type != "toolCall" || b.ID == "" {
+			continue
+		}
+		if out == nil {
+			out = make(map[string]string, 2)
+		}
+		out[b.ID] = toolCallSummary(b.Name, b.Arguments)
+	}
+	return out
+}
+
+// toolCallSummaryRunes 是单条调用摘要的码点上限：历史行只显示一行预览，
+// 完整参数在展开详情里另有来源（会话原始记录）。
+const toolCallSummaryRunes = 300
+
+// toolCallSummary 生成一条 toolCall 的参数摘要。
+func toolCallSummary(name string, arguments json.RawMessage) string {
+	var args struct {
+		Command string `json:"command"`
+		Path    string `json:"path"`
+	}
+	_ = json.Unmarshal(arguments, &args)
+	switch {
+	case strings.TrimSpace(args.Command) != "":
+		// 多行命令（heredoc、脚本）只取首行加省略号：其余部分留给详情。
+		if i := strings.IndexByte(args.Command, '\n'); i >= 0 {
+			return clipRunes(args.Command[:i], toolCallSummaryRunes) + " …"
+		}
+		return clipRunes(args.Command, toolCallSummaryRunes)
+	case args.Path != "":
+		return clipRunes(args.Path, toolCallSummaryRunes)
+	}
+	// 其它工具：参数 JSON 原文，够认出「在干什么」即可。
+	return clipRunes(strings.TrimSpace(string(arguments)), toolCallSummaryRunes)
+}
+
+// clipRunes 按码点截断，不切断多字节字符。
+func clipRunes(s string, limit int) string {
+	if limit <= 0 || utf8.RuneCountInString(s) <= limit {
+		return s
+	}
+	i, n := 0, 0
+	for i < len(s) && n < limit {
+		_, size := utf8.DecodeRuneInString(s[i:])
+		i += size
+		n++
+	}
+	return s[:i] + "…"
 }
 
 // projectContent 一次扫描 content，同时产出纯文本与惰性块清单。

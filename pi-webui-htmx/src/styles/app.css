@@ -212,6 +212,11 @@ kbd { font-size:10px; color:var(--text-dim); margin-left:auto; }
 @media (hover:none) { .tool-call .tool-chevron { opacity:.6; } }
 /* 展开内容与下一行的间距交给组内 gap，这里只留贴住本行的 2px。 */
 .tool-call .tool-detail { margin:0; padding:2px 0 0; max-height:320px; overflow:auto; font-size:11px; color:var(--text-muted); }
+/* 展开后分两块：先是这次调用本身（bash 命令 / 文件路径），再是输出。
+   命令用正文色、不加左线；输出稍浅，让「执行了什么」比「打印了什么」
+   更容易一眼找到。两块各自滚动，长命令不会把输出挤走。 */
+.tool-call .tool-command { color:var(--text); border-left:2px solid var(--border); padding-left:8px; margin-left:1px; }
+.tool-call .tool-output { color:var(--text-muted); }
 /* 两处时长显示同一形态：不抢占宽度、等宽数字，避免秒数变化时文字抖动。 */
 .tool-duration,.thinking-duration { flex:0 0 auto; color:var(--text-dim); font-size:11px; font-variant-numeric:tabular-nums; }
 /* 工具详情与思考正文都要原样保留换行；长行（路径、单行 JSON）必须就地折断，
@@ -397,6 +402,12 @@ input,select,textarea { background:var(--bg); border:1px solid var(--border); bo
 .command-menu button:hover { background:var(--bg-hover); }
 .markdown { white-space:normal; }
 .markdown p { margin:0 0 12px; }
+/* 段落的下边距只在正文中间有意义。过程区的正文段是 flex 列的一项，
+   条目之间已有 gap；段尾再留 12px 会让每段后面多出约一行的空白
+   （2026-10-18 实测：32px 的行盒里 12px 是空边距）。 */
+.markdown > :last-child { margin-bottom:0; }
+.process-text > :first-child { margin-top:0; }
+.process-text > :last-child { margin-bottom:0; }
 .markdown h1,.markdown h2,.markdown h3 { font-weight:650; margin:20px 0 8px; }
 .markdown h1 { font-size:22px; }
 .markdown h2 { font-size:19px; }

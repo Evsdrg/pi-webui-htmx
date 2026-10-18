@@ -135,8 +135,11 @@ describe('实时过程摘要与时间线', () => {
     view.event({ type: 'tool_execution_update', toolCallId: 'b', partialResult: { content: [{ type: 'text', text: '/workspace' }] } });
     const rows = root.querySelectorAll('.live-tool');
     // partialResult 是累积输出：直接整体替换，不逐块追加（追加会重复）。
-    expect(rows[0]?.querySelector('.tool-detail')?.textContent).toBe('第一行\n第二行');
-    expect(rows[1]?.querySelector('.tool-detail')?.textContent).toBe('/workspace');
+    expect(rows[0]?.querySelector('.tool-output')?.textContent).toBe('第一行\n第二行');
+    expect(rows[1]?.querySelector('.tool-output')?.textContent).toBe('/workspace');
+    // 输出不覆盖调用本身：命令仍在自己的块里（历史侧同一结构）。
+    expect(rows[0]?.querySelector('.tool-command')?.textContent).toBe('ls');
+    expect(rows[1]?.querySelector('.tool-command')?.textContent).toBe('pwd');
     root.remove();
   });
 
@@ -150,7 +153,8 @@ describe('实时过程摘要与时间线', () => {
     const row = root.querySelector<HTMLElement>('.live-tool')!;
     expect(row.dataset.state).toBe('done');
     expect(row.dataset.ok).toBe('false');
-    expect(row.querySelector('.tool-detail')?.textContent).toBe('make: *** [all] Error 2');
+    expect(row.querySelector('.tool-output')?.textContent).toBe('make: *** [all] Error 2');
+    expect(row.querySelector('.tool-command')?.textContent).toBe('make');
     // 成功路径 data-ok=true（历史配色同一套选择器）。
     view.event({ type: 'tool_execution_start', toolName: 'bash', toolCallId: 'b', args: { command: 'true' } });
     view.event({ type: 'tool_execution_end', toolCallId: 'b', isError: false, result: { content: [{ type: 'text', text: '' }] } });
@@ -166,7 +170,7 @@ describe('实时过程摘要与时间线', () => {
     view.event({ type: 'tool_execution_start', toolName: 'bash', toolCallId: 'a', args: { command: 'cat big' } });
     const huge = 'A'.repeat(30_000) + 'TAIL';
     view.event({ type: 'tool_execution_update', toolCallId: 'a', partialResult: { content: [{ type: 'text', text: huge }] } });
-    const body = root.querySelector('.tool-detail')?.textContent ?? '';
+    const body = root.querySelector('.tool-output')?.textContent ?? '';
     expect(body.length).toBeLessThan(25_000);
     expect(body).toContain('TAIL');
     expect(body).toContain('已省略');

@@ -627,6 +627,10 @@ type Step struct {
 	// Name 是工具名（read/bash/edit/...），直接来自工具结果的 toolName 字段。
 	// 空值表示记录里没有工具名，模板退回 Kind。
 	Name string
+	// Command 是这次调用做了什么（bash 的命令、文件工具的路径），来自调用方
+	// 记录的参数摘要。工具结果只有输出——没有它，历史里就只剩「输出了什么」。
+	// 为空表示没有可关联的调用参数（老会话、结果在页外），模板退回只用 Detail。
+	Command string
 	// OK 表示工具结果没有报错。false 时用错误配色，与 Pi Web 的 isError 同义。
 	OK bool
 	// Duration 是工具执行的整秒数，0 表示不显示。由工具结果时间戳减去
@@ -903,7 +907,14 @@ func GroupTurns(entries []sessions.Entry) []Turn {
 			turns[current].appendText(e.Text)
 		case sessions.KindTool:
 			images := lazyIndexes(e.Lazy, "image")
-			step := Step{Kind: "工具", Detail: e.Text, Preview: toolPreview(e.Text), EntryID: e.ID, Images: images, Name: e.ToolName, OK: !e.Failed, Duration: secondsBetween(assistantAt, e.Timestamp)}
+			// 收起预览优先显示「调用了什么」（命令/路径）：工具结果只有输出，
+			// 只拿输出当预览时，一行 `bash 3` 看不出执行的是哪条命令。
+			// 展开详情里命令与输出都要在——模板按 Command 是否为空分行渲染。
+			previewSource := e.ToolCall
+			if previewSource == "" {
+				previewSource = e.Text
+			}
+			step := Step{Kind: "工具", Detail: e.Text, Command: e.ToolCall, Preview: toolPreview(previewSource), EntryID: e.ID, Images: images, Name: e.ToolName, OK: !e.Failed, Duration: secondsBetween(assistantAt, e.Timestamp)}
 			if current < 0 {
 				turns = append(turns, Turn{ID: e.ID, EntryIDs: []string{e.ID}, start: e.Timestamp, end: e.Timestamp})
 				current = len(turns) - 1
