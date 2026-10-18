@@ -164,7 +164,7 @@ Pi 原事件通过 `pi.event` 传递并绑定基线版本；不是跨 agent 通�
 
 ### 工具与思考强度
 
-`session.start` 只接受 `cwd`。工作进程**始终启用全部工具**（全部内置工具，含默认关闭的 `grep/find/ls`，加上全部插件工具）：桥随进程下发桥内 `tools-ext.mjs`，它在会话启动时用 `pi.setActiveTools()` 把 `pi.getAllTools()` 列出的全部工具一次性激活——不走 `--tools` 白名单，因为那会连带禁用扩展工具。为兼容旧客户端，`toolPreset` 字段仍被接受但**已废弃、被忽略**；不因该字段报错，也不再回显。
+`session.start` 只接受 `cwd`。工作进程**始终启用全部工具**（全部内置工具，含默认关闭的 `grep/find/ls`，加上全部插件工具）：桥随进程下发桥内 `tools-ext.mjs`，它在会话启动时用 `pi.setActiveTools()` 把 `pi.getAllTools()` 列出的全部工具一次性激活——不走 `--tools` 白名单，因为那会连带禁用扩展工具。同一扩展还给模型没有指定 `timeout` 的 `bash`/`powershell` 调用补 300 秒上限（Pi 本身没有默认超时，挂起的命令会让回合永久停住），并在系统提示词规则里要求预计更久的命令自行传 `timeout`。为兼容旧客户端，`toolPreset` 字段仍被接受但**已废弃、被忽略**；不因该字段报错，也不再回显。
 
 `session.thinking_levels` 返回当前模型支持的等级（来自 Pi 的 `get_available_thinking_levels`，无模型时仅 `off`）。UI 的「自动」不是 Pi 等级，而是“不发送 `session.set_thinking`”的语义，由 Pi 按 settings 的 `defaultThinkingLevel` 与模型能力决定；Pi 没有“未设置”读回字段，因此自动/等级选择只能按会话在本地记忆，界面必须标注这是本机偏好而非 Pi 实时状态。
 

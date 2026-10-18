@@ -11,7 +11,8 @@ import (
 //
 // 作用：会话启动时把 Pi 当前注册的**全部**工具设为激活（含默认关闭的
 // grep/find/ls 与已装插件注册的工具）。Pi 的 --tools 白名单会连带禁用扩展
-// 工具，所以走扩展的 pi.setActiveTools() 而不是 CLI 开关。
+// 工具，所以走扩展的 pi.setActiveTools() 而不是 CLI 开关。另外给模型没指定
+// timeout 的 bash/powershell 调用补 300 秒上限——Pi 本身没有默认超时。
 //
 //go:embed tools-ext.mjs
 var toolsExtSource []byte
