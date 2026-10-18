@@ -879,7 +879,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			terminals, terminalIdle = s.terminals.Limits()
 		}
 		writeJSON(w, encoding, 200, map[string]any{
-			"version": 1, "piBaseline": "1.2.0",
+			"version": 1, "piBaseline": "1.3.0",
 			"methods":          SupportedMethods,
 			"replay":           true,
 			"persistentDedup":  true,

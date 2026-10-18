@@ -105,7 +105,7 @@ cd pi-webui-htmx && pnpm test && pnpm check             # 单测 + 类型 + 产�
 | 前端 | HTMX + Go 模板服务端渲染；TypeScript 仅做交互增强——**没有前端框架、路由、状态库** |
 | 构建 | Vite 8 + TypeScript 7；样式使用自有 reset 与手写 CSS（模板里没有 Tailwind 工具类） |
 | 浏览器侧依赖 | htmx、marked、highlight.js、KaTeX、DOMPurify、mermaid、xterm、ansi_up；除 htmx 外全部按需动态加载 |
-| 要求 | Pi 可执行 `pi --mode rpc`（开发基准 1.2.0）；Go 1.27+；Node ≥ 20.19 与 pnpm 11 |
+| 要求 | Pi 可执行 `pi --mode rpc`（开发基准 1.3.0）；Go 1.27+；Node ≥ 20.19 与 pnpm 11 |
 
 ## 许可证
 
