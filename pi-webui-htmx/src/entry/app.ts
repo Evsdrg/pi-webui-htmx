@@ -3,6 +3,7 @@ import '@/styles/app.css';
 import { mountScroll } from '@/modules/scroll';
 import { mountLayout } from '@/modules/layout';
 import { Workbench } from '@/modules/workbench';
+import { swapRoots } from '@/lib/swap';
 
 window.htmx = htmx;
 htmx.config.allowEval = false;
@@ -36,9 +37,13 @@ async function render(root: HTMLElement): Promise<void> {
   await run('.mermaid,.language-mermaid', async () => (await import('@/modules/mermaid')).mountMermaid);
   await run('.ansi', async () => (await import('@/modules/ansi')).mountAnsi);
 }
+// htmx 的 afterSwap 里，换入的内容可能在 detail.elt（outerHTML）或
+// detail.target（innerHTML），见 swapRoots 的说明。
 document.addEventListener('htmx:afterSwap', (event) => {
-  const root = (event as CustomEvent).detail?.target as HTMLElement | undefined;
-  if (root) void render(root).catch((error: unknown) => console.warn('内容渲染失败：', error));
+  const detail = (event as CustomEvent).detail;
+  for (const root of swapRoots(detail)) {
+    void render(root).catch((error: unknown) => console.warn('内容渲染失败：', error));
+  }
 });
 
 // 首帧之后预热渲染模块。render() 每次交换都会按需 import 这些模块，而它们的重库

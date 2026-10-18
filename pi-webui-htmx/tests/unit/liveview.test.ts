@@ -90,6 +90,25 @@ describe('实时思考增量', () => {
   });
 });
 
+describe('实时思考的 markdown 渲染', () => {
+  // 思考内容含大量 markdown（行内代码/列表/加粗）。运行期间若只有纯文本，
+  // 用户看到的是原始语法；这里锁「思考块也走同一条渲染管线」。
+  it('思考内容按 markdown 渲染，且保留流式增量', async () => {
+    const root = mount();
+    const view = new LiveView(root);
+    view.begin();
+    view.event({ type: 'message_update', assistantMessageEvent: { type: 'thinking_delta', delta: '先看 `main.go`，**重点**在这' } });
+    const el = root.querySelector<HTMLElement>('.live-think')!;
+    // 增量到达后应是渲染过的富文本（测试桩只处理加粗）。
+    await vi.waitFor(() => expect(el.querySelector('strong')?.textContent).toBe('重点'));
+    // 再来的增量仍要出现在同一块里（不新建块、不丢内容）。
+    view.event({ type: 'message_update', assistantMessageEvent: { type: 'thinking_delta', delta: '，**继续**' } });
+    await vi.waitFor(() => expect(el.textContent).toContain('继续'));
+    expect(root.querySelectorAll('.live-think').length).toBe(1);
+    root.remove();
+  });
+});
+
 describe('实时过程摘要与时间线', () => {
   it('工作段运行中展开，仍显示当前动作，思考预览每 1500ms 尾沿更新', () => {
     vi.useFakeTimers();

@@ -15,6 +15,16 @@ export async function safeMarkdown(source: string): Promise<string> { const e = 
 // 才能同步渲染；预热放在首帧之后，见 app.ts。
 export async function warmMarkdown(): Promise<void> { engine = await load(); }
 
+// markdownTargets 收集 root 范围内待渲染的 .markdown 节点，**包含 root 自身**。
+// hx-swap="outerHTML" 换入的节点可能就是容器本身（思考正文：按钮被
+// <div class="lazy-thinking markdown"> 整个替换），只查后代会把这种换入漏掉，
+// 于是那段文字一直停留在原始 markdown。
+function markdownTargets(root: ParentNode): HTMLElement[] {
+  const found = Array.from(root.querySelectorAll<HTMLElement>('.markdown:not([data-rendered])'));
+  if (root instanceof HTMLElement && root.matches('.markdown:not([data-rendered])')) found.unshift(root);
+  return found;
+}
+
 // renderMarkdownSync 用**已预载**的引擎同步渲染 root 内未处理的 .markdown 节点，
 // 返回是否完成。它存在的理由：交换后的渲染若走 await（动态 import / 异步 mount），
 // 原生 ESM 的 import 会跨任务边界，浏览器会把「原始 Markdown 文本」先绘制一帧、
@@ -22,7 +32,7 @@ export async function warmMarkdown(): Promise<void> { engine = await load(); }
 // 并把滚动位置一起顶动。预热后这里同步完成，全程不跨任务，只绘制一帧。
 export function renderMarkdownSync(root: ParentNode = document): boolean {
   if (!engine) return false;
-  const nodes = Array.from(root.querySelectorAll<HTMLElement>('.markdown:not([data-rendered])'));
+  const nodes = markdownTargets(root);
   for (const node of nodes) {
     try {
       node.innerHTML = engine.sanitize(engine.parse(node.textContent ?? ''));
@@ -34,13 +44,15 @@ export function renderMarkdownSync(root: ParentNode = document): boolean {
 }
 
 export async function mountMarkdown(root: ParentNode = document): Promise<void> {
-  const nodes = Array.from(root.querySelectorAll<HTMLElement>('.markdown:not([data-rendered])'));
+  const nodes = markdownTargets(root);
   if (!nodes.length) return;
   for (const node of nodes) node.dataset.rendered = 'pending';
   try {
     const e = await load();
     for (const node of nodes) {
-      if (!node.isConnected) continue;
+      // 节点脱离文档时跳过，但必须清掉 pending：它可能被别处重新挂载，
+      // 留着 pending 会让「未渲染」的选择器永远认不出它。
+      if (!node.isConnected) { delete node.dataset.rendered; continue; }
       node.innerHTML = e.sanitize(e.parse(node.textContent ?? ''));
       for (const link of node.querySelectorAll('a')) link.rel = 'noopener noreferrer';
       node.dataset.rendered = '1';

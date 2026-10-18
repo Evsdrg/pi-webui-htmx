@@ -501,9 +501,20 @@ input,select,textarea { background:var(--bg); border:1px solid var(--border); bo
 .lazy-block { display:inline-block; margin:2px 0; padding:1px 8px; font-size:11px; color:var(--text-muted); background:var(--bg-subtle); border:1px dashed var(--border); border-radius:6px; cursor:pointer; }
 .lazy-block:hover { color:var(--accent); border-color:var(--accent); }
 .lazy-block[data-loaded="1"] { display:none; }
-/* 思考正文：左导线 + 缩进、正文字体（ZCode 的 reasoning 内容同款结构），
-   不再带底色盒子——展开的是一段可读的文本，不是一块卡片。 */
-.lazy-thinking { margin:2px 0 2px 8px; padding:2px 0 2px 14px; font-size:12px; color:var(--text-muted); border-left:1px solid var(--border); white-space:pre-wrap; overflow-wrap:anywhere; font-family:system-ui,"Noto Sans CJK SC",sans-serif; }
+/* 思考正文：左导线 + 缩进、正文字体（ZCode 的 reasoning 同款结构）。
+   正文走 markdown（见 thinking.html）：思考里大量行内代码/列表/加粗，
+   纯文本会把 `x`、**重点** 原样露出来。thinking-md 是历史与实时共用的
+   排版钩子，只把渲染产物收到「思考区」这一档。 */
+.lazy-thinking, .live .live-think { margin:2px 0 2px 8px; padding:2px 0 2px 14px; font-size:12px; color:var(--text-muted); border-left:1px solid var(--border); overflow-wrap:anywhere; font-family:system-ui,"Noto Sans CJK SC",sans-serif; }
+.thinking-md { white-space:normal; }
+.thinking-md > :first-child { margin-top:0; }
+.thinking-md > :last-child { margin-bottom:0; }
+.thinking-md p { margin:0 0 8px; }
+.thinking-md ul, .thinking-md ol { margin:8px 0; padding-left:20px; list-style:revert; }
+.thinking-md pre { margin:8px 0; padding:8px 10px; border-radius:6px; background:var(--tool-bg); border:1px solid var(--border); overflow:auto; font:11px/1.6 ui-monospace,monospace; }
+.thinking-md code { font-family:ui-monospace,monospace; font-size:.94em; }
+.thinking-md :not(pre) > code { background:var(--bg-subtle); padding:1px 4px; border-radius:4px; }
+.thinking-md h1, .thinking-md h2, .thinking-md h3 { font-size:13px; font-weight:650; margin:10px 0 6px; color:var(--text); }
 .lazy-image { max-width:100%; border:1px solid var(--border); border-radius:8px; display:block; margin:4px 0; }
 
 /* 文件查看器：图片居中显示，不超出面板宽度。 */

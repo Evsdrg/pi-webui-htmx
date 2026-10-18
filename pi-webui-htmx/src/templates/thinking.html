@@ -1,1 +1,5 @@
-<div class="lazy-thinking">{{if .}}{{.}}{{else}}（空）{{end}}</div>
+{{/* 思考正文按 markdown 渲染：模型输出里 68% 含行内代码、46% 含有序列表、
+     44% 含加粗、17% 含围栏代码块（本机 3786 个思考块实测）。容器加 markdown
+     类，前端渲染管线（marked + DOMPurify）在交换后统一处理；源文本原样输出，
+     转义由模板完成，渲染与消毒在前端。 */}}
+<div class="lazy-thinking markdown thinking-md">{{if .}}{{.}}{{else}}（空）{{end}}</div>

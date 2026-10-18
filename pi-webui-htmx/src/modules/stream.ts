@@ -132,6 +132,12 @@ export class LiveView {
   private truncated = false;
   private thinkingChars = 0;
   private thinkingTail = '';
+  // 当前思考块的 markdown 源与「最近一次渲染时的源长度」，语义同正文段：
+  // 渲染后 DOM 里是富文本，不能反读 textContent 当源。
+  private thinkRaw = '';
+  private thinkEl: HTMLPreElement | null = null;
+  private thinkRenderedFor = -1;
+  private thinkTimer: ReturnType<typeof setTimeout> | undefined;
   private previewAt: number | undefined;
   private previewTimer: ReturnType<typeof setTimeout> | undefined;
   // 实时时间线按「工作段 / 正文段」交替：模型会在工具之间穿插正文，
@@ -195,6 +201,7 @@ export class LiveView {
   clear(): void {
     this.dispose(); this.rendered = 0; this.truncated = false; this.thinkingChars = 0;
     this.segment = null; this.work = null; this.text = null; this.textRaw = ''; this.mdRenderedFor = -1;
+    this.thinkEl = null; this.thinkRaw = ''; this.thinkRenderedFor = -1;
     const flow = this.root.querySelector('#live-flow');
     if (flow) flow.replaceChildren();
     // 用户气泡必须连同 hidden 一起复位：只清文字的话，「settled 清理之后
@@ -210,6 +217,7 @@ export class LiveView {
     cancelAnimationFrame(this.frame); this.frame = 0; this.scheduled = false; this.chunks = '';
     cancelAnimationFrame(this.toolFrame); this.toolFrame = 0; this.toolFlushScheduled = false; this.pendingToolOutput.clear();
     clearTimeout(this.mdTimer); this.mdTimer = undefined;
+    clearTimeout(this.thinkTimer); this.thinkTimer = undefined;
     this.resetPreview();
   }
   // flowEl 取时间线容器；测试夹具不带 #live-flow 时退回 root 本身。
@@ -421,10 +429,40 @@ export class LiveView {
     const hasBlock = pre instanceof HTMLPreElement && pre.classList.contains('live-think');
     if (!hasBlock) {
       if (!delta.trim()) return;
-      pre = document.createElement('pre'); pre.className = 'live-think'; work.items.append(pre);
+      pre = document.createElement('pre'); pre.className = 'live-think markdown thinking-md'; work.items.append(pre);
+      this.thinkEl = pre as HTMLPreElement; this.thinkRaw = ''; this.thinkRenderedFor = -1;
     }
     if (this.thinkingChars >= THINKING_LIMIT) return;
     const part = delta.slice(0, THINKING_LIMIT - this.thinkingChars);
-    (pre as HTMLPreElement).append(document.createTextNode(part)); this.thinkingChars += part.length;
+    this.thinkingChars += part.length;
+    if (this.thinkEl !== pre) { this.thinkEl = pre as HTMLPreElement; this.thinkRenderedFor = -1; }
+    // 源必须自己留着：渲染后 DOM 里是富文本，反读 textContent 会丢掉 `**` 等记号。
+    this.thinkRaw += part;
+    // 尚未渲染过时按旧路径增量追加文本节点（避免每个 delta 整段重写）；
+    // 已渲染过则保持富文本不动，等节流尾沿整段重渲——与正文段同一策略。
+    if (this.thinkRenderedFor < 0 || this.thinkRaw.length > LIVE_MARKDOWN_LIMIT) {
+      (pre as HTMLPreElement).append(document.createTextNode(part));
+    }
+    this.scheduleThinkMarkdown();
+  }
+  private scheduleThinkMarkdown(): void {
+    if (this.thinkTimer !== undefined) return;
+    this.thinkTimer = setTimeout(() => { this.thinkTimer = undefined; void this.renderThinkMarkdown(); }, LIVE_MARKDOWN_INTERVAL_MS);
+  }
+  // renderThinkMarkdown 把当前思考块的源整段渲染（节流后的尾沿调用）。
+  // 与正文段一致：渲染期间源若已变化或块已换/移除，就重排一次而不是写回。
+  private async renderThinkMarkdown(): Promise<void> {
+    const el = this.thinkEl;
+    if (!el || !el.isConnected) return;
+    const source = this.thinkRaw;
+    if (source.length > LIVE_MARKDOWN_LIMIT || !source.trim()) return;
+    if (this.thinkRenderedFor === source.length) return;
+    try {
+      const { safeMarkdown } = await import('./markdown');
+      if (this.thinkEl !== el || !el.isConnected || this.thinkRaw !== source) { this.scheduleThinkMarkdown(); return; }
+      el.innerHTML = await safeMarkdown(source);
+      for (const link of el.querySelectorAll('a')) link.rel = 'noopener noreferrer';
+      this.thinkRenderedFor = source.length;
+    } catch { /* 渲染失败保持纯文本；后续增量会继续走纯文本路径。 */ }
   }
 }
