@@ -1555,11 +1555,15 @@ func (s *Server) subscribe(c connSink, r protocol.Request) (any, error) {
 		for {
 			m, err := sub.Next(c.connContext())
 			if err != nil {
-				// 连接自己断了不是「订阅被终止」：用户没在看，重建会由重连触发。
-				if c.connContext().Err() == nil {
-					// 权威帧积压到硬上限才会走到这里：读端已彻底停止读取。
-					// 上报原因供诊断，并让客户端重读历史与状态。
-					reason := sub.DropReason()
+				// 通道关闭有两种来源，只有一种是「需要重读」：
+				//   1) 背压终止（权威帧积压到硬上限，读端已彻底停止读取）；
+				//   2) 正常关闭：客户端退订、切会话、重订替换旧订阅、连接断开。
+				// 两者在 Subscription 上都表现为通道关闭，但只有第 1 种
+				// 意味着客户端缺了事件。判据就是终止原因是否为空——正常关闭
+				// 从不写原因。此前不区分二者，于是每次刷新/切会话都会给客户端
+				// 发一条 resyncRequired，界面随即弹出「实时订阅已结束」。
+				reason := sub.DropReason()
+				if c.connContext().Err() == nil && reason != "" {
 					slog.Warn("实时订阅被终止，客户端需重读历史与状态",
 						"会话", r.SessionID, "原因", reason)
 					c.send(protocol.Message{

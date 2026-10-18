@@ -177,3 +177,48 @@ func Test订阅被终止时控制消息带上原因(t *testing.T) {
 		t.Fatalf("reason 应为 %q，实际 %q", run.DropReasonQueueFull, reason)
 	}
 }
+
+// Test正常关闭订阅不触发终止通知 是「原因=""」那批 WARN 的反例。
+//
+// 订阅有两种结束方式：被背压终止（要做重读），和正常关闭（退订、换会话、
+// 重订替换旧订阅、连接断开）。两者在 Subscription 上都是「通道关闭」，
+// 但只有前者需要客户端重读历史。此前传输层不区分二者，于是每次刷新页面、
+// 切换会话、重连重订都会给客户端发一条 resyncRequired 的控制帧——正是
+// 「实时订阅已结束，正在核对任务状态」这句提示的来源之一。
+func Test正常关闭订阅不触发终止通知(t *testing.T) {
+	s, manager, cwd := newTestServer(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	worker, err := manager.Start(ctx, "", cwd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	info := worker.Info()
+
+	sink := newFakeSink(ctx)
+	params, err := json.Marshal(map[string]any{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.subscribe(sink, protocol.Request{
+		Method: "session.subscribe", SessionID: info.SessionID, Params: params,
+	}); err != nil {
+		t.Fatalf("订阅失败: %v", err)
+	}
+	// 正常关闭：等价于客户端退订，或同一连接重订时替换掉旧订阅。
+	sub := sink.existingSubscription(info.SessionID)
+	if sub == nil {
+		t.Fatal("订阅未登记")
+	}
+	sub.Close()
+	// 给订阅 goroutine 留出走到通道关闭那一行的时间。
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		for _, m := range sink.messages() {
+			if m.Kind == "control" && m.Event == "bridge.subscription_closed" {
+				t.Fatalf("正常关闭不得发终止通知（客户端会误以为要重读）: %v", m.Data)
+			}
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
