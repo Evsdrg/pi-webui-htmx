@@ -178,6 +178,98 @@ for(const [name,relative] of Object.entries(manifest.templates??{})){
  if(missing.size)fail(`这些 class 被模板引用，却既无样式定义、也未登记为钩子：${[...missing].sort().join('、')}（如确为纯钩子，请加入 check-contract.mjs 的 UNSTYLED_HOOKS 并写明理由）`);
  else ok('模板组件类都有样式定义或已登记为钩子');
 }
+// 反向守卫：CSS 里定义的组件类必须被「某一方」引用——模板、TS、JS 运行时拼名
+// 或桥渲染时注入，四路都不出现即为死规则。踩过的坑：`.toast-success` 的 kind 在
+// workbench 里被收窄成 error/warning/info 后永远不会再产生，样式却一直留着；
+// `.state-online` 在模板改版后成了孤儿。死规则的危害不是体积（每条几十字节），
+// 而是「改样式的人以为它还在生效」——对着一段不渲染的 CSS 调参数，怎么调都没反应。
+//
+// 规则：app.css/models.css 顶层类（拆掉属性选择器与状态后缀取主干）至少被下列
+// 之一引用，否则必须登记到 DEAD_ALLOWED 并写明理由：
+//   a) src/templates 静态 class（{{…}} 插值先抹掉）；
+//   b) TS/JS 字符串（模板字面量拼名如 `toast toast-${kind}` 按前缀覆盖）；
+//   c) 动态拼名白名单 RUNTIMEClassFamilies：由枚举值拼出的类（桥 Go 常量 / TS 联合类型），
+//      前缀登记 + 枚举展开核对，防止「拼名来源改了枚举」静默断链；
+//   d) htmx/浏览器运行时行为（htmx-request 等），单独列理由。
+{
+ const styleFiles=['app.css','models.css'];
+ const templateBodies=[];
+ {
+  const dir=resolve(root,'src/templates');
+  const walk=(d)=>{for(const e of readdirSync(d,{withFileTypes:true})){const p=resolve(d,e.name);e.isDirectory()?walk(p):e.name.endsWith('.html')&&templateBodies.push(readFileSync(p,'utf8'));}};
+  walk(dir);
+ }
+ // 模板侧引用：先抹 {{…}}（它是服务端注入，抹掉后的残词如 `diff-`、`is-` 不算引用）。
+ const templateRef=(name)=>templateBodies.some(b=>b.replace(/\{\{[^}]*\}\}/g,' ').includes(name));
+ const tsRef=(name)=>{
+  for(const f of ['src/modules','src/entry','src/lib']){
+   const d=resolve(root,f);
+   const walk=(dir)=>{for(const e of readdirSync(dir,{withFileTypes:true})){const p=resolve(dir,e.name);if(e.isDirectory())walk(p);else if(e.name.endsWith('.ts')&&readFileSync(p,'utf8').includes(name))return true;}return false;};
+   if(walk(d))return true;
+  }
+  return false;
+ };
+ // 动态拼名家族：主干 → 允许的后缀枚举与出处。核对「CSS 里出现的主干+后缀组合」
+ // 是否都在枚举内，枚举外即失败——这挡的是「枚举加了新值而样式没跟上」或反向。
+ const RUNTIME_CLASS_FAMILIES={
+  // 拼名来源核对记录（2026-10-18，逐一对过产生方源码）：
+  // toast：toast.ts `toast toast-${kind}`；kind 联合类型含 'success'（协议允许），
+  //   但 workbench.notify 的白名单把它折成 info，故 success 目前不产生（见 DEAD_ALLOWED）。
+  'toast':{from:'toast.ts `toast-${kind}`（NotifyKind）',suffixes:['','root','info','success','warning','error','exit','in']},
+  // state：workbench.ts:1390 `state state-${online?'online':'offline'}` + 模板静态 state-offline。
+  'state':{from:'workbench.ts setConnection 拼状态类 + 模板 state-offline',suffixes:['','online','offline']},
+  // diff：diff.html:18 `diff-line diff-{{.Kind}}`；Kind 枚举见
+  //   pi-bridge-go/internal/presentation/workspace.go:91-100（hunk/add/del/context）。
+  'diff':{from:'diff.html `diff-{{.Kind}}`，Kind 由 workspace.go 枚举 add/del/hunk/context',suffixes:['','line','file','file-head','path','table','no','text','add','del','hunk','context']},
+  // row：export.html:54 `row-{{.Kind}}`；Kind 枚举见
+  //   pi-bridge-go/internal/sessions/export.go:18（user/assistant/thinking/toolCall/toolResult/info），
+  //   样式内联在 export.html 的 <style>（check-contract 视其已定义，家族核对仍覆盖）。
+  'row':{from:'export.html `row-{{.Kind}}`，Kind 由 sessions/export.go 枚举 user/assistant/thinking/toolCall/toolResult/info',suffixes:['','user','assistant','thinking','toolCall','toolResult','info']},
+  // is-*：mc.html:2 `mc-tag is-{{.Status}}`（status 来自 magic-context 库的
+  //   status 列：active/archived/dismissed/pending/dropped）；is-running（模板+TS）、
+  //   is-collapsed（workspace.ts toggle）、is-primary/is-danger（模板静态）、
+  //   is-grow（models.css 实用类）。
+  'is':{from:'mc.html `mc-tag is-{{.Status}}` + 模板/TS 的 is-running、is-collapsed、is-primary、is-danger、is-grow',suffixes:['','running','collapsed','active','archived','superseded','dismissed','pending','dropped','grow','primary','danger']},
+ };
+ // htmx/浏览器运行时会自己挂上的类：不在我方任何源码里出现。
+ const RUNTIME_CLASSES=new Set([
+  'htmx-request', // htmx.js addRequestIndicatorClasses：未配 hx-indicator 时加到发起元素（app.css 慢面板载入提示依赖它）
+  // tag-ok：桥渲染 mcp.html 时经 `class="tag {{.StateClass}}"` 注入
+  // （pi-bridge-go/internal/transport/server.go mcpStateLabel：connected→tag-ok）。
+  // 模板侧只见插值占位符，前端源码里没有字面量，归入桥注入豁免并附出处。
+  'tag-ok',
+ ]);
+ // 经核实确实无调用方的存量（如需新增必须附核实记录，格式：类名 — 何时因何保留）。
+ const DEAD_ALLOWED=new Set([
+  // （空）2026-10-18 清理过 .state-online 与 .toast-success 两条死规则，
+  // 此处留作后续临时豁免的登记位；长期无成员是常态。
+ ]);
+ const definitions=[]; // {name, at}  at: 类名在 CSS 出现的行（报错定位用）
+ for(const f of styleFiles){
+  const css=readFileSync(resolve(root,'src/styles',f),'utf8').replace(/\/\*[\s\S]*?\*\//g,'');
+  for(const mm of css.matchAll(/\.([a-zA-Z][\w-]*)/g))definitions.push({name:mm[1],at:`${f}:${mm[1]}`});
+ }
+ // 家族核对：CSS 里每个 `主干-后缀` 组合必须落在枚举内。
+ for(const d of definitions){
+  for(const [stem,fam] of Object.entries(RUNTIME_CLASS_FAMILIES)){
+   if(d.name===stem||d.name.startsWith(stem+'-')){
+    const suffix=d.name===stem?'':d.name.slice(stem.length+1);
+    if(!fam.suffixes.includes(suffix))fail(`CSS 类 .${d.name} 属于动态拼名家族「${stem}-」（${fam.from}），但后缀「${suffix}」不在枚举里——拼名来源改枚举时请同步本清单与样式`);
+   }
+  }
+ }
+ const dead=definitions
+  .filter(d=>{
+   const name=d.name;
+   if(DEAD_ALLOWED.has(name)||RUNTIME_CLASSES.has(name))return false;
+   // 家族成员不走死活判定（上面 EnumRange 核对已覆盖「后缀越界」），只判非家族类。
+   const inFamily=Object.keys(RUNTIME_CLASS_FAMILIES).some(stem=>name===stem||name.startsWith(stem+'-'));
+   return !inFamily&&!templateRef(name)&&!tsRef(name);
+  })
+  .map(d=>d.name);
+ if(dead.length)fail(`这些类在 CSS 里定义，却没有任何模板/TS/运行时引用（死规则）：${[...new Set(dead)].sort().join('、')}。确认无调用方就删掉样式；确需保留（如为下一步改动铺垫）请登记 check-contract.mjs 的 DEAD_ALLOWED 并附核实记录`);
+ else ok('CSS 类都有引用方或已登记豁免');
+}
 // 主题契约：主题 id 由 theme.ts 解析后写 data-theme，
 // 因此这里核对三件事，全部是「静默分叉」型故障的入口：
 //   1. theme.ts 声明的主题 id 与 tokens.css 的块一一对应（light 用 :root）；

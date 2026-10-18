@@ -23,6 +23,25 @@
      全部静默失效，那些元素实际继承的是正文字体，与 Pi Web 的观感不同
      而又看不出错。字体不随主题变化，所以定义在全局这一处。 */
   --font-mono: ui-monospace, SFMono-Regular, Menlo, monospace;
+
+  /* 数值刻度：间距与圆角只从这里取值（2026-10-18 引入）。
+     引入前实测：padding 有 80 种取值、gap 16 种、border-radius 15 种，
+     每个 7px/9px 都是随手拍的，组件之间不成体系。刻度刻意覆盖高频旧值
+     （同刻度内允许旧值共存，存量子集见 app.css 各分节的渐进替换），新组件
+     一律取刻度，不再新增一次性像素值。check-contract 的刻度守卫拦住回归。 */
+  --space-1: 2px;
+  --space-2: 4px;
+  --space-3: 6px;
+  --space-4: 8px;
+  --space-5: 12px;
+  --space-6: 16px;
+  --space-7: 20px;
+  --space-8: 24px;
+  --radius-1: 4px;
+  --radius-2: 5px;
+  --radius-3: 6px;
+  --radius-4: 8px;
+  --radius-5: 14px;
 }
 
 /* light（白天默认，即 :root） */

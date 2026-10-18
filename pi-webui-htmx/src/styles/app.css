@@ -156,7 +156,8 @@ kbd { font-size:10px; color:var(--text-dim); margin-left:auto; }
 .panel-form input { min-width:min(360px,60vw); }
 .sr-only { position:absolute; width:1px; height:1px; margin:-1px; padding:0; overflow:hidden; clip-path:inset(50%); white-space:nowrap; border:0; }
 .state { white-space:nowrap; font-size:10px; color:var(--text-muted); }
-.state-online::before { content:"●"; color:var(--success); margin-right:4px; }
+/* state-online 曾有实心圆点样式，2026-10-18 按死规则守卫删除：
+   在线态一直是纯文字；要恢复先更新 check-contract.mjs 的 state 家族枚举。 */
 .state-offline::before { content:"○"; margin-right:4px; }
 /* ==== 消息流 ==================================================================== */
 /* 对话正文与输入栏共用同一条宽度基准，调整内容宽度时保持左右边界对齐。 */
@@ -387,7 +388,8 @@ input,select,textarea { background:var(--bg); border:1px solid var(--border); bo
 @keyframes toast-in { from { opacity:0; transform:translateY(4px); } to { opacity:1; transform:none; } }
 @keyframes toast-exit { to { opacity:0; } }
 .toast-error { border-left:3px solid var(--danger); }
-.toast-success { border-left:3px solid var(--success); }
+/* .toast-success 已删（2026-10-18 死规则守卫）：workbench.notify 的 kind 白名单
+   只放行 error/warning/info，success 永远不会产生。 */
 .command-menu { position:absolute; left:8px; right:8px; bottom:100%; background:var(--bg-panel); border:1px solid var(--border); border-radius:8px; max-height:230px; overflow:auto; z-index:7; box-shadow:0 -4px 20px #0001; }
 .command-menu:not([hidden]) { animation:menu-in var(--motion-fast) ease-out; }
 @keyframes menu-in { from { opacity:0; transform:translateY(3px); } to { opacity:1; transform:none; } }
