@@ -229,12 +229,17 @@ kbd { font-size:10px; color:var(--text-dim); margin-left:auto; }
 /* 原生 marker 会挤占 summary 的行内空间，两个折叠块统一去掉。 */
 .tool-call > summary::-webkit-details-marker,
 .thinking-block > summary::-webkit-details-marker { display:none; }
-.thinking-block[open] > summary { flex:0 0 auto; }
+/* 展开态改回块级：收起时是「图标 + 思考 + 时长」的 flex 行，展开后若仍是
+   flex，正文（flex:1）只能从标题右侧起排——实测正文左边缘比同列工具行靠右
+   117px，整段思考被推到右半边。块级化后标题独占一行、正文从行首开始，
+   与工具行的展开内容同一列。 */
+.thinking-block[open] { display:block; }
+.thinking-block[open] > summary { margin-bottom:2px; }
 /* 图标保持最浅一档常色：ZCode 的思考图标不随展开变色，层级交给文本。 */
 .thinking-block .thinking-icon { flex:0 0 auto; color:var(--text-dim); }
 .thinking-block .thinking-preview { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .thinking-block[open] .thinking-preview { display:none; }
-.thinking-block .thinking-body { flex:1 1 auto; min-width:0; color:var(--text-muted); }
+.thinking-block .thinking-body { min-width:0; color:var(--text-muted); }
 /* ==== 回合操作 =================================================================== */
 .turn-actions { display:flex; justify-content:flex-end; gap:6px; margin-top:5px; opacity:.35; transition:opacity .12s; }.turn-actions .icon-btn { font-size:11px; }
 .older { display:flex; justify-content:center; margin:0 0 20px; }
