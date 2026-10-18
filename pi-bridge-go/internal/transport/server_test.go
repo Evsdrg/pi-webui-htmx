@@ -45,6 +45,14 @@ func newTestServer(t *testing.T) (*Server, *run.Manager, string) {
 // 额外的返回值给需要直接摆手写会话文件、刷新索引的用例（删除/跳转回归）。
 func newTestServerTuned(t *testing.T, commandTimeout time.Duration, termOpts ...func(*terminal.Config)) (*Server, *run.Manager, string, *sessions.Store, string) {
 	t.Helper()
+	return newTestServerWithRun(t, commandTimeout, nil, termOpts...)
+}
+
+// newTestServerWithRun 是 newTestServerTuned 的扩展：允许改运行时配置。
+// 订阅硬上限这类值必须能在建服务器**之前**调小——队列容量在建订阅时确定，
+// 事后改配置不会影响已构造的订阅。
+func newTestServerWithRun(t *testing.T, commandTimeout time.Duration, runOpts func(*run.Config), termOpts ...func(*terminal.Config)) (*Server, *run.Manager, string, *sessions.Store, string) {
+	t.Helper()
 	cwd := t.TempDir()
 	state := t.TempDir()
 	sessionDir := filepath.Join(state, "sessions")
@@ -86,6 +94,9 @@ func newTestServerTuned(t *testing.T, commandTimeout time.Duration, termOpts ...
 	cfg.IdleTimeout = 5 * time.Minute
 	cfg.OperationTimeout = commandTimeout
 	cfg.Metrics = metrics
+	if runOpts != nil {
+		runOpts(&cfg)
+	}
 	// 与生产同路径：桥内跳转扩展随进程 -e 下发，结果目录每 worker 一份。
 	navExt, navResults, err := run.InstallNavigateExt(state)
 	if err != nil {
@@ -507,7 +518,11 @@ func Test重复requestId跨连接不重复执行(t *testing.T) {
 	}
 }
 
-func Test事件补发与失效(t *testing.T) {
+// Test订阅不再补发历史事件 是 2026-10-18 重设计的判定点：
+// 断线即重建，订阅确认只给出当前 epoch/seq 起点，注册前的事件**不**重放。
+// 旧客户端带 epoch/afterSeq 的订阅要照常成功（字段被接受并忽略）——
+// 缓存了旧产物的浏览器仍会这么发，拒绝会让它连订阅都建不起来。
+func Test订阅不再补发历史事件(t *testing.T) {
 	s, _, cwd := newTestServer(t)
 	srv := httptest.NewUnstartedServer(s)
 	s.host = srv.Listener.Addr().String()
@@ -581,25 +596,27 @@ func Test事件补发与失效(t *testing.T) {
 	}
 	conn.CloseNow()
 
-	// 同 epoch + 旧序号可以补发。
+	// 带旧游标参数的订阅仍须成功：补发已移除，但字段接受并忽略。
+	// 响应里不再声明 replay，也不再回放 any 事件。
 	replay := dial()
 	defer replay.CloseNow()
 	send(replay, map[string]any{"version": 1, "kind": "command", "requestId": "rp-4", "sessionId": id, "method": "session.subscribe",
 		"params": map[string]any{"epoch": epoch, "afterSeq": uint64(seq)}})
-	if m := readResponse(replay, "rp-4"); m["ok"] != true {
-		t.Fatalf("带游标订阅应成功: %v", m)
+	m := readResponse(replay, "rp-4")
+	if m["ok"] != true {
+		t.Fatalf("带旧游标的订阅应成功（参数接受并忽略）: %v", m)
 	}
-	// 错误的 epoch 必须要求重新同步，而不是假装补齐。
+	old, _ := m["data"].(map[string]any)
+	if _, ok := old["replay"]; ok {
+		t.Fatalf("订阅确认不应再声明 replay: %v", old)
+	}
+	// 错误 epoch 同样不该被拒绝：它不再参与任何判定。
 	bad := dial()
 	defer bad.CloseNow()
 	send(bad, map[string]any{"version": 1, "kind": "command", "requestId": "rp-5", "sessionId": id, "method": "session.subscribe",
 		"params": map[string]any{"epoch": "不存在的epoch", "afterSeq": 0}})
-	m := readResponse(bad, "rp-5")
-	if m["ok"] != false {
-		t.Fatalf("epoch 不匹配应失败: %v", m)
-	}
-	if code, _ := m["error"].(map[string]any)["code"].(string); code != "resync_required" {
-		t.Fatalf("错误码应为 resync_required，实际 %v", m["error"])
+	if m := readResponse(bad, "rp-5"); m["ok"] != true {
+		t.Fatalf("epoch 已不参与订阅判定，应正常成功: %v", m)
 	}
 }
 

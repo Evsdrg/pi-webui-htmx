@@ -525,9 +525,9 @@ describe('订阅关闭提示只保留到状态核对结束', () => {
     expect(document.getElementById('connection-notice')?.textContent).toContain('补发窗口');
   });
 
-  // 摘除原因决定处置方向：队列满＝本页渲染太慢，字节超限＝单条事件撞预算。
+  // 终止原因只有 queue_full（权威帧积压到硬上限＝本页长时间没读事件）。
   // 只说「订阅已结束」时用户无从判断，也无法与桥侧 WARN 对应。
-  it('摘除原因写进提示，并与桥侧日志用同一组取值', () => {
+  it('终止原因写进提示，并与桥侧日志用同一组取值', () => {
     busy = true; emit('agent_start');
     fake.instance!.dispatchEvent(new CustomEvent('message', { detail: {
       version: 1, kind: 'control', event: 'bridge.subscription_closed', sessionId: 's1',
@@ -535,7 +535,7 @@ describe('订阅关闭提示只保留到状态核对结束', () => {
     } }));
     const text = document.getElementById('connection-notice')?.textContent ?? '';
     expect(text).toContain('正在核对任务状态');
-    expect(text).toContain('渲染没跟上');
+    expect(text).toContain('长时间没有读取事件');
   });
 
   it('未知或缺省原因时退回通用提示，不出现空括号', () => {
@@ -1823,3 +1823,109 @@ describe('发送中的重复提交与失败恢复', () => {
   });
 });
 
+
+// 2026-10-18 重设计：订阅不再补发，断线即重建。
+//
+// 旧设计的一条真实病症是「订阅断了、任务还在跑」时的固定 15 秒轮询：
+// 事件流已不提供任何信息，核对却永远得到 busy=true，进度条以固定节奏
+// 空转。新设计引入 unreachable 状态并按退避重试，让界面能说清
+// 「这一页暂时看不到」，而不是假装任务还在推进。
+describe('失联状态与退避重试', () => {
+  const stateText = () => document.getElementById('session-state')?.textContent;
+
+  // 核对失败时不能断言任务已结束，也不能假装仍在运行。
+  it('有回合在跑时核对失败进入「状态未知」并说明原因', async () => {
+    busy = true; emit('agent_start');
+    expect(stateText()).toBe('运行中');
+    const internal = workbench as unknown as { run: string };
+    const impl = fake.request.getMockImplementation()!;
+    fake.request.mockImplementation(async (method: string, sessionId: string, params?: unknown, timeout?: number) => {
+      if (method === 'worker.list') throw new Error('桥暂不可达');
+      return impl(method, sessionId, params, timeout);
+    });
+    await (workbench as unknown as { reconcile(): Promise<void> }).reconcile();
+    expect(internal.run).toBe('unreachable');
+    expect(stateText()).toBe('状态未知');
+    const notice = document.getElementById('connection-notice')?.textContent ?? '';
+    expect(notice).toContain('与工作进程的连接中断');
+    expect(notice).toContain('任务可能仍在后台运行');
+    // 中止按钮必须还在：失联时更要能停。
+    expect(document.getElementById('abort-button')!.hasAttribute('hidden')).toBe(false);
+    // 排队提示不能再冒充「本轮结束后插入指令」。
+    expect(document.getElementById('queue-hint')?.textContent ?? '').toContain('状态未知');
+  });
+
+  // 空闲会话核对失败不该把界面说成「任务可能仍在后台运行」。
+  it('空闲时核对失败不进入失联状态', async () => {
+    const internal = workbench as unknown as { run: string };
+    const impl = fake.request.getMockImplementation()!;
+    fake.request.mockImplementation(async (method: string, sessionId: string, params?: unknown, timeout?: number) => {
+      if (method === 'worker.list') throw new Error('桥暂不可达');
+      return impl(method, sessionId, params, timeout);
+    });
+    await (workbench as unknown as { reconcile(): Promise<void> }).reconcile();
+    expect(internal.run).toBe('idle');
+  });
+
+  // 核对成功即恢复：快照是权威的，不把「失联」留成一个要手动解除的状态。
+  it('核对成功后从失联恢复到快照报告的状态', async () => {
+    busy = true; emit('agent_start');
+    const internal = workbench as unknown as { run: string; backoffIndex: number };
+    const impl = fake.request.getMockImplementation()!;
+    let failing = true;
+    fake.request.mockImplementation(async (method: string, sessionId: string, params?: unknown, timeout?: number) => {
+      if (method === 'worker.list' && failing) throw new Error('桥暂不可达');
+      return impl(method, sessionId, params, timeout);
+    });
+    await (workbench as unknown as { reconcile(): Promise<void> }).reconcile();
+    expect(internal.run).toBe('unreachable');
+    // 连错两次把退避推后一档，成功一次必须归零。
+    await (workbench as unknown as { reconcile(): Promise<void> }).reconcile();
+    expect(internal.backoffIndex).toBeGreaterThan(0);
+    failing = false;
+    await (workbench as unknown as { reconcile(): Promise<void> }).reconcile();
+    expect(internal.run).toBe('running');
+    expect(internal.backoffIndex).toBe(0);
+    expect(document.getElementById('connection-notice')?.textContent).toBe('');
+  });
+
+  // 退避序列本身：1→2→5→10→15→30 秒，封顶不再增长。
+  // 进入 unreachable 时 setRun 已经排入第一档（1 秒），并推进了游标，
+  // 所以这里从游标归零处开始核对序列本身。
+  it('失联时核对间隔按 1/2/5/10/15/30 秒退避并封顶', () => {
+    const internal = workbench as unknown as { run: string; pollDelay(): number; backoffIndex: number; setRun(state: string): void };
+    internal.setRun('unreachable');
+    internal.backoffIndex = 0;
+    const delays: number[] = [];
+    for (let i = 0; i < 8; i += 1) delays.push(internal.pollDelay());
+    expect(delays).toEqual([1_000, 2_000, 5_000, 10_000, 15_000, 30_000, 30_000, 30_000]);
+  });
+
+  // 正常运行态仍是稳定的 15 秒兜底：把它也拉长会让「结算事件丢了」的恢复变慢。
+  it('正常运行时核对间隔仍是 15 秒', () => {
+    const internal = workbench as unknown as { run: string; pollDelay(): number; setRun(state: string): void };
+    internal.setRun('running');
+    expect(internal.pollDelay()).toBe(15_000);
+    expect(internal.pollDelay()).toBe(15_000);
+  });
+
+  // 订阅不再补发：重连后必须重读历史（断线期间的事件不会重放）。
+  it('断线重连后重读历史并重新核对', async () => {
+    const internal = workbench as unknown as { diskSession: boolean };
+    internal.diskSession = true;
+    busy = true; emit('agent_start');
+    const ajax = window.htmx.ajax as unknown as ReturnType<typeof vi.fn>;
+    ajax.mockClear();
+    fake.instance!.dispatchEvent(new Event('disconnected'));
+    expect(document.getElementById('session-state')?.textContent).toBe('状态未知');
+    fake.instance!.dispatchEvent(new Event('connected'));
+    await waitFor(() => expect(ajax).toHaveBeenCalledWith('get', expect.stringContaining('ui/sessions/s1/history'), expect.anything()));
+  });
+
+  // 空闲断线只说「正在重连」，不把界面说成状态未知。
+  it('空闲断线不进入失联状态', () => {
+    fake.instance!.dispatchEvent(new Event('disconnected'));
+    expect(document.getElementById('session-state')?.textContent).toBe('就绪');
+    expect(document.getElementById('connection-notice')?.textContent ?? '').toContain('正在重连');
+  });
+});

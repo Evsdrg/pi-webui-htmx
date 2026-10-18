@@ -19,7 +19,7 @@ const (
 
 // WaitFor 轮询 cond 直到为真；超时则让测试失败。
 //
-// what 描述等待的目标，必须能独立读懂（例如"补发完成后的序号"），
+// what 描述等待的目标，必须能独立读懂（例如"事件发布后的序号"），
 // 超时消息会带上它——只有"等待条件超时"无法定位是哪一步卡住。
 func WaitFor(t *testing.T, what string, cond func() bool) {
 	t.Helper()

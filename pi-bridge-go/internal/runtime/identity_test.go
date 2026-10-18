@@ -44,9 +44,9 @@ func TestFork后进程表重绑定(t *testing.T) {
 	if len(m.List()) != 1 {
 		t.Fatalf("进程表应只有一项: %+v", m.List())
 	}
-	// 身份变化后补发环序号必须重置，旧游标立即失效。
-	if _, ok := w.Replay(w.Info().Epoch, 0); !ok {
-		t.Fatal("重置后从头补发应可用")
+	// 身份变化后 epoch 必须更换、seq 归零：客户端靠它挡住旧进程的迟到帧。
+	if got := w.Info(); got.Epoch == "" || got.Seq != 0 {
+		t.Fatalf("重绑定后应换 epoch 且 seq 归零: %+v", got)
 	}
 }
 
@@ -275,7 +275,11 @@ func Test重绑定拒绝已停止工作进程(t *testing.T) {
 	}
 }
 
-func TestReplay环在身份变更后失效(t *testing.T) {
+// Test身份变更更换 epoch 覆盖 B65：会话身份变化后必须换 epoch 并归零 seq。
+// 只把 seq 归零不够——旧 epoch 配旧 seq 仍会被客户端的游标接受，于是
+// 读到新会话的事件却以为还在旧会话上。补发路径已移除，但 epoch 仍是
+// 客户端挡住上一个工作进程迟到帧的唯一依据，这条不变量必须保留。
+func Test身份变更更换epoch(t *testing.T) {
 	m, cwd := newTestManager(t)
 	ctx := context.Background()
 	w, err := m.Start(ctx, "", cwd)
@@ -288,7 +292,7 @@ func TestReplay环在身份变更后失效(t *testing.T) {
 	}
 	defer sub.Close()
 	_ = w.Prompt(ctx, "hi", "", nil)
-	// 等到至少一条事件入环。
+	// 等到至少一条事件被发布（seq 前进）。
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
 		if w.Info().Seq > 0 {
@@ -297,27 +301,18 @@ func TestReplay环在身份变更后失效(t *testing.T) {
 		time.Sleep(5 * time.Millisecond)
 	}
 	epoch := w.Info().Epoch
-	if _, ok := w.Replay(epoch, 0); !ok {
-		t.Fatal("同 epoch 应可补发")
+	if epoch == "" {
+		t.Fatal("启动后应有 epoch")
 	}
 	if _, err := w.Fork(ctx, "e"); err != nil {
 		t.Fatal(err)
-	}
-	// 身份变更必须换 epoch：旧 epoch 一律拒绝，让调用方重新同步。
-	// 只把 seq 归零不够——旧 epoch 配旧 seq 仍会被接受，
-	// 客户端会读到新会话的事件却以为还在旧游标上（B65）。
-	if items, ok := w.Replay(epoch, 0); ok {
-		t.Fatalf("身份变更后旧 epoch 应失效: items=%d ok=%v", len(items), ok)
-	}
-	if items, ok := w.Replay(epoch, 999); ok {
-		t.Fatalf("身份变更后旧 epoch 的任何游标都应失效: items=%d", len(items))
 	}
 	fresh := w.Info().Epoch
 	if fresh == epoch {
 		t.Fatal("身份变更后 epoch 未更换")
 	}
-	if _, ok := w.Replay(fresh, 0); !ok {
-		t.Fatal("新 epoch 应可补发")
+	if seq := w.Info().Seq; seq != 0 {
+		t.Fatalf("身份变更后 seq 应归零，实际 %d", seq)
 	}
 }
 

@@ -6,7 +6,11 @@ export function messageText(value: unknown): string {
   if (typeof content === 'string') return content;
   return Array.isArray(content) ? content.filter((block) => record(block).type === 'text').map((block) => text(record(block).text)).join('\n') : '';
 }
-export type RunState = 'idle' | 'running' | 'retrying' | 'compacting' | 'waiting_input';
+// unreachable 表示「桥报告这一轮仍在进行，但实时流已不可信且状态核对也没
+// 成功」——既不是 idle（任务没结束），也不是 running（收不到后续事件）。
+// 单独的取值让界面能说清「任务可能还在跑，只是这一页看不到」，并把
+// 「强制释放」这类退路摆出来，而不是让用户盯着一个永远转圈的进度条。
+export type RunState = 'idle' | 'running' | 'retrying' | 'compacting' | 'waiting_input' | 'unreachable';
 export function runStateAfter(state: RunState, event: Record<string, unknown>): RunState {
   switch (event.type) {
     case 'agent_start': return 'running';

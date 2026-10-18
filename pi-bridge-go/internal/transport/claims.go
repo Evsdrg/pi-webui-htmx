@@ -153,7 +153,7 @@ func requestFingerprint(req protocol.Request) string {
 var notExecutedCodes = map[string]struct{}{
 	"invalid_request": {}, "invalid_params": {}, "unsupported_method": {},
 	"unsupported_version": {}, "busy": {}, "limit_exceeded": {},
-	"resync_required": {}, "unauthorized": {}, "host_denied": {},
+	"unauthorized": {}, "host_denied": {},
 	"origin_denied": {},
 }
 
@@ -177,7 +177,7 @@ func isNotExecuted(err error) bool {
 //
 // 为什么不是每条失败都记
 // ----------------------
-// 「未送达」的一类（rejected：busy、resync_required、limit_exceeded …）
+// 「未送达」的一类（rejected：busy、limit_exceeded …）
 // 大多是正常控制流——重同步与忙拒绝会被频繁触发（实测 subscribe 一类就有
 // 数十次），全记会把日志淹掉，反而看不到真正的故障。只记「已送达 Pi 但
 // 执行失败」（error / unknown）这一类。
@@ -306,7 +306,7 @@ func (s *Server) runCommand(c connSink, req protocol.Request) {
 	// 收到响应，回执就一定已经落盘——unknown 只会在真正的崩溃恢复里出现。
 	s.recordReceipt(req, err)
 	s.claims.finish(req.RequestID)
-	// 订阅类命令已经自行发出确认响应（见 noReply 与 subscribeWithReplay），
+	// 订阅类命令已经自行发出确认响应（见 noReply 与 subscribe），
 	// 不能再补一条——那会让客户端在同一 requestId 上收到两条响应。
 	if _, ok := data.(noReply); ok && err == nil {
 		return

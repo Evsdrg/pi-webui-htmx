@@ -370,7 +370,7 @@ func (c *virtualConn) dispatch(ctx context.Context, r protocol.Request) (any, er
 }
 
 func (c *virtualConn) subscribe(r protocol.Request) (any, error) {
-	return c.bridge.server.subscribeWithReplay(c, r)
+	return c.bridge.server.subscribe(c, r)
 }
 
 func (c *virtualConn) unsubscribe(r protocol.Request) (any, error) {
@@ -431,11 +431,6 @@ func (c *virtualConn) send(m protocol.Message) bool {
 		return false
 	}
 	return true
-}
-
-// sendRaw 发送已序列化的补发帧，按整批截止时间等待队列排空。
-func (c *virtualConn) sendRaw(ctx context.Context, b []byte) bool {
-	return c.queue.enqueue(ctx, b)
 }
 
 func (c *virtualConn) reply(m protocol.Message) { c.send(m) }

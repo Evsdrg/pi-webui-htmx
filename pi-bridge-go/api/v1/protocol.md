@@ -78,7 +78,7 @@ WebSocket 的 origin 白名单与同一规则对齐，否则库层（`Origin.Hos
 
 事件侧只列桥自建的两个载荷：`bridge.terminal_closed` 的 `{terminalId}` 与 `terminal.output` 的 `{terminalId,data}`。**Pi 的事件（`agent_start`、`message_update` 等）是原样透传的原始 JSON**，结构由 Pi 决定，桥不解释也不重写。
 
-错误码：`invalid_request`、`unsupported_version`、`unsupported_method`、`invalid_params`、`not_found`、`conflict`、`busy`、`limit_exceeded`、`worker_not_running`、`worker_exited`、`timeout`、`outcome_unknown`、`pi_error`、`resync_required`、`internal`；接入层还包括 `unauthorized`、`host_denied`、`origin_denied`。错误不含正文/密钥。任何新增错误码必须同步 TS 类型和兼容协商。
+错误码：`invalid_request`、`unsupported_version`、`unsupported_method`、`invalid_params`、`not_found`、`conflict`、`busy`、`limit_exceeded`、`worker_not_running`、`worker_exited`、`timeout`、`outcome_unknown`、`pi_error`、`internal`；接入层还包括 `unauthorized`、`host_denied`、`origin_denied`。错误不含正文/密钥。任何新增错误码必须同步 TS 类型和兼容协商。
 
 错误对象**只有 `code` 与 `message` 两个字段**（已在回归里钉住）。桥侧可以给内部错误挂上原因（`protocol.Wrap`）方便排查，但原因不参与序列化：它可能带本机路径、上游原文或凭据，既不进 WS 响应，也不进片段提示（片段只渲染 `message`）。
 
@@ -132,21 +132,21 @@ WebSocket 的 origin 白名单与同一规则对齐，否则库层（`Origin.Hos
 
 Pi 原事件通过 `pi.event` 传递并绑定基线版本；不是跨 agent 通用协议。按 contentIndex 组装 delta，message_end.message 替换成权威值；agent_end 不等于 settled。worker 状态使用 bridge.worker_state。
 
-有界订阅、epoch/seq、replay、持久回执与 unknown 状态均已实现：同一 requestId 并发只派发一次、不同指纹返回 conflict，intent 无终态时恢复为 unknown 且不自动重发。重放窗口不足、事件省略或身份变化时返回 `resync_required`，不静默遗漏。
+有界订阅、epoch/seq、持久回执与 unknown 状态均已实现：同一 requestId 并发只派发一次、不同指纹返回 conflict，intent 无终态时恢复为 unknown 且不自动重发。**不提供事件补发**：订阅只覆盖注册之后的事件，断线即重建（重连后由客户端重读历史与 `session.state`）。事件因体积被省略时桥发 `bridge.event_omitted`，客户端据此重读历史，不伪造丢失的增量。
 
 目标 S01/S02：
 
 1. 须持久化的变更按主体/设备/requestId 加 method/session/params 指纹，跨连接原子 claim，派发前可靠写 intent、终态后写 receipt。只读/连接操作、PTY 临时输入、控制与对话回复使用整体规划的独立策略，不逐按键 Sync，不让日志故障挡住取消。
 2. 重启仅有 intent 则 unknown，不重发。只能保证有效保留期内至多派发一次，不承诺 exactly-once；保留窗口和 degraded 状态必须可见。
 3. 同 ID 不同指纹 conflict；同 ID pending 等待或返回 pending，不能启动第二次执行。记录已淘汰时“查无记录”不等于未执行。
-4. replay 快照与 live 注册原子化；确认给出 epoch/fence，依次输出 replay 与后续事件。
+4. 订阅只覆盖注册之后的事件；确认给出 epoch/seq 起点，不补发历史事件。
 5. worker 启动和 session rebind 都换 epoch；UI 只接受当前连接确认的 epoch，不被迟到旧事件改变。
 6. omitted/resync 立即重读持久历史并标记 live 缺口；不伪造丢失 delta。
 7. 已受理任务独立于连接寿命；未知结果客户端只对账，不自动重发 prompt/bash 等变更命令。
 
-**当前传输边界：** WS 出站缓冲 32 帧、tunnel 虚拟连接 64 帧，均额外限制待发送字节为 1 MiB、单帧 512 KiB。连接发送者短暂拥塞时有界等待；同一批 replay 共用 5 秒截止时间，超时返回 `resync_required` 并释放订阅，而不是仅因队列瞬时满就断连接。worker 自身的订阅队列仍有独立条数/字节预算（默认 32 条 / 1 MiB），高速事件可能触发 `bridge.subscription_closed`；UI 应核对 `session.state` 与磁盘历史，不得把断开的实时片段冒充完整。订阅确认的身份数据仍待客户端显式消费，不承诺无损跨连接恢复。
+**当前传输边界：** WS 出站缓冲 32 帧、tunnel 虚拟连接 64 帧，均额外限制待发送字节为 1 MiB、单帧 512 KiB。连接发送者短暂拥塞时有界等待（5 秒），超时才断开连接，而不是仅因队列瞬时满就断。worker 侧订阅实行两级背压：**可丢增量**（`message_update` 的 `*_delta`、`tool_execution_update`）在条数超 32 或字节超 1 MiB 时直接丢弃、订阅存活；**权威帧**（`agent_*`、`message_*`、`tool_execution_start/end` 等）只在积压超过硬上限（4096 条 / 16 MiB）时终止订阅。终止后桥发 `bridge.subscription_closed`，UI 必须重读 `session.state` 与磁盘历史，不得把断开的实时片段冒充完整。
 
-`bridge.subscription_closed` 的 `data` 为 `{resyncRequired: true, reason}`，其中 `reason` 取值 `queue_full`（待发队列条数超限）或 `byte_limit`（待发字节超限），空串表示非摘除路径（如 worker 关闭）。两者处置不同：前者说明前端消费太慢、应降低渲染频率；后者说明有单条大事件撞上了预算。桥对同一次摘除写一行 WARN，含会话 id 与原因，便于事后把「用户看到提示」追溯到具体阈值。补发失败（游标已被补发环淘汰）与补发超时也各有一行 WARN。
+`bridge.subscription_closed` 的 `data` 为 `{resyncRequired: true, reason}`，`reason` 当前只有 `queue_full`：权威帧积压超过硬上限，说明读端已彻底停止读取。可丢弃增量的溢出**不会**终止订阅，只计入指标 `eventsDropped`。桥对每次终止写一行 WARN，含会话 id 与原因。客户端收到该控制帧后应重读历史、`session.state` 与 `session.stats`，并重建订阅。
 
 ## 5. 历史与资源
 

@@ -43,7 +43,7 @@ func Test命令失败记录原因(t *testing.T) {
 	}
 }
 
-// 「未送达」的一类（busy / resync_required …）是正常控制流：重同步与忙拒绝
+// 「未送达」的一类（busy / limit_exceeded …）是正常控制流：重同步与忙拒绝
 // 会被频繁触发。全记会把日志淹掉，反而看不到真正的故障，因此这类不记。
 // 这里直接遍历 notExecutedCodes 的事实来源，新增错误码不会悄悄漏出覆盖。
 func Test未送达Pi的拒绝不记日志(t *testing.T) {

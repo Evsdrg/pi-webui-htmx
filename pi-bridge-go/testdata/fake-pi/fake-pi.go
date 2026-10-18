@@ -189,6 +189,18 @@ func main() {
 				emit(frame{Type: "agent_settled"})
 				continue
 			}
+			// authoritative_burst 连发大量**权威帧**（message_end），用来验证
+			// 「读端彻底停止读取时，权威帧积压到硬上限会终止订阅」这条路径。
+			// 与 replay_burst 的区别是事件类型不可丢——这正是两类背压的分界。
+			if script["authoritative_burst"] {
+				emit(frame{Type: "agent_start"})
+				emit(frame{Type: "response", ID: cmd.ID, Success: true})
+				for i := 0; i < 4200; i++ {
+					emit(frame{Type: "message_end", Data: map[string]any{"role": "assistant", "content": "x"}})
+				}
+				emit(frame{Type: "agent_settled"})
+				continue
+			}
 			if strings.Contains(cmd.Message, "触发对话") {
 				emit(frame{Type: "extension_ui_request", ID: "dialog-1", Method: "confirm", Title: "确认？"})
 				// 故意不等回执：验证桥会主动取消而不是让 Pi 永久挂起。

@@ -16,18 +16,30 @@ const ABORT_PENDING_NOTICE = '已请求中止，等待 Pi 完成清理。';
 const SUBSCRIPTION_CHECK_NOTICE = '实时订阅已结束，正在核对任务状态。';
 // 摘除原因对应的补充说明。前缀与 SUBSCRIPTION_CHECK_NOTICE 保持一致，
 // 清空提示的判断才能用一个 startsWith 覆盖全部变体。
+// 现在只有 queue_full（权威帧积压到硬上限，读端已彻底停止读取）；
+// 可丢增量溢出不再终止订阅，所以 byte_limit 只保留给旧桥的残留上报。
 const SUBSCRIPTION_REASON_NOTE: Record<string, string> = {
-  queue_full: '（本页渲染没跟上事件速率）',
+  queue_full: '（本页长时间没有读取事件）',
   byte_limit: '（单条事件体积过大）',
 };
 function subscriptionClosedNotice(reason: unknown): string {
   const note = typeof reason === 'string' ? SUBSCRIPTION_REASON_NOTE[reason] : undefined;
   return note ? `${SUBSCRIPTION_CHECK_NOTICE}${note}` : SUBSCRIPTION_CHECK_NOTICE;
 }
+// UNREACHABLE_NOTICE：连状态核对都失败时的提示。此时不能断言任务已结束，
+// 也不能假装仍在运行——明确说「这一页看不到」，并说明恢复后会自动核对。
+const UNREACHABLE_PREFIX = '与工作进程的连接中断';
+const UNREACHABLE_NOTICE = `${UNREACHABLE_PREFIX}，暂时无法获取任务状态；任务可能仍在后台运行。恢复连接后会自动核对。`;
 /** 是否是「订阅已结束」这一类提示（含带原因的变体）。 */
 function isSubscriptionNotice(text: string): boolean { return text.startsWith(SUBSCRIPTION_CHECK_NOTICE); }
-// RESYNC_NOTICE：实时流不再可信、正从持久历史重建时的统一提示。
-const RESYNC_NOTICE = '实时事件已超出补发窗口，已重新读取历史；生成中的缺失内容将在本轮完成后同步。';
+/** 是否是「与工作进程失联」的提示。 */
+function isUnreachableNotice(text: string): boolean { return text.startsWith(UNREACHABLE_PREFIX); }
+
+// 重订退避：订阅被终止或核对失败后，按固定序列拉长间隔重试，
+// 而不是每 15 秒硬拉一次（旧轮询在「任务仍在跑但事件流已断」时
+// 会永远以固定节奏刷进度，用户看到的是无意义的重复请求）。
+// 序列上限 30 秒；任一成功（收到权威帧或核对成功）立即归零。
+const RECONNECT_DELAYS_MS = [1_000, 2_000, 5_000, 10_000, 15_000, 30_000];
 
 // 长任务命令的等待上限，与桥 protocol/methods.go 的 Spec.Timeout 对应。
 // 桥侧给的时间更长，前端先放弃只会让用户以为失败（B66）。
@@ -133,8 +145,29 @@ export class Workbench {
     }).catch((err) => this.fail(err));
     const signal = this.abort.signal;
     this.cancelSessionFragments = mountFragmentRequests(() => this.scope.epoch, signal);
-    this.bridge.addEventListener('connected', () => { this.setConnection(true); void this.reconcile().catch((err) => this.fail(err)); }, { signal });
-    this.bridge.addEventListener('disconnected', () => { this.subscribed = ''; this.setConnection(false); this.notice('连接已断开，正在重连。已提交的任务继续在本地运行；不会自动重发命令。'); }, { signal });
+    this.bridge.addEventListener('connected', () => {
+      this.setConnection(true);
+      this.resetBackoff();
+      // 重连后**重读快照**：断线期间的事件不会补发（见桥侧 Config 说明），
+      // 历史与运行态只能靠不变量重建。reconcile 内会重订、读 session.state
+      // 与用量；历史由 runResync 那一支补齐（若曾有回合在跑）。
+      if (this.run !== 'idle') {
+        this.live.clear();
+        void this.refreshHistory().catch((err) => this.fail(err));
+      }
+      void this.reconcile().catch((err) => this.fail(err));
+    }, { signal });
+    this.bridge.addEventListener('disconnected', () => {
+      this.subscribed = ''; this.setConnection(false);
+      // 有回合在跑时不能说「重连就好」——这一页已经收不到任何事件了。
+      // 标成 unreachable，轮询改走退避，界面明说状态未知。
+      if (this.run !== 'idle') {
+        this.setRun('unreachable');
+        this.notice(UNREACHABLE_NOTICE);
+      } else {
+        this.notice('连接已断开，正在重连。已提交的任务继续在本地运行；不会自动重发命令。');
+      }
+    }, { signal });
     this.bridge.addEventListener('message', (event) => this.onMessage((event as CustomEvent<Message>).detail), { signal });
     el('auth-form').addEventListener('submit', (event) => { event.preventDefault(); void this.login(); }, { signal });
     el('composer').addEventListener('submit', (event) => { event.preventDefault(); void this.send(); }, { signal });
@@ -339,7 +372,10 @@ export class Workbench {
       if (form.matches('[data-extension-form]')) { event.preventDefault(); void this.answerDialog(form, (event as SubmitEvent).submitter as HTMLButtonElement | null); }
     }, { signal });
     // 低频核对可修复后台标签丢失的结束事件；不访问未运行的 Pi。
-    this.poll = setInterval(() => { if (!document.hidden && this.bridge.connected && this.run !== 'idle') void this.reconcile().catch((err) => this.fail(err)); }, 15_000);
+    // 间隔按运行态分档：空闲不轮询（没有要核对的东西），运行中 15 秒，
+    // 订阅已断（unreachable）时走退避序列——旧实现是固定 15 秒硬拉，
+    // 在事件流已断、任务仍在跑时会让进度条以固定节奏空转。
+    this.poll = setInterval(() => this.pollTick(), 1_000);
     el<HTMLTextAreaElement>('prompt').value = readDraft(this.draftKey());
     void this.authenticate();
   }
@@ -439,21 +475,14 @@ export class Workbench {
     // 新会话的游标（U16）——事件帧已由 accept 挡住旧 epoch，
     // 但确认帧此前没有守卫。
     const scope = this.scope.current$();
-    const saved = this.cursor.epoch ? { epoch: this.cursor.epoch, afterSeq: this.cursor.seq } : {};
-    // 确认帧里的 epoch/seq 是权威起点：它是桥对「这条订阅属于哪个工作进程」
-    // 的回答，也是游标唯一允许切换 epoch 的地方（U16）。
-    const begin = (ack: { epoch?: string; seq?: number } | undefined): void => {
-      if (ack?.epoch && scope.alive()) this.cursor.begin(ack.epoch, ack.seq ?? 0);
-    };
-    try { begin(await this.request<{ epoch?: string; seq?: number }>('session.subscribe', saved, id)); } catch (error) {
-      if (!(error instanceof BridgeError) || error.code !== 'resync_required') throw error;
-      if (!scope.alive()) return;
-      this.cursor.reset(); this.live.clear();
-      this.notice(RESYNC_NOTICE);
-      await this.refreshHistory(); begin(await this.request<{ epoch?: string; seq?: number }>('session.subscribe', {}, id));
-    }
+    // 不再发送 epoch/afterSeq：补发已移除，桥不接受也不使用它们
+    // （旧客户端仍可发，桥接受并忽略）。确认里的 epoch/seq 只是
+    // 「这条订阅属于哪个工作进程、从哪里接续」的起点。
+    const ack = await this.request<{ epoch?: string; seq?: number }>('session.subscribe', {}, id);
+    if (ack?.epoch && scope.alive()) this.cursor.begin(ack.epoch, ack.seq ?? 0);
     if (id === this.sessionId) {
       this.subscribed = id;
+      this.resetBackoff();
       void this.pullExtensionStatus(scope).catch(() => {});
     }
   }
@@ -471,16 +500,16 @@ export class Workbench {
     this.renderExtensions();
   }
   // resyncFromStream 是「实时流不再可信、必须从持久历史重建」的统一入口。
-  // 三条路径共用它：桥明确要求重同步（resync_required）、订阅被关闭且
-  // 带 resyncRequired、事件因体积被省略（bridge.event_omitted，U15）。
-  // 只做只读重建：重读历史、重订、刷新扩展对话；绝不重发副作用命令。
+  // 两条路径共用它：订阅被桥终止（带 resyncRequired）、事件因体积被省略
+  // （bridge.event_omitted，U15）。补发已移除，所以不再有 resync_required
+  // 分支——订阅本来就不重放事件，断线后的缺口只能靠重读历史补齐。
+  // 只做只读重建：重读历史、重订；绝不重发副作用命令。
   //
   // 全部重绘副作用（清实时层、换历史、重订）受合并窗口约束，见 runResync：
-  // 没有它时有一条真实的恶性循环——订阅被桥摘除（慢消费者，大会话 / 长任务
-  // 高频事件下浏览器主线程正在忙）→ 立即重读历史并重订 → 主线程又被渲染
-  // 压住 → 再次被摘除。每一次循环都会把 #turns 整体换入一次，用户看到的
-  // 是两段对话在旧页与新页之间快速来回切换；刷新页面之所以「没事」，只是
-  // 打破了当时那个循环。
+  // 没有它时有一条真实的恶性循环——订阅被反复终止（大会话 / 长任务高频事件
+  // 下浏览器主线程正在忙）→ 立即重读历史并重订 → 主线程又被渲染压住 →
+  // 再次被终止。每一次循环都会把 #turns 整体换入一次，用户看到的是两段
+  // 对话在旧页与新页之间快速来回切换。
   private resyncFromStream(reason: string): void {
     if (!this.sessionId) return;
     // 退订与游标复位是幂等的安全动作，始终执行：窗口合并的是重绘，
@@ -523,14 +552,71 @@ export class Workbench {
       this.runResync();
     }, Workbench.RESYNC_COOLDOWN_MS);
   }
+
+  // ---- 状态核对：按运行态分档的轮询与退避 ----
+  //
+  // 旧实现是一个固定的 15 秒 setInterval：只要 run !== 'idle' 就拉一次。
+  // 问题在于「订阅断了但任务仍在跑」这个状态——事件流已经不提供任何信息，
+  // 15 秒一次的核对却永远得到 busy=true，于是进度条以固定节奏空转，用户
+  // 看不出是「任务真的在跑」还是「这一页已经失联」。
+  //
+  // 现在分三档：
+  //   - idle：不轮询。没有要核对的回合，轮询只会制造无谓请求。
+  //   - running/retrying/compacting/waiting_input：15 秒核对一次。事件流
+  //     是主路径，轮询只兜「结算事件在途中丢失」。
+  //   - unreachable：按 RECONNECT_DELAYS_MS 退避重试（1→2→5→10→15→30 秒）。
+  //     每次失败把间隔拉长一档，成功一次就归零。
+  private pollDue = 0;
+  private backoffIndex = 0;
+  /** resetBackoff 在收到权威事件或核对成功后归零退避。 */
+  private resetBackoff(): void { this.backoffIndex = 0; }
+  // schedulePoll 依据当前运行态安排下一次核对。
+  // 与旧的固定间隔相比，这里的间隔是**状态相关**的：任务结束就不再轮询，
+  // 失联则逐步退避，不会把「这一页看不到」伪装成「任务还在推进」。
+  private schedulePoll(): void {
+    if (this.run === 'idle') { this.pollDue = 0; return; }
+    this.pollDue = Date.now() + this.pollDelay();
+  }
+  // pollDelay 返回当前应使用的间隔，并把游标推进一档。
+  // 只有 unreachable 才退避：正常运行时 15 秒是稳定的兜底节奏，
+  // 把它也拉长会让「结算事件丢了」的恢复越来越慢。
+  private pollDelay(): number {
+    if (this.run !== 'unreachable') return 15_000;
+    const at = Math.min(this.backoffIndex, RECONNECT_DELAYS_MS.length - 1);
+    // 下标由 Math.min 夹在数组范围内；这里仍给兜底值以满足
+    // noUncheckedIndexedAccess，不依赖类型断言。
+    const delay = RECONNECT_DELAYS_MS[at] ?? 30_000;
+    this.backoffIndex = Math.min(this.backoffIndex + 1, RECONNECT_DELAYS_MS.length - 1);
+    return delay;
+  }
+  // pollTick 是每秒一次的调度器：只在该核对时动作，空闲时什么都不做。
+  // 用「一秒一跳 + 到期判断」而不是每次改状态都重设 setTimeout：
+  // 后者在事件密集时会被反复清掉重设，核对可能永远排不上。
+  private pollTick(): void {
+    if (this.pollDue === 0 || document.hidden || !this.bridge.connected) return;
+    if (Date.now() < this.pollDue) return;
+    this.pollDue = 0;
+    void this.reconcile().catch(() => { /* reconcile 内部已把失败反映为 unreachable */ });
+  }
   private async reconcile(): Promise<void> {
     const scope = this.scope.current$();
-    const workers = await this.request<WorkerInfo[]>('worker.list', undefined, '');
+    // 核对失败不再冒泡成一条 toast：它是「这一页暂时看不到状态」，
+    // 由 unreachable 状态与提示条表达。往上层抛会让每秒调度器刷出一串弹窗。
+    let workers: WorkerInfo[];
+    try {
+      workers = await this.request<WorkerInfo[]>('worker.list', undefined, '');
+    } catch {
+      if (!scope.alive()) return;
+      this.markUnreachable();
+      return;
+    }
     if (!scope.alive()) return;
     const worker = workers.find((w) => w.sessionId === this.sessionId);
     if (!worker) {
+      // 工作进程不在了：任务不可能还在跑，明确回到就绪。
       this.currentModel = undefined; this.modelUnavailable = false; this.renderModel();
       this.clearQueued();
+      this.resetBackoff();
       this.setRun('idle'); return;
     }
     this.cwd = worker.cwd;
@@ -545,12 +631,23 @@ export class Workbench {
     // 权威的收尾事件（agent_settled/agent_end），迟到的快照也不会把已结束的会话
     // 重新显成「运行中」。
     const runBefore = this.run;
-    const state = await this.request<State>('session.state');
+    let state: State;
+    try {
+      state = await this.request<State>('session.state');
+    } catch {
+      if (!scope.alive()) return;
+      this.markUnreachable();
+      return;
+    }
     if (!scope.alive()) return;
+    // 核对成功：退避归零，下一次失败又从最短间隔开始。
+    this.resetBackoff();
     const wasBusy = this.run !== 'idle';
     const busy = state.isStreaming || state.isCompacting || (state.pendingMessageCount ?? 0) > 0;
     // 只在运行态没有被事件改写时才按快照回写，避免迟到的快照盖掉权威事件。
     if (this.run === runBefore) {
+      // 从 unreachable 恢复时也走这里：快照是权威的，任务若已结束就回到就绪，
+      // 不把「失联」当成一个需要用户手动解除的状态。
       this.setRun(busy ? (state.isCompacting ? 'compacting' : 'running') : 'idle');
     }
     // 刷新后历史 queue_update 已不在重放窗口内：至少按 Pi 报告的条数据实显示，
@@ -560,10 +657,36 @@ export class Workbench {
     if (state.sessionName) this.sessionTitle = state.sessionName;
     this.applyStateModel(state);
     if (wasBusy && !busy) await this.settled();
-    else if (!busy && isSubscriptionNotice(el('connection-notice').textContent ?? '')) this.notice('');
+    else {
+      // 提示条按「当前是否还需要它」清空：
+      // - 失联提示只要核对成功就该撤——无论任务是否仍在跑，我们都已知晓状态；
+      // - 订阅已结束的临时提示仍保留到回合结束（既有语义，见 settled）。
+      const notice = el('connection-notice').textContent ?? '';
+      if (isUnreachableNotice(notice) || (!busy && isSubscriptionNotice(notice))) this.notice('');
+    }
     await this.refreshThinking(state.thinkingLevel);
     this.refreshQueueState(state);
+    // 降级轮询（unreachable 期间的退避重试）也刷新用量：否则上下文占比与
+    // 消息数会一直停在失联前的那一刻，用户无从判断任务是否还在推进。
+    // 正常路径的结算与周期核对不需要它，多一次请求没有收益。
+    if (runBefore === 'unreachable' || this.run === 'unreachable') this.refreshUsage(scope);
     await this.refreshDialogs();
+  }
+  /**
+   * markUnreachable 记录「这一页暂时看不到任务状态」。
+   *
+   * 只有在本来就有回合在跑时才进入 unreachable：空闲会话核对失败
+   * 不该把界面说成「任务可能仍在后台运行」。进入后不再每 15 秒硬拉，
+   * 改由 schedulePoll 按退避序列重试（见 RECONNECT_DELAYS_MS）。
+   */
+  private markUnreachable(): void {
+    if (this.run === 'idle') return;
+    this.setRun('unreachable');
+    this.notice(UNREACHABLE_NOTICE);
+    // setRun 只在状态**变化**时排下一轮；连续失败时状态已经是 unreachable，
+    // 若不再排一次，pollDue 会停在 0 上——轮询就此永久停摆，界面永远
+    // 停在「状态未知」，连恢复都等不到。
+    this.schedulePoll();
   }
   private selectSession(id: string, cwd: string, title: string, push = true, entryId = '', persisted = true): void {
     // 注意：这里刻意不重置 pendingHistory。它记录的是「最近一次发起的历史
@@ -784,11 +907,10 @@ export class Workbench {
     if (message.sessionId !== this.sessionId) return;
     if (message.kind === 'control') {
       if (message.event === 'bridge.subscription_closed') {
-        // 提示仍保留到状态核对结束（既有语义）；重订与重读走同一合并窗口，
-        // 订阅被反复摘除时不得形成高频循环（见 runResync）。
-        // 原因决定后续处置方向：队列满说明本页渲染太慢（要降帧），
-        // 字节超限说明撞上了单条大事件（与渲染速度无关）。带上原因，
-        // 用户与日志才能对上桥侧那条 WARN。
+        // 提示保留到状态核对结束；重订与重读走同一合并窗口，订阅被反复
+        // 终止时不得形成高频循环（见 runResync）。
+        // 原因只有 queue_full：权威帧积压到硬上限，说明本页已长时间没有
+        // 读取事件。带上原因，用户与日志才能对上桥侧那条 WARN。
         this.subscribed = '';
         if (this.run !== 'idle') this.notice(subscriptionClosedNotice(record(message.data).reason));
         if (this.resyncDeferred()) return;
@@ -798,6 +920,8 @@ export class Workbench {
     }
     const event = message as EventMessage;
     if (!this.cursor.accept(event.epoch, event.seq)) return;
+    // 收到权威事件说明实时流已恢复：退避归零，下次失联又从最短间隔重试。
+    this.resetBackoff();
     if (event.event === 'worker.exited') { this.setRun('idle'); return; }
     if (event.event === 'bridge.event_omitted') {
       // 事件因体积被省略：流的连续性已断，别等到下一次 settled（U15）。
@@ -826,7 +950,7 @@ export class Workbench {
   private async settled(): Promise<void> {
     this.setRun('idle'); this.live.finish(); this.diskSession = true;
     const notice = el('connection-notice').textContent ?? '';
-    if (notice === ABORT_PENDING_NOTICE || isSubscriptionNotice(notice)) this.notice('');
+    if (notice === ABORT_PENDING_NOTICE || isSubscriptionNotice(notice) || isUnreachableNotice(notice)) this.notice('');
     const id = this.sessionId;
     await this.refreshHistory();
     if (id !== this.sessionId) return;
@@ -1256,7 +1380,20 @@ export class Workbench {
       case 'clone': await this.sessionAction('clone', button); break;
       case 'fork': await this.forkFrom(button.dataset.entryId ?? ''); break;
       case 'edit-here': await this.sessionAction('edit', button); break;
-      case 'stop': await this.request('session.stop', { force: false }); this.setRun('idle'); this.notice('工作进程已释放，历史保留在磁盘。'); break;
+      case 'stop':
+        // 失联时状态可能已经过期（本页看不到真实繁忙度），桥会以 busy 拒绝
+        // 不带 force 的请求。这条退路正是「这一页停不掉任务」的解药：
+        // 只有用户显式点了「释放」才强停，绝不自动升级。
+        try {
+          await this.request('session.stop', { force: this.run === 'unreachable' });
+        } catch (error) {
+          if (this.run !== 'unreachable') throw error;
+          // 仍然拒绝：明确告诉用户还需要显式强停，而不是把错误吞掉。
+          if (!confirm('桥报告工作进程仍在忙。强制结束它会丢弃本轮未完成的输出，只保留磁盘上已写入的历史。确定强制释放？')) throw error;
+          await this.request('session.stop', { force: true });
+        }
+        this.setRun('idle'); this.resetBackoff(); this.notice('工作进程已释放，历史保留在磁盘。');
+        break;
       case 'copy-turn': await import('./commands').then((m) => m.copyTurn(button, this.notify.bind(this))); break;
       case 'commands': this.commands = (await this.command<Record<string,unknown>[]>('session.commands')).map((c) => ({name: text(c.name), description: text(c.description)})); el<HTMLTextAreaElement>('prompt').value = '/'; this.showCommands(); el('prompt').focus(); break;
       case 'export': await this.sessionAction('export', button); break;
@@ -1388,7 +1525,19 @@ export class Workbench {
   }
   private saveCurrentDraft(): void { saveDraft(this.draftKey(), el<HTMLTextAreaElement>('prompt').value); }
   private setConnection(online: boolean): void { el('conn-state').textContent = online ? '已连接' : '未连接'; el('conn-state').className = `state state-${online ? 'online' : 'offline'}`; if (online) this.notice(''); this.updateControls(); }
-  private setRun(state: RunState): void { this.run = state; el('session-state').textContent = {idle:'就绪',running:'运行中',retrying:'重试中',compacting:'压缩中',waiting_input:'等待确认'}[state]; this.updateControls(); }
+  private setRun(state: RunState): void {
+    const changed = this.run !== state;
+    this.run = state;
+    el('session-state').textContent = {idle:'就绪',running:'运行中',retrying:'重试中',compacting:'压缩中',waiting_input:'等待确认',unreachable:'状态未知'}[state];
+    if (changed) {
+      // 进入 unreachable 从最短间隔开始（退避是「连续失败」才拉长）；
+      // 回到正常状态则清掉游标，下次失联重新从 1 秒起。
+      if (state === 'unreachable') this.backoffIndex = 0;
+      else this.resetBackoff();
+      this.schedulePoll();
+    }
+    this.updateControls();
+  }
   /** applyRunning 按桥广播的忙闲快照切换侧栏行的「运行中」转圈。
       只切 class/data 属性，不整块重渲染侧栏——避免每次忙闲变化都抖动。
       找不到对应行的会话（未加载到当前页）自然忽略。 */
@@ -1451,7 +1600,22 @@ export class Workbench {
     }
     strip.hidden = rows.length === 0;
   }
-  private updateControls(): void { el<HTMLButtonElement>('send-button').disabled = !this.bridge.connected || this.sending || !el<HTMLTextAreaElement>('prompt').value.trim() || (this.modelUnavailable && !this.selectedModel()); el('abort-button').hidden = this.run === 'idle'; const hint = el('queue-hint'); const busy = this.run !== 'idle'; hint.hidden = !busy; if (busy) hint.textContent = this.defaultQueueKind() === 'steering' ? '本轮结束后插入指令' : '排到队列末尾，本轮完成后追加'; el<HTMLSelectElement>('model-select').disabled = busy; el<HTMLSelectElement>('thinking-select').disabled = busy || !this.sessionId; }
+  private updateControls(): void {
+    el<HTMLButtonElement>('send-button').disabled = !this.bridge.connected || this.sending || !el<HTMLTextAreaElement>('prompt').value.trim() || (this.modelUnavailable && !this.selectedModel());
+    el('abort-button').hidden = this.run === 'idle';
+    const hint = el('queue-hint');
+    const busy = this.run !== 'idle';
+    hint.hidden = !busy;
+    if (busy) {
+      hint.textContent = this.run === 'unreachable'
+        // 失联时不能断言任务还在跑，也不能断言它已结束：说清「按排队处理」，
+        // 用户才知道这条消息不会立刻开始。
+        ? '状态未知：发送将按排队处理，恢复连接后才会确认'
+        : this.defaultQueueKind() === 'steering' ? '本轮结束后插入指令' : '排到队列末尾，本轮完成后追加';
+    }
+    el<HTMLSelectElement>('model-select').disabled = busy;
+    el<HTMLSelectElement>('thinking-select').disabled = busy || !this.sessionId;
+  }
   // sendQueued 在运行中发送：先把模式同步给桥，再带 streamingBehavior 提交。
   // 不先同步的话，用户改了 radio 但桥仍是旧模式，行为与界面显示不一致。
   private async sendQueued(text: string, kind: 'steering' | 'followUp', images: Attachment[], scope: Scope): Promise<void> {

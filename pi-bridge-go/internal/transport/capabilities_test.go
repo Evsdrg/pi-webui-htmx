@@ -7,7 +7,6 @@ import (
 	"testing"
 	"time"
 
-	run "pi-bridge-go/internal/runtime"
 	"pi-bridge-go/internal/terminal"
 )
 
@@ -64,6 +63,7 @@ func Test能力声明与真实容量一致(t *testing.T) {
 
 	var caps struct {
 		Limits map[string]int `json:"limits"`
+		Replay *bool          `json:"replay"`
 	}
 	if err := json.Unmarshal(rec.Body.Bytes(), &caps); err != nil {
 		t.Fatalf("解析 capabilities 失败: %v", err)
@@ -96,12 +96,15 @@ func Test能力声明与真实容量一致(t *testing.T) {
 	if got := caps.Limits["requestIdsPerConnection"]; got != s.claims.maxHold {
 		t.Errorf("requestIdsPerConnection 报 %d，实际去重窗口 %d", got, s.claims.maxHold)
 	}
-	g := run.Defaults()
-	if got := caps.Limits["replayItems"]; got != g.ReplayItems {
-		t.Errorf("replayItems 报 %d，实际 %d", got, g.ReplayItems)
+	// 补发已移除：能力声明里不应再出现 replay 或补发相关限额。
+	// 留在这里是防止旧字段被无意中加回来——前端会据此以为能按游标续订。
+	if caps.Replay != nil {
+		t.Errorf("capabilities 不应再声明 replay，实际 %v", *caps.Replay)
 	}
-	if got := caps.Limits["replayBytes"]; got != g.ReplayBytes {
-		t.Errorf("replayBytes 报 %d，实际 %d", got, g.ReplayBytes)
+	for _, key := range []string{"replayItems", "replayBytes"} {
+		if _, ok := caps.Limits[key]; ok {
+			t.Errorf("限额里不应再有 %s", key)
+		}
 	}
 	wantTerminals, wantIdle := s.terminals.Limits()
 	if got := caps.Limits["terminals"]; got != wantTerminals {

@@ -116,9 +116,11 @@ TimeoutStopSec=30
 1. **命令受理**：本地与 tunnel 共用同一 Executor——准入、去重（`requestId` + 指纹）、预算与超时
    按方法声明，不按连接类型分叉。持久变更先写 intent 再派发；无终态时恢复为 `outcome_unknown`
    且绝不自动重发。承诺是「保留期内至多派发一次」，不是 exactly-once。
-2. **订阅**：replay 截止与 live 注册在同一把锁内完成（快照末尾序号 == 注册序号）；输出顺序为
-   「确认 → replay → live」。epoch 只由当前连接的订阅确认建立，游标不跨 epoch 接受，迟到的确认
-   有归属守卫。缺口一律 `resync_required`，不静默遗漏。
+2. **订阅**：**没有补发**——断线即重建，重连后客户端重读历史与 `session.state`。订阅确认给出
+   当前 epoch/seq 起点，客户端只接受「同 epoch 且 seq 递增」的事件，据此刻旧进程的迟到帧。
+   慢消费者丢**可丢增量**（`message_update` 的 `*_delta`、`tool_execution_update`）但订阅存活；
+   只有权威帧积压到硬上限（条数 4096 / 字节 16 MiB）才终止订阅，并上报
+   `bridge.subscription_closed { resyncRequired: true, reason: "queue_full" }`。
 3. **worker 身份**：new/switch/fork/clone 是事务——先预留、再调 Pi、最后按 `get_state` 的真实 ID
    提交并换 epoch；删除前先收敛 writer。退出清理按对象身份移除绑定，第二次 Stop 有界。
 4. **配置与凭据**：写入按 model id 合并、把 `***` 识别为占位符保留原值（revision/CAS 校验
@@ -140,7 +142,7 @@ TimeoutStopSec=30
 | 事实 | 含义 |
 |---|---|
 | prompt response 表示 accepted/queued/handled | 回执不是完成；接受后的失败走事件流 |
-| `message_update` 只有 delta | 重放窗口缺失时不能重建中途完整消息 |
+| `message_update` 只有 delta | 事件丢失时不能重建中途完整消息；慢消费者丢 delta 后由 `message_end` 补齐终态 |
 | `text_end` / `message_end` 有完整内容 | 用权威结果替换局部投影，不拼接重复文本 |
 | `tool_execution_update.partialResult` 是累计输出 | 不能当 delta 追加 |
 | `agent_settled` 表示队列/重试最终收敛 | 直接 bash、扩展对话、PTY 有各自生命周期 |
@@ -254,8 +256,8 @@ bash 事件流上，而 `pi.Client.Call` 出于配对需要会过滤掉这个键
 
 - **回执不塞自由文本**：它是跨重启去重与对账的依据，字段语义必须稳定。
   失败原因记进 journald（上表第 3 行），两者职责分开。
-- **`rejected` 不记日志**：`busy`、`resync_required`、`limit_exceeded` 等
-  「命令从未送达 Pi」的一类大多是正常控制流（重同步与忙拒绝会被频繁触发），
+- **`rejected` 不记日志**：`busy`、`limit_exceeded` 等
+  「命令从未送达 Pi」的一类大多是正常控制流（忙拒绝会被频繁触发），
   全记会把日志淹掉。只有「已送达 Pi 但执行失败」（`error`/`unknown`）才记。
 
 命令失败日志只写方法、错误码、会话与错误文本，**绝不写 `params`**——它可能

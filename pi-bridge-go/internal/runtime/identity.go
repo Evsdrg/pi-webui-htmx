@@ -50,8 +50,8 @@ func (m *Manager) Rebind(w *Worker, newID string) error {
 	w.lastActivity = time.Now()
 	w.mu.Unlock()
 	m.workers[newID] = w
-	// 会话身份变化后，旧 epoch 的补发缓冲立即失效。
-	w.resetReplay()
+	// 会话身份变化后，旧 epoch 的实时流立即失效。
+	w.resetStreamIdentity()
 	return nil
 }
 
@@ -214,10 +214,10 @@ func (w *Worker) Clone(ctx context.Context) (string, error) {
 	return state.SessionID, nil
 }
 
-// resetReplay 让补发环失效；会话身份变化后旧序号不再有意义。
-// 必须同时更换 epoch：只把 seq 归零的话，旧 epoch 配旧 seq 仍会被
-// Replay 接受，客户端会读到新会话的事件却以为还在旧游标上（B65）。
-func (w *Worker) resetReplay() {
+// resetStreamIdentity 更换 epoch 并归零 seq；会话身份变化后旧序号不再有意义。
+// 必须同时更换 epoch：只把 seq 归零的话，旧 epoch 配旧 seq 仍会被客户端的
+// 游标接受，于是读到新会话的事件却以为还在旧会话上（B65）。
+func (w *Worker) resetStreamIdentity() {
 	epoch := make([]byte, 16)
 	if _, err := rand.Read(epoch); err != nil {
 		// 取不到随机数时也不能沿用旧 epoch：旧游标必须失效。
@@ -229,7 +229,6 @@ func (w *Worker) resetReplay() {
 	w.epoch = hex.EncodeToString(epoch)
 	// 状态行属于旧进程的快照：换了 epoch 就不再对应当前会话（B36）。
 	w.extStatuses = nil
-	w.replay = newReplayRing(w.cfg)
 }
 
 func mustFind(ctx context.Context, store *sessions.Store, id string) sessions.Header {

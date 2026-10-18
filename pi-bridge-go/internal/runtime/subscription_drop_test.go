@@ -1,68 +1,87 @@
 package runtime
 
 import (
-	"context"
 	"testing"
-	"time"
 )
 
-// 慢订阅者被摘除是设计行为（绝不阻塞 Pi 输出），但客户端只会看到
-// 「实时订阅已结束」。若没有原因，事后无从分辨是队列满还是字节上限触发——
-// 两者的处置完全不同：前者要降渲染频率，后者要处理单条大事件。
+// 慢订阅者的处置在 2026-10-18 重设计后分成两类：
 //
-// 这里直接构造 Subscription 注册进 worker，绕开 Subscribe 对进程信息的依赖：
-// 被测的是 publishLocked 的摘除路径与 DropReason，不是订阅创建。
-func Test慢订阅者被摘除时记录原因(t *testing.T) {
-	newWorker := func(messages, bytes int) (*Worker, *Subscription) {
+//   - 可丢弃的增量帧：条数或字节超过**软上限**时丢弃，订阅存活。客户端
+//     只会少几帧流式片段，回合结束时由权威帧补齐终态。
+//   - 不可丢弃的权威帧：条数或字节超过**硬上限**才终止订阅。那种情况说明
+//     读端已彻底停止读取，继续留在内存里只会无界增长。
+//
+// 终止时仍记录原因，供诊断分辨是哪条限额触发的。
+func Test慢订阅者的处置按事件类型区分(t *testing.T) {
+	newWorker := func(messages, bytes, hardLimit int) (*Worker, *Subscription) {
 		cfg := Defaults()
 		cfg.SubscriberMessages = messages
 		cfg.SubscriberBytes = bytes
+		cfg.SubscriberHardLimitMessages = hardLimit
 		w := &Worker{cfg: cfg, id: "s", epoch: "e"}
-		w.replay = newReplayRing(cfg)
 		w.subs = map[*Subscription]struct{}{}
-		sub := &Subscription{worker: w, ch: make(chan queuedEvent, messages)}
+		sub := &Subscription{worker: w, ch: make(chan queuedEvent, hardLimit)}
 		w.subs[sub] = struct{}{}
 		return w, sub
 	}
 
-	t.Run("队列满", func(t *testing.T) {
-		w, sub := newWorker(1, 1<<20)
-		// 第一条填满队列（容量 1），第二条没有空位即摘除。
-		w.publishLocked("pi.event", map[string]string{"x": "1"})
-		w.publishLocked("pi.event", map[string]string{"x": "2"})
-		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-		defer cancel()
-		if _, err := sub.Next(ctx); err != nil {
-			t.Fatalf("应先读到已入队的事件: %v", err)
-		}
-		if _, err := sub.Next(ctx); err == nil {
-			t.Fatal("通道已关闭，第二次读取必须失败")
-		}
-		if got := sub.DropReason(); got != DropReasonQueueFull {
-			t.Fatalf("摘除原因应为 %q，实际 %q", DropReasonQueueFull, got)
-		}
-	})
-
-	t.Run("字节上限", func(t *testing.T) {
-		w, sub := newWorker(64, 100)
-		// 单条事件超过字节预算：即使队列还空着也必须摘除。
-		w.publishLocked("pi.event", map[string]string{"x": "0123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789"})
-		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-		defer cancel()
-		if _, err := sub.Next(ctx); err == nil {
-			t.Fatal("超字节预算的订阅必须被摘除")
-		}
-		if got := sub.DropReason(); got != DropReasonByteLimit {
-			t.Fatalf("摘除原因应为 %q，实际 %q", DropReasonByteLimit, got)
-		}
-	})
-
-	t.Run("正常订阅没有摘除原因", func(t *testing.T) {
-		w, sub := newWorker(8, 1<<20)
-		w.publishLocked("pi.event", map[string]string{"x": "1"})
+	t.Run("增量帧超软条数上限时丢弃而不终止", func(t *testing.T) {
+		w, sub := newWorker(1, 1<<20, 4096)
+		delta := map[string]any{"type": "message_update", "assistantMessageEvent": map[string]any{"type": "text_delta", "delta": "x"}}
+		w.publishLocked("pi.event", delta)
+		w.publishLocked("pi.event", delta)
 		if got := sub.DropReason(); got != "" {
-			t.Fatalf("未被摘除时原因应为空，实际 %q", got)
+			t.Fatalf("增量溢出不应终止订阅，实际原因 %q", got)
+		}
+		if n := w.SubscriberCount(); n != 1 {
+			t.Fatalf("订阅应仍然注册着，实际 %d", n)
 		}
 		sub.Close()
+	})
+
+	t.Run("增量帧超字节预算时丢弃而不终止", func(t *testing.T) {
+		w, sub := newWorker(64, 100, 4096)
+		big := map[string]any{"type": "tool_execution_update", "toolCallId": "c1", "partialResult": map[string]any{"content": []any{map[string]any{"type": "text", "text": string(make([]byte, 200))}}}}
+		w.publishLocked("pi.event", big)
+		if got := sub.DropReason(); got != "" {
+			t.Fatalf("超字节预算的增量应被丢弃而不是终止，实际 %q", got)
+		}
+		sub.Close()
+	})
+
+	t.Run("权威帧积压超过硬上限才终止", func(t *testing.T) {
+		// 硬上限 2：第一条入队，第二条填满，第三条超限即终止。
+		w, sub := newWorker(1, 1<<20, 2)
+		w.publishLocked("pi.event", map[string]any{"type": "message_end"})
+		w.publishLocked("pi.event", map[string]any{"type": "message_end"})
+		w.publishLocked("pi.event", map[string]any{"type": "message_end"})
+		if got := sub.DropReason(); got != DropReasonQueueFull {
+			t.Fatalf("权威帧积压应记录 %q，实际 %q", DropReasonQueueFull, got)
+		}
+	})
+
+	t.Run("正常订阅没有终止原因", func(t *testing.T) {
+		w, sub := newWorker(8, 1<<20, 4096)
+		w.publishLocked("pi.event", map[string]any{"type": "agent_start"})
+		if got := sub.DropReason(); got != "" {
+			t.Fatalf("未被终止时原因应为空，实际 %q", got)
+		}
+		sub.Close()
+	})
+
+	// 权威帧的字节硬上限单独生效：条数远未到上限，但一条大事件即可终止。
+	t.Run("权威帧超字节硬上限也终止", func(t *testing.T) {
+		cfg := Defaults()
+		cfg.SubscriberMessages = 8
+		cfg.SubscriberHardLimitMessages = 4096
+		cfg.SubscriberHardLimitBytes = 64
+		w := &Worker{cfg: cfg, id: "s", epoch: "e"}
+		w.subs = map[*Subscription]struct{}{}
+		sub := &Subscription{worker: w, ch: make(chan queuedEvent, cfg.SubscriberHardLimitMessages)}
+		w.subs[sub] = struct{}{}
+		w.publishLocked("pi.event", map[string]any{"type": "message_end", "message": string(make([]byte, 200))})
+		if got := sub.DropReason(); got != DropReasonQueueFull {
+			t.Fatalf("超字节硬上限应终止订阅，实际原因 %q", got)
+		}
 	})
 }

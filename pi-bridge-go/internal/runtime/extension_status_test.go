@@ -93,7 +93,7 @@ func Test扩展状态快照有界且换epoch清空(t *testing.T) {
 		t.Fatalf("超长 key/text 不应进快照，实际 %d", len(statuses))
 	}
 	before := w.Info().Epoch
-	w.resetReplay()
+	w.resetStreamIdentity()
 	epoch, statuses := w.ExtensionStatuses()
 	if len(statuses) != 0 {
 		t.Fatalf("换 epoch 后应清空: %+v", statuses)

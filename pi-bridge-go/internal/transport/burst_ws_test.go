@@ -12,17 +12,20 @@ import (
 	"github.com/coder/websocket"
 )
 
-func TestWS批量补发后连接仍可用(t *testing.T) {
+// TestWS增量突发后连接仍可用 是慢消费者路径的端到端反例：
+// 假 Pi 连发 120 条 text_delta（可丢增量），订阅端只读一小部分，
+// 连接必须**保持可用**——旧的「积压即摘除」会把整条连接踢掉。
+func TestWS增量突发后连接仍可用(t *testing.T) {
 	t.Setenv("FAKE_PI_SCRIPT", "replay_burst")
 	s, manager, cwd := newTestServer(t)
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	worker, err := manager.Start(ctx, "", cwd)
 	if err != nil {
 		t.Fatal(err)
 	}
 	initial := worker.Info()
-	if err := worker.Prompt(ctx, "生成补发测试事件", "", nil); err != nil {
+	if err := worker.Prompt(ctx, "生成突发测试事件", "", nil); err != nil {
 		t.Fatal(err)
 	}
 	for worker.Info().Seq < initial.Seq+122 {
@@ -61,7 +64,7 @@ func TestWS批量补发后连接仍可用(t *testing.T) {
 		t.Helper()
 		_, b, err := conn.Read(ctx)
 		if err != nil {
-			t.Fatalf("补发过程中连接意外断开: %v", err)
+			t.Fatalf("突发过程中连接意外断开: %v", err)
 		}
 		var message map[string]any
 		if err := json.Unmarshal(b, &message); err != nil {
@@ -70,37 +73,35 @@ func TestWS批量补发后连接仍可用(t *testing.T) {
 		return message
 	}
 
-	send("replay-burst", "session.subscribe", map[string]any{"epoch": initial.Epoch, "afterSeq": initial.Seq})
-	var count int
-	last := initial.Seq
-	confirmed := false
-	for count < 122 || !confirmed {
-		message := read()
-		switch message["kind"] {
-		case "event":
-			seq := uint64(message["seq"].(float64))
-			if seq != last+1 {
-				t.Fatalf("补发序号不连续: %d → %d", last, seq)
-			}
-			last = seq
-			count++
-		case "response":
-			if message["requestId"] == "replay-burst" {
-				if message["ok"] != true {
-					t.Fatalf("订阅未确认: %v", message["error"])
-				}
-				confirmed = true
-			}
-		}
-	}
-	send("after-replay", "session.state", map[string]any{})
+	// 订阅确认必须回来，且不再声明 replay。
+	send("burst-subscribe", "session.subscribe", map[string]any{})
 	for {
 		message := read()
-		if message["requestId"] == "after-replay" {
+		if message["kind"] == "response" && message["requestId"] == "burst-subscribe" {
 			if message["ok"] != true {
-				t.Fatalf("补发后同一连接不能继续操作: %v", message["error"])
+				t.Fatalf("订阅未确认: %v", message["error"])
+			}
+			data, _ := message["data"].(map[string]any)
+			if _, ok := data["replay"]; ok {
+				t.Fatalf("订阅确认不应再声明 replay: %v", data)
 			}
 			break
 		}
 	}
+	// 再发一批事件，确认同一连接仍能收发。
+	if err := worker.Prompt(ctx, "第二批突发", "", nil); err != nil {
+		t.Fatal(err)
+	}
+	send("after-burst", "session.state", map[string]any{})
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		message := read()
+		if message["requestId"] == "after-burst" {
+			if message["ok"] != true {
+				t.Fatalf("突发后同一连接不能继续操作: %v", message["error"])
+			}
+			return
+		}
+	}
+	t.Fatal("突发后未收到 session.state 响应")
 }

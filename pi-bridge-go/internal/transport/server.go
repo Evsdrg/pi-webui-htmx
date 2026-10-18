@@ -881,7 +881,6 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, encoding, 200, map[string]any{
 			"version": 1, "piBaseline": "1.3.0",
 			"methods":          SupportedMethods,
-			"replay":           true,
 			"persistentDedup":  true,
 			"extensionDialogs": "interactive",
 			"relay":            s.tunnelBridge != nil,
@@ -894,7 +893,6 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				"connections": maxConnections, "inFlightOperations": maxInFlightOperations,
 				"wsRequestBytes": wsReadLimit, "wsResponseBytes": wsTextBudget,
 				"connectionQueueBytes": outboundQueueLimit, "requestIdsPerConnection": claimsMaxHold,
-				"replayItems": run.Defaults().ReplayItems, "replayBytes": run.Defaults().ReplayBytes,
 				"terminals": terminals, "terminalIdleSeconds": terminalIdle,
 			},
 		})
@@ -1222,11 +1220,6 @@ func (c *connection) dropTerminal(id string) {
 	}
 }
 
-// sendRaw 按补发的整批截止时间有界排队；单帧大小与队列预算不能被突破。
-func (c *connection) sendRaw(ctx context.Context, b []byte) bool {
-	return c.queue.enqueue(ctx, b)
-}
-
 func (c *connection) send(m protocol.Message) bool {
 	b, err := json.Marshal(m)
 	if err != nil {
@@ -1439,7 +1432,6 @@ func (s *Server) storeReceipt(rec storage.Receipt) {
 type connSink interface {
 	connContext() context.Context
 	send(m protocol.Message) bool
-	sendRaw(ctx context.Context, b []byte) bool
 	trackTerminal(id string, sub *terminal.Subscription)
 	dropTerminal(id string)
 	trackSubscription(id string, sub *run.Subscription)
@@ -1524,13 +1516,16 @@ func (s *Server) dispatchCommon(ctx context.Context, r protocol.Request, sink co
 	return nil, protocol.E("unsupported_method", "该方法未实现")
 }
 
-// subscribe 处理事件订阅：先做游标补发，再注册有界队列并持续推送。
-// subscribeWithReplay 是订阅命令的共用实现，WebSocket 连接与隧道虚拟连接
-// 都用它，避免两处各写一份补发/确认顺序而后漂移。
+// subscribe 处理事件订阅：注册有界队列并持续推送。
+// subscribe 是订阅命令的共用实现，WebSocket 连接与隧道虚拟连接都用它，
+// 避免两处各写一份确认顺序而后漂移。
 //
-// 关键点：补发快照与订阅注册必须在 worker 内一次持锁完成，否则两次锁之间
-// 发布的事件既不在快照里也不会进入实时订阅，重连后静默丢失（B05）。
-func (s *Server) subscribeWithReplay(c connSink, r protocol.Request) (any, error) {
+// 2026-10-18 重设计后**没有补发**：断线即重建，重连后由客户端重读历史与
+// 状态。订阅确认里的 epoch/seq 只用于让客户端挡住上一个工作进程的迟到帧。
+func (s *Server) subscribe(c connSink, r protocol.Request) (any, error) {
+	// 旧客户端会带 epoch/afterSeq 请求补发。补发已移除，但这两个字段**接受并
+	// 忽略**：缓存了旧产物的浏览器仍会照发，直接拒绝会让它连订阅都建不起来。
+	// 新客户端不再发送它们。
 	var p struct {
 		Epoch    string  `json:"epoch"`
 		AfterSeq *uint64 `json:"afterSeq"`
@@ -1545,58 +1540,27 @@ func (s *Server) subscribeWithReplay(c connSink, r protocol.Request) (any, error
 	if c.connContext().Err() != nil {
 		return nil, protocol.E("conflict", "连接已关闭")
 	}
-	cursor := p.Epoch != "" || p.AfterSeq != nil
-	after := uint64(0)
-	if p.AfterSeq != nil {
-		after = *p.AfterSeq
-	}
-	sub, info, items, ok, err := w.SubscribeWithReplay(p.Epoch, after, cursor)
+	sub, info, err := w.Subscribe()
 	if err != nil {
 		return nil, err
-	}
-	if !ok {
-		// 补发不了就明确要求重新同步，不伪造无损恢复。
-		// 这同样是「用户看到提示却不知为何」的一环：游标已被补发环淘汰。
-		s.metrics.ReplayMiss()
-		slog.Warn("事件补发失败，已要求客户端重新同步", "会话", r.SessionID,
-			"epoch", p.Epoch, "afterSeq", after)
-		return nil, protocol.E("resync_required", "事件游标已失效，请重新读取持久历史后再订阅")
-	}
-	if len(items) > 0 {
-		s.metrics.ReplayHit()
 	}
 	// 换订阅前先关掉旧订阅，旧 goroutine 必须退出，否则 worker 配额被占用。
 	if prev := c.existingSubscription(r.SessionID); prev != nil {
 		prev.Close()
 	}
 	c.trackSubscription(r.SessionID, sub)
-	// 补发使用整批截止时间，不能因每帧重新计时拖住操作配额。
-	replayCtx, cancel := context.WithTimeout(c.connContext(), outboundWait)
-	defer cancel()
-	for _, item := range items {
-		if !c.sendRaw(replayCtx, item.Payload) {
-			sub.Close()
-			if c.connContext().Err() != nil {
-				return nil, protocol.E("conflict", "连接已关闭")
-			}
-			s.metrics.ReplayMiss()
-			slog.Warn("事件补发超时，已要求客户端重新同步", "会话", r.SessionID, "条数", len(items))
-			return nil, protocol.E("resync_required", "事件补发超时，请重新读取持久历史后再订阅")
-		}
-	}
-	c.send(protocol.Reply(r.RequestID, map[string]any{"subscribed": true, "epoch": info.Epoch, "seq": info.Seq, "replay": true}, nil))
+	c.send(protocol.Reply(r.RequestID, map[string]any{"subscribed": true, "epoch": info.Epoch, "seq": info.Seq}, nil))
 	go func() {
 		defer sub.Close()
 		for {
 			m, err := sub.Next(c.connContext())
 			if err != nil {
-				// 连接自己断了不是「订阅被摘」：用户没在看，重同步会由重连触发。
+				// 连接自己断了不是「订阅被终止」：用户没在看，重建会由重连触发。
 				if c.connContext().Err() == nil {
-					// 摘除原因是诊断的关键：队列满与字节上限是两种完全不同的
-					// 处置（前者降渲染频率，后者要处理单条大事件）。此前只上报
-					// resyncRequired，事后无从分辨，这里一并给出并留一行日志。
+					// 权威帧积压到硬上限才会走到这里：读端已彻底停止读取。
+					// 上报原因供诊断，并让客户端重读历史与状态。
 					reason := sub.DropReason()
-					slog.Warn("实时订阅被摘除，已要求客户端重新同步",
+					slog.Warn("实时订阅被终止，客户端需重读历史与状态",
 						"会话", r.SessionID, "原因", reason)
 					c.send(protocol.Message{
 						Version: 1, Kind: "control", SessionID: r.SessionID, Event: "bridge.subscription_closed",
@@ -1616,7 +1580,7 @@ func (s *Server) subscribeWithReplay(c connSink, r protocol.Request) (any, error
 }
 
 func (c *connection) subscribe(ctx context.Context, r protocol.Request) (any, error) {
-	return c.server.subscribeWithReplay(c, r)
+	return c.server.subscribe(c, r)
 }
 
 // trackSubscription 实现 connSink。

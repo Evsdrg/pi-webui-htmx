@@ -13,12 +13,12 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"pi-bridge-go/internal/childenv"
-	"pi-bridge-go/internal/events"
 	"pi-bridge-go/internal/goal"
 	"pi-bridge-go/internal/pi"
 	"pi-bridge-go/internal/protocol"
@@ -26,6 +26,13 @@ import (
 	"pi-bridge-go/internal/workspace"
 )
 
+// Config 是运行时的全部可调项。
+//
+// 注意这里**没有**补发相关的配置：2026-10-18 的重设计去掉了「按游标补发」
+// 这条路径。补发的前提是「断线期间的事件值得重放」，但它同时带来一整套
+// 复杂度（epoch/seq 游标、补发环淘汰后的 resync_required、前端据此重读历史
+// 与重订的循环），而真正的权威状态（Pi 的 JSONL 与 session.state）本来就可
+// 随时重读。现在断线即重建：重连后重读历史与状态，不重放事件。
 type Config struct {
 	Binary                                                 string
 	PrefixArgs                                             []string // 仅供运维与测试追加参数，绝不允许来自网络请求
@@ -39,8 +46,15 @@ type Config struct {
 	StartTimeout, OperationTimeout, IdleTimeout, StopGrace time.Duration
 	MaxFrame                                               int
 	SubscriberMessages, SubscriberBytes, EventBytes        int
-	ReplayItems, ReplayBytes                               int
-	MaxDialogs                                             int
+	// SubscriberHardLimitMessages 是「不可丢弃的权威帧」能积压的条数上限。
+	// 慢消费者丢增量是常态；但权威帧丢一条，客户端就会停在不可恢复的状态
+	// （例如永远「运行中」），所以只在这里设硬上限：真超了才终止订阅。
+	// 订阅队列的容量就是它，因此硬上限之内投递永远是非阻塞的。
+	SubscriberHardLimitMessages int
+	// SubscriberHardLimitBytes 是权威帧能积压的字节上限。条数上限单独不够：
+	// message_end 之类携带整条消息，条数不多也可能很占内存。
+	SubscriberHardLimitBytes int
+	MaxDialogs               int
 	// NavigateExt 是桥内会话跳转扩展的绝对路径；为空表示未启用 session.navigate。
 	// NavigateResultDir 存放各 worker 的一次性结果文件（由扩展写入）。
 	NavigateExt, NavigateResultDir string
@@ -59,10 +73,10 @@ type Config struct {
 	WorkerLog *WorkerLog
 }
 
-// Defaults 给出默认限额与超时（capabilities 的 replay 声明也引用它，见 transport）。
+// Defaults 给出默认限额与超时。
 func Defaults() Config {
 	return Config{Binary: "pi", MaxWorkers: 4, StartTimeout: 20 * time.Second, OperationTimeout: 30 * time.Second, IdleTimeout: 2 * time.Minute, StopGrace: time.Second, MaxFrame: 8 << 20, SubscriberMessages: 32, SubscriberBytes: 1 << 20, EventBytes: 256 << 10,
-		ReplayItems: 256, ReplayBytes: 1 << 20, MaxDialogs: 16}
+		MaxDialogs: 16, SubscriberHardLimitMessages: 4096, SubscriberHardLimitBytes: 16 << 20}
 }
 
 // State 是 Pi 会话状态的对外投影，不包含私有凭据。
@@ -425,18 +439,19 @@ type Subscription struct {
 	worker *Worker
 	ch     chan queuedEvent
 	bytes  atomic.Int64
-	once   sync.Once
-	// dropReason 记录这一订阅为什么被摘除。慢消费者被摘除是设计行为
+	// dropped 记录因背压被丢弃的可丢帧数，仅用于诊断。
+	dropped atomic.Int64
+	once    sync.Once
+	// dropReason 记录这一订阅为什么被终止。慢消费者丢增量是设计行为
 	// （绝不阻塞 Pi 输出），但客户端只会看到「实时订阅已结束」，事后必须能
-	// 分辨是哪条限额触发的——否则只能靠猜。空串表示未被摘除。
+	// 分辨是哪条限额触发的——否则只能靠猜。空串表示未被终止。
 	dropReason atomic.Value
 }
 
-// 订阅被摘除的原因。值与协议错误码无关，只用于诊断上报。
-const (
-	DropReasonQueueFull = "queue_full"
-	DropReasonByteLimit = "byte_limit"
-)
+// 订阅被终止的原因。值与协议错误码无关，只用于诊断上报。
+// 只有「权威帧积压到硬上限」会终止订阅：那种情况说明读端已彻底停止读取，
+// 继续留着只会让内存无界增长。可丢弃的增量帧溢出不算终止。
+const DropReasonQueueFull = "queue_full"
 
 // DropReason 返回订阅被摘除的原因；未被摘除时为空串。
 func (s *Subscription) DropReason() string {
@@ -444,14 +459,14 @@ func (s *Subscription) DropReason() string {
 	return reason
 }
 
-// Next 取下一条事件；订阅被关闭时要求客户端重新同步，而不是静默续传。
+// Next 取下一条事件；订阅被终止时返回错误，客户端应据此重读历史与状态。
 func (s *Subscription) Next(ctx context.Context) (protocol.Message, error) {
 	select {
 	case <-ctx.Done():
 		return protocol.Message{}, ctx.Err()
 	case item, ok := <-s.ch:
 		if !ok {
-			return protocol.Message{}, errors.New("订阅已关闭，需要重新同步")
+			return protocol.Message{}, errors.New("订阅已终止，需要重新读取历史与状态")
 		}
 		s.bytes.Add(-item.bytes)
 		return item.message, nil
@@ -495,7 +510,6 @@ type Worker struct {
 	seq          uint64
 	lastActivity time.Time
 	subs         map[*Subscription]struct{}
-	replay       *events.Ring
 	owner        *Manager
 	store        *sessions.Store
 	// navResultPath 是本 worker 的会话跳转结果文件（扩展写入、桥读取）。
@@ -515,11 +529,6 @@ type Worker struct {
 	logWriter *workerLogWriter
 }
 
-// newReplayRing 按配置构造补发环。
-func newReplayRing(cfg Config) *events.Ring {
-	return events.NewRing(cfg.ReplayItems, int64(cfg.ReplayBytes))
-}
-
 // busyLocked 判断是否存在进行中或结果未定的工作；调用时必须已持有锁。
 func (w *Worker) busyLocked() bool {
 	return w.active || w.queued || w.uncertain || w.waitingInput || w.pending > 0
@@ -531,21 +540,11 @@ func (w *Worker) infoLocked() Info {
 	return Info{w.id, w.epoch, w.cmd.Process.Pid, w.cwd, w.status, w.busyLocked(), w.seq}
 }
 
-// Replay 返回指定 epoch 内 afterSeq 之后的事件。
-// epoch 不匹配或所需序号已被淘汰时返回 ok=false，调用方必须要求重新同步。
-func (w *Worker) Replay(epoch string, afterSeq uint64) ([]events.Item, bool) {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	if w.closing {
-		return nil, false
-	}
-	if epoch != w.epoch {
-		return nil, false
-	}
-	return w.replay.Replay(afterSeq)
-}
-
-// Subscribe 先注册有界队列，再返回当前 epoch 与序号，确保不丢订阅确认之后的事件。
+// Subscribe 注册一个有界队列并返回当前状态快照。
+//
+// 订阅确认里的 epoch/seq 仍是权威起点：客户端用它挡住上一个工作进程的
+// 迟到帧（同 epoch 且 seq 递增才接受）。但**不再有补发**——断线期间的事件
+// 不重放，重连后由客户端重读历史与状态重建（见 Config 的说明）。
 func (w *Worker) Subscribe() (*Subscription, Info, error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
@@ -555,45 +554,9 @@ func (w *Worker) Subscribe() (*Subscription, Info, error) {
 	if len(w.subs) >= 8 {
 		return nil, Info{}, protocol.E("limit_exceeded", "该工作进程的订阅数量已达上限")
 	}
-	s := &Subscription{worker: w, ch: make(chan queuedEvent, w.cfg.SubscriberMessages)}
+	s := &Subscription{worker: w, ch: make(chan queuedEvent, w.hardLimitLocked())}
 	w.subs[s] = struct{}{}
 	return s, w.infoLocked(), nil
-}
-
-// SubscribeWithReplay 在同一次持锁内完成「取补发快照 + 注册订阅」。
-//
-// 分成 Replay() 再 Subscribe() 两次加锁会留下窗口期：两次锁之间发布的
-// 事件既不在快照里，也不会进入实时订阅，重连后静默丢失（B05）。
-// 合并后要么整体成功（快照 + 已注册），要么整体失败且不留下半套状态。
-//
-// cursor 为空表示普通订阅，不做补发。
-// 返回值依次是：订阅句柄、当前状态快照、补发事件、补发是否可用。
-// 补发不可用（replayed=false）时订阅仍然成立，但调用方必须要求客户端
-// 重新同步——这一条不能靠位置记住，所以结果具名。
-func (w *Worker) SubscribeWithReplay(epoch string, afterSeq uint64, cursor bool) (sub *Subscription, info Info, replay []events.Item, replayed bool, err error) {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	if w.closing {
-		return nil, Info{}, nil, false, protocol.E("worker_exited", "工作进程正在关闭")
-	}
-	var items []events.Item
-	if cursor {
-		if epoch != w.epoch {
-			return nil, Info{}, nil, false, nil
-		}
-		replayed, ok := w.replay.Replay(afterSeq)
-		if !ok {
-			// 补发环已淘汰所需序号：不得注册订阅后让客户端以为能续上。
-			return nil, Info{}, nil, false, nil
-		}
-		items = replayed
-	}
-	if len(w.subs) >= 8 {
-		return nil, Info{}, nil, false, protocol.E("limit_exceeded", "该工作进程的订阅数量已达上限")
-	}
-	s := &Subscription{worker: w, ch: make(chan queuedEvent, w.cfg.SubscriberMessages)}
-	w.subs[s] = struct{}{}
-	return s, w.infoLocked(), items, true, nil
 }
 
 // SubscriberCount 返回当前订阅者数量，供测试与诊断核对配额是否被释放。
@@ -603,7 +566,64 @@ func (w *Worker) SubscriberCount() int {
 	return len(w.subs)
 }
 
-// publishLocked 向所有订阅者投递事件；慢订阅者会被摘除并关闭，绝不阻塞 Pi 输出。
+// droppableEvent 判断一条 Pi 事件能否在慢消费者积压时被丢弃。
+//
+// 判据是「后一条事件会不会覆盖它」：
+//   - message_update 的 *_delta 只是给正在生成的块追加内容，该块的最终形态
+//     由 message_end 给出；丢了 delta，客户端少看到几个字，但回合结束时
+//     仍然是完整正文。
+//   - tool_execution_update 携带的是**整段**部分输出（不是增量），下一次
+//     update 或 tool_execution_end 会带上完整结果；丢一条中间态无副作用。
+//
+// 其余事件一律不可丢：agent_start/agent_end/agent_settled 决定运行态，
+// message_start/message_end 划出消息边界，tool_execution_start/end 建行与收尾，
+// 以及各类控制类事件。丢掉其中任何一条，客户端都会停在一个不可恢复的状态。
+//
+// 入参在两条路径上形态不同：Pi 事件经 event() 转发时是 json.RawMessage
+// （未解析，省一次解码），桥自己发的事件（bridge.worker_state 等）是
+// map[string]any。两者都要认——只认 map 时生产路径会把**所有**事件都当成
+// 权威帧，增量照样积压到硬上限、订阅照样被终止，等于没修。
+func droppableEvent(data any) bool {
+	var m map[string]any
+	switch v := data.(type) {
+	case map[string]any:
+		m = v
+	case json.RawMessage:
+		if json.Unmarshal(v, &m) != nil {
+			return false
+		}
+	case []byte:
+		if json.Unmarshal(v, &m) != nil {
+			return false
+		}
+	default:
+		return false
+	}
+	switch m["type"] {
+	case "tool_execution_update":
+		return true
+	case "message_update":
+		delta, ok := m["assistantMessageEvent"].(map[string]any)
+		if !ok {
+			return false
+		}
+		t, _ := delta["type"].(string)
+		return strings.HasSuffix(t, "_delta")
+	}
+	return false
+}
+
+// publishLocked 向所有订阅者投递事件。
+//
+// 背压策略（2026-10-18 重设计，取代「慢就让订阅整条摘掉」）：
+//
+//   - 可丢弃的增量帧：条数或字节超过**软上限**就直接丢弃，订阅照常存活。
+//     客户端只会少几帧流式片段，回合结束时由权威帧补齐终态。
+//   - 不可丢弃的权威帧：条数或字节超过**硬上限**才终止订阅——那种情况说明
+//     客户端已经彻底不读了，继续留只会让内存无界增长。未超硬上限时必投。
+//
+// 队列容量取硬上限条数，因此权威帧在硬上限内一定有位置，投递是非阻塞的：
+// 全程不持锁等待，Pi 的输出绝不会被子订阅者拖住。
 func (w *Worker) publishLocked(event string, data any) {
 	w.seq++
 	message := protocol.Message{Version: 1, Kind: "event", SessionID: w.id, StreamID: "worker", Epoch: w.epoch, Seq: w.seq, Event: event, Data: data}
@@ -617,30 +637,80 @@ func (w *Worker) publishLocked(event string, data any) {
 	if w.cfg.Metrics != nil {
 		w.cfg.Metrics.EventPublished()
 	}
-	w.replay.Push(w.seq, b)
+	droppable := droppableEvent(data)
 	for s := range w.subs {
-		if s.bytes.Add(n) > int64(w.cfg.SubscriberBytes) {
-			s.bytes.Add(-n)
-			delete(w.subs, s)
-			s.dropReason.Store(DropReasonByteLimit)
-			close(s.ch)
-			if w.cfg.Metrics != nil {
-				w.cfg.Metrics.EventDropped()
+		if droppable {
+			// 软上限：条数或字节任一超了就丢这一帧，订阅照常存活。
+			if len(s.ch) >= w.softLimitLocked() || s.bytes.Load()+n > int64(w.cfg.SubscriberBytes) {
+				w.dropFrameLocked(s)
+				continue
 			}
+			select {
+			case s.ch <- queuedEvent{message, n}:
+				s.bytes.Add(n)
+			default:
+				w.dropFrameLocked(s)
+			}
+			continue
+		}
+		// 权威帧：硬上限（条数或字节）内必投；超了说明读端已停止读取。
+		if len(s.ch) >= w.hardLimitLocked() || s.bytes.Load()+n > int64(w.hardLimitBytesLocked()) {
+			w.dropSubscriberLocked(s)
 			continue
 		}
 		select {
 		case s.ch <- queuedEvent{message, n}:
+			s.bytes.Add(n)
 		default:
-			s.bytes.Add(-n)
-			delete(w.subs, s)
-			s.dropReason.Store(DropReasonQueueFull)
-			close(s.ch)
-			if w.cfg.Metrics != nil {
-				w.cfg.Metrics.EventDropped()
-			}
+			// 容量即硬上限条数，走到这里说明上面的条数判断与实际不符
+			// （并发读端刚好取走又填满的极端竞态）；按终止处理，绝不等待。
+			w.dropSubscriberLocked(s)
 		}
 	}
+}
+
+// dropFrameLocked 记录一次「可丢帧被丢弃」。订阅不受影响，仅计数。
+func (w *Worker) dropFrameLocked(s *Subscription) {
+	s.dropped.Add(1)
+	if w.cfg.Metrics != nil {
+		w.cfg.Metrics.EventDropped()
+	}
+}
+
+// dropSubscriberLocked 终止一个订阅：权威帧积压到硬上限说明读端已停止读取。
+// 记录原因并关闭通道，订阅 goroutine 读到关闭即上报。调用方必须已持有 w.mu。
+func (w *Worker) dropSubscriberLocked(s *Subscription) {
+	delete(w.subs, s)
+	s.dropReason.Store(DropReasonQueueFull)
+	close(s.ch)
+	if w.cfg.Metrics != nil {
+		w.cfg.Metrics.EventDropped()
+	}
+}
+
+// softLimitLocked 返回可丢帧的条数软上限（配置缺省时兜底）。
+func (w *Worker) softLimitLocked() int {
+	if w.cfg.SubscriberMessages > 0 {
+		return w.cfg.SubscriberMessages
+	}
+	return 32
+}
+
+// hardLimitLocked 返回权威帧可积压的条数硬上限（配置缺省时兜底）。
+func (w *Worker) hardLimitLocked() int {
+	if w.cfg.SubscriberHardLimitMessages > 0 {
+		return w.cfg.SubscriberHardLimitMessages
+	}
+	return 4096
+}
+
+// hardLimitBytesLocked 返回权威帧可积压的字节硬上限（配置缺省时兜底）。
+// 条数硬上限单独不够：message_end 之类携带整条消息，条数不多也可能很占内存。
+func (w *Worker) hardLimitBytesLocked() int {
+	if w.cfg.SubscriberHardLimitBytes > 0 {
+		return w.cfg.SubscriberHardLimitBytes
+	}
+	return 16 << 20
 }
 
 // event 处理来自 Pi 的原始事件，更新运行状态并转发给订阅者。
@@ -723,7 +793,9 @@ func (w *Worker) event(raw json.RawMessage) {
 		}
 	}
 	if len(raw) > w.cfg.EventBytes {
-		w.publishLocked("bridge.event_omitted", map[string]any{"type": ev.Type, "reason": "事件体积超过上限", "resyncRequired": true})
+		// 单条事件超过体积上限，无法转发：实时层缺了这一段，客户端必须重读历史。
+		// 与补发无关（补发已移除），这是「实时流不再完整」的独立信号。
+		w.publishLocked("bridge.event_omitted", map[string]any{"type": ev.Type, "reason": "事件体积超过上限"})
 		w.mu.Unlock()
 		return
 	}
@@ -1124,7 +1196,6 @@ func launch(cfg Config, cwd, file string) (*Worker, error) {
 		subs:           map[*Subscription]struct{}{},
 		pendingDialogs: map[string]json.RawMessage{},
 		dialogOpened:   map[string]time.Time{},
-		replay:         events.NewRing(cfg.ReplayItems, int64(cfg.ReplayBytes)),
 		store:          cfg.Store,
 		navResultPath:  navResultPath,
 		logWriter:      logWriter,

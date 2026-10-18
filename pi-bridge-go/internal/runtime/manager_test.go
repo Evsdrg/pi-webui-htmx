@@ -351,17 +351,21 @@ func TestPi异常退出后状态可见(t *testing.T) {
 	t.Fatal("未收到进程退出状态")
 }
 
-// Test订阅与补发原子化 覆盖 B05：
-// Replay() 与 Subscribe() 分成两次加锁时，两次锁之间发布的事件
-// 既不在快照里也不会进入实时订阅，重连后静默丢失。
-func Test订阅与补发原子化(t *testing.T) {
+// Test订阅注册后的事件必达 覆盖 2026-10-18 重设计后的订阅契约：
+// 注册返回当前 epoch/seq 快照，此后发布的事件按序送达；不再有补发。
+//
+// 旧设计的 B05 不变量（「快照末序号 == 注册序号」，靠一次持锁的
+// 「取补发快照 + 注册订阅」保证）随补发路径一起移除：现在断线即重建，
+// 重连后由客户端重读历史与状态，不重放事件。这里验证的是新契约里
+// 仍然成立的那部分——注册之后的事件必须能收到，且序号从注册点接续。
+func Test订阅注册后的事件必达(t *testing.T) {
 	m, cwd := newTestManager(t)
 	ctx := context.Background()
 	w, err := m.Start(ctx, "", cwd)
 	if err != nil {
 		t.Fatal(err)
 	}
-	// 先发一批事件，让补发环里有内容。
+	// 先发一批事件，证明「注册前的历史事件不会补发」。
 	for i := 0; i < 3; i++ {
 		if err := w.Prompt(ctx, "hi", "", nil); err != nil {
 			t.Fatal(err)
@@ -369,22 +373,19 @@ func Test订阅与补发原子化(t *testing.T) {
 	}
 	waitSeq(t, w, 3)
 	info := w.Info()
+	if info.Epoch == "" || info.Seq == 0 {
+		t.Fatalf("订阅快照应带 epoch 与 seq: %+v", info)
+	}
 
-	// 带游标订阅：必须同时拿到快照与已注册的订阅。
-	sub, _, items, ok, err := w.SubscribeWithReplay(info.Epoch, info.Seq, true)
-	if err != nil || !ok {
-		t.Fatalf("带游标订阅失败: %v %v", ok, err)
+	sub, snap, err := w.Subscribe()
+	if err != nil {
+		t.Fatal(err)
 	}
 	defer sub.Close()
-	// B05 的不变量是「快照末序号 == 注册序号」：订阅起点之后的都要补发，
-	// 之前的一条也不补。取 Info 与订阅之间可能恰好又来了一条事件，
-	// 那不是缺陷——所以这里校验的不是「一条都没有」，而是「一条都不早于 afterSeq」。
-	for _, item := range items {
-		if item.Seq <= info.Seq {
-			t.Fatalf("补发里出现了 afterSeq 之前的旧事件: seq=%d afterSeq=%d", item.Seq, info.Seq)
-		}
+	if snap.Epoch != info.Epoch {
+		t.Fatalf("同一进程的 epoch 应一致: %q -> %q", info.Epoch, snap.Epoch)
 	}
-	// 注册之后发布的事件必须能收到：这就是窗口期要堵住的部分。
+	// 注册之后发布的事件必须能收到：这是新契约的核心。
 	if err := w.Prompt(ctx, "after", "", nil); err != nil {
 		t.Fatal(err)
 	}
@@ -392,41 +393,16 @@ func Test订阅与补发原子化(t *testing.T) {
 	if len(got) == 0 {
 		t.Fatal("订阅注册后发布的事件没有送达")
 	}
-
-	// 从更早的游标订阅：快照与实时流必须连续，不能有缺口。
-	sub2, _, items2, ok, err := w.SubscribeWithReplay(info.Epoch, 0, true)
-	if err != nil || !ok {
-		t.Fatalf("补发订阅失败: %v %v", ok, err)
-	}
-	defer sub2.Close()
-	if len(items2) == 0 {
-		t.Fatal("从序号 0 订阅应拿到补发内容")
-	}
-	last := items2[len(items2)-1]
-	if err := w.Prompt(ctx, "next", "", nil); err != nil {
-		t.Fatal(err)
-	}
-	live := drain(sub2, 1)
-	if len(live) == 0 {
-		t.Fatal("补发后的实时事件没有送达")
-	}
-	if live[0].Seq <= last.Seq {
-		t.Fatalf("实时事件序号未接续: 快照末条 %d，实时首条 %d", last.Seq, live[0].Seq)
+	if got[0].Seq <= snap.Seq {
+		t.Fatalf("实时事件序号未从注册点接续: 注册 %d，首条 %d", snap.Seq, got[0].Seq)
 	}
 }
 
-// Test补发与实时流无序号缺口 是 B05 的反例。
-//
-// 关键不变量：一次持锁内「取补发快照 + 注册订阅」时，快照末序号必须等于
-// 注册时刻返回的序号。若拆成两次加锁，两次锁之间发布的事件会落在
-// 「快照已结束、订阅未注册」的真空里，重连后静默丢失。
-//
-// 窗口只有几微秒，单轮未必命中，因此循环多轮，漏检概率随轮数指数下降。
-func Test补发与实时流无序号缺口(t *testing.T) {
-	// 30 轮发布循环在并行负载下会跑过默认的 150ms 空闲回收窗口，
-	// worker 被回收后订阅返回 worker_exited（实测 15 轮里偶发一次）。
-	// 这里只需要 worker 在循环期间活着，回收本身由别的测试覆盖。
-	m, cwd := newTestManager(t, func(c *Config) { c.IdleTimeout = 10 * time.Second })
+// Test订阅不补发历史事件 是重设计的判定点：注册前发布的事件**不**重放。
+// 客户端若需要注册前的内容，必须重读持久历史——这正是「断线即重建」的
+// 前提，若这里悄悄补发，前端就会以为实时流可以续上，回到旧的复杂度。
+func Test订阅不补发历史事件(t *testing.T) {
+	m, cwd := newTestManager(t)
 	ctx := context.Background()
 	w, err := m.Start(ctx, "", cwd)
 	if err != nil {
@@ -436,73 +412,22 @@ func Test补发与实时流无序号缺口(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitSeq(t, w, 1)
-
-	for round := 0; round < 30; round++ {
-		stop := make(chan struct{})
-		started := make(chan struct{})
-		done := make(chan struct{})
-		go func() {
-			defer close(done)
-			// 发布量必须低于补发环与订阅队列上限；此测试只验证注册
-			// 窗口期，不应把正常的超限/背压淘汰误判为事件遗漏。
-			for sent := 0; sent < 16; sent++ {
-				select {
-				case <-stop:
-					return
-				default:
-				}
-				w.mu.Lock()
-				w.publishLocked("pi.event", map[string]any{"type": "probe"})
-				w.mu.Unlock()
-				select {
-				case started <- struct{}{}:
-				default:
-				}
-				time.Sleep(100 * time.Microsecond)
-			}
-		}()
-		<-started
-		before := w.Info().Seq
-
-		// 以当前序号为游标订阅：正确实现下补发为空，且返回序号应仍是 before。
-		sub, info, items, ok, err := w.SubscribeWithReplay(w.Info().Epoch, before, true)
-		close(stop)
-		<-done
-		if err != nil || !ok {
-			t.Fatalf("第 %d 轮订阅失败: %v %v", round, ok, err)
-		}
-		// 这就是 B05 的判定点，且与是否并发无关：
-		// 快照末条序号必须等于注册时刻返回的序号。若取快照与注册分成两次加锁，
-		// 两次锁之间发布的事件会让 info.Seq 越过快照末序号，那些事件就此丢失。
-		if len(items) > 0 {
-			if last := items[len(items)-1].Seq; last != info.Seq {
-				sub.Close()
-				t.Fatalf("第 %d 轮快照末序号 %d 与注册序号 %d 不一致：窗口内的 %d 个事件既不在快照也不在实时流", round, last, info.Seq, info.Seq-last)
-			}
-		} else if info.Seq != before {
-			sub.Close()
-			t.Fatalf("第 %d 轮无补发内容但注册序号 %d 大于游标 %d：窗口内的事件已丢失", round, info.Seq, before)
-		}
-		// 顺带验证实时流从注册点之后连续。
-		final := w.Info().Seq
-		if final > info.Seq {
-			msg, err := sub.Next(ctx)
-			if err != nil {
-				sub.Close()
-				t.Fatalf("第 %d 轮读取实时事件失败: %v", round, err)
-			}
-			if msg.Seq != info.Seq+1 {
-				sub.Close()
-				t.Fatalf("第 %d 轮实时流序号不连续：期望 %d，实际 %d", round, info.Seq+1, msg.Seq)
-			}
-		}
-		sub.Close()
+	sub, _, err := w.Subscribe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sub.Close()
+	// 注册前已有事件在序号里，但队列里不该有任何一条。
+	select {
+	case msg := <-sub.ch:
+		t.Fatalf("订阅不应补发注册前的事件，实际收到 seq=%d", msg.message.Seq)
+	default:
 	}
 }
 
-// Test补发失败不留下半套状态 覆盖 B05 的反向边界：
-// 补发环淘汰了所需序号时必须整体失败，不能注册了订阅却让客户端以为能续上。
-func Test补发失败不留下半套状态(t *testing.T) {
+// Test订阅配额与失败不占位 覆盖订阅的边界：epoch 不再参与订阅（无补发），
+// 但配额上限仍然生效，且失败的订阅不得占用配额。
+func Test订阅配额与失败不占位(t *testing.T) {
 	m, cwd := newTestManager(t)
 	ctx := context.Background()
 	w, err := m.Start(ctx, "", cwd)
@@ -510,18 +435,17 @@ func Test补发失败不留下半套状态(t *testing.T) {
 		t.Fatal(err)
 	}
 	before := w.SubscriberCount()
-	if _, _, _, ok, err := w.SubscribeWithReplay("bogus-epoch", 0, true); ok || err != nil {
-		t.Fatalf("epoch 不匹配应整体失败: ok=%v err=%v", ok, err)
+	sub, _, err := w.Subscribe()
+	if err != nil {
+		t.Fatal(err)
 	}
-	if got := w.SubscriberCount(); got != before {
-		t.Fatalf("失败的订阅不应占用配额: %d -> %d", before, got)
-	}
-	// 无游标的普通订阅不受影响。
-	sub, _, _, ok, err := w.SubscribeWithReplay("", 0, false)
-	if err != nil || !ok {
-		t.Fatalf("普通订阅失败: %v %v", ok, err)
+	if got := w.SubscriberCount(); got != before+1 {
+		t.Fatalf("成功的订阅应占用一份配额: %d -> %d", before, got)
 	}
 	sub.Close()
+	if got := w.SubscriberCount(); got != before {
+		t.Fatalf("关闭后应释放配额: %d -> %d", before, got)
+	}
 }
 
 // waitSeq 等到 worker 的序号至少达到 want。

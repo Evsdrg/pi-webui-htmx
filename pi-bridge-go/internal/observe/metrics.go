@@ -54,8 +54,6 @@ type Metrics struct {
 	commandsFailed  atomic.Uint64
 	eventsTotal     atomic.Uint64
 	eventsDropped   atomic.Uint64
-	replayTotal     atomic.Uint64
-	replayMisses    atomic.Uint64
 	workersStarted  atomic.Uint64
 	workersReaped   atomic.Uint64
 	workersExited   atomic.Uint64
@@ -112,15 +110,10 @@ func (x *Metrics) CommandFailed(method, code string) {
 // EventPublished 记录一次事件投递。
 func (x *Metrics) EventPublished() { x.eventsTotal.Add(1) }
 
-// EventDropped 记录一次因订阅者过慢而被丢弃的事件。
+// EventDropped 记录一次被丢弃的事件：慢订阅者积压时的可丢增量帧，或
+// 权威帧超上限导致的订阅终止。两者都计入同一计数，区分靠日志里的原因。
 // 同时实现 runtime.MetricsSink，避免 runtime 反向依赖本包。
 func (x *Metrics) EventDropped() { x.eventsDropped.Add(1) }
-
-// ReplayHit 记录一次补发。
-func (x *Metrics) ReplayHit() { x.replayTotal.Add(1) }
-
-// ReplayMiss 记录一次补发失败。
-func (x *Metrics) ReplayMiss() { x.replayMisses.Add(1) }
 
 // WorkerStarted 记录工作进程启动。
 func (x *Metrics) WorkerStarted() { x.workersStarted.Add(1) }
@@ -158,8 +151,6 @@ func (x *Metrics) Snapshot() map[string]any {
 		"commandsFailed":  x.commandsFailed.Load(),
 		"eventsTotal":     x.eventsTotal.Load(),
 		"eventsDropped":   x.eventsDropped.Load(),
-		"replayTotal":     x.replayTotal.Load(),
-		"replayMisses":    x.replayMisses.Load(),
 		"workersStarted":  x.workersStarted.Load(),
 		"workersReaped":   x.workersReaped.Load(),
 		"workersExited":   x.workersExited.Load(),
