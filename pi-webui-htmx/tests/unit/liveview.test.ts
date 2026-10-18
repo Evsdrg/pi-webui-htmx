@@ -109,6 +109,39 @@ describe('实时思考的 markdown 渲染', () => {
   });
 });
 
+describe('实时思考块的标题', () => {
+  // 实时层的思考正文此前只有一条左导线，没有标题行——和工作段标题
+  // （「思考中… · N 次工具调用」）不是一回事，用户看到的是「丢标题」。
+  // 历史层每块都有「思考 · 持续了 N 秒」，两侧应当同构。
+  it('思考块带自己的标题行，且与正文同属一块', () => {
+    const root = mount();
+    const view = new LiveView(root);
+    view.begin();
+    view.event({ type: 'message_update', assistantMessageEvent: { type: 'thinking_delta', delta: '第一步：先看目录' } });
+    const block = root.querySelector('.live-think')?.closest('details.thinking-block') ?? null;
+    expect(block).not.toBeNull();
+    expect(block?.querySelector('summary')?.textContent).toContain('思考');
+    // 后续增量仍落在同一标题下的正文里。
+    view.event({ type: 'message_update', assistantMessageEvent: { type: 'thinking_delta', delta: '，再看文件' } });
+    expect(root.querySelectorAll('details.thinking-block').length).toBe(1);
+    expect(root.querySelector('.live-think')?.textContent).toContain('再看文件');
+    root.remove();
+  });
+
+  it('相邻工具调用之间出现新思考时另起一块并带新标题', () => {
+    const root = mount();
+    const view = new LiveView(root);
+    view.begin();
+    view.event({ type: 'message_update', assistantMessageEvent: { type: 'thinking_delta', delta: '甲' } });
+    view.event({ type: 'tool_execution_start', toolName: 'bash', toolCallId: 'c1', args: { command: 'ls' } });
+    view.event({ type: 'message_update', assistantMessageEvent: { type: 'thinking_delta', delta: '乙' } });
+    const blocks = root.querySelectorAll('details.thinking-block');
+    expect(blocks.length).toBe(2);
+    expect([...blocks].every(b => b.querySelector('summary')?.textContent?.includes('思考'))).toBe(true);
+    root.remove();
+  });
+});
+
 describe('实时过程摘要与时间线', () => {
   it('工作段运行中展开，仍显示当前动作，思考预览每 1500ms 尾沿更新', () => {
     vi.useFakeTimers();

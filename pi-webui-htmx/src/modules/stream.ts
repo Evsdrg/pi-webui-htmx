@@ -425,25 +425,47 @@ export class LiveView {
     // 只含空白的增量不建块：模型偶尔先发一串换行/空格。CSS 用 :empty 隐藏
     // 空块，而空白文本让元素「非空」，于是渲染成一条带左边框、没有文字的
     // 空线（2026-10-18 用户截图）。已有块时照常追加，空白留在原文里不影响。
-    let pre = work.items.lastElementChild;
-    const hasBlock = pre instanceof HTMLPreElement && pre.classList.contains('live-think');
-    if (!hasBlock) {
+    //
+    // 每块自带标题行（与历史侧的「思考 · 持续了 N 秒」同构）：此前实时层的
+    // 思考正文只是一条无标题的竖线，看起来像「标题丢了」——工作段标题描述的是
+    // 整段工作，替每一块思考说话会让人分不清哪段是哪段。
+    let block = work.items.lastElementChild;
+    if (!(block instanceof HTMLDetailsElement) || !block.classList.contains('live-think-block')) {
       if (!delta.trim()) return;
-      pre = document.createElement('pre'); pre.className = 'live-think markdown thinking-md'; work.items.append(pre);
-      this.thinkEl = pre as HTMLPreElement; this.thinkRaw = ''; this.thinkRenderedFor = -1;
+      block = this.createThinkingBlock();
+      work.items.append(block);
+      this.thinkEl = null; this.thinkRaw = ''; this.thinkRenderedFor = -1;
+    }
+    let pre = this.thinkEl;
+    if (!pre || !pre.isConnected || !block.contains(pre)) {
+      pre = block.querySelector<HTMLPreElement>('.live-think');
+      if (!pre) { pre = document.createElement('pre'); pre.className = 'live-think markdown thinking-md'; block.append(pre); }
+      this.thinkEl = pre; this.thinkRenderedFor = -1;
     }
     if (this.thinkingChars >= THINKING_LIMIT) return;
     const part = delta.slice(0, THINKING_LIMIT - this.thinkingChars);
     this.thinkingChars += part.length;
-    if (this.thinkEl !== pre) { this.thinkEl = pre as HTMLPreElement; this.thinkRenderedFor = -1; }
     // 源必须自己留着：渲染后 DOM 里是富文本，反读 textContent 会丢掉 `**` 等记号。
     this.thinkRaw += part;
     // 尚未渲染过时按旧路径增量追加文本节点（避免每个 delta 整段重写）；
     // 已渲染过则保持富文本不动，等节流尾沿整段重渲——与正文段同一策略。
     if (this.thinkRenderedFor < 0 || this.thinkRaw.length > LIVE_MARKDOWN_LIMIT) {
-      (pre as HTMLPreElement).append(document.createTextNode(part));
+      pre.append(document.createTextNode(part));
     }
     this.scheduleThinkMarkdown();
+  }
+  // createThinkingBlock 建一个带标题行的思考块：标题与历史侧同款
+  // （图标 + 「思考」），正文容器挂 markdown 渲染钩子。
+  // 图标与文案都由 CSS ::before 生成：这段代码在首屏包里，预算余量已见底，
+  // 少建两个元素就是少几十字节。summary 为空壳，只承担折叠/展开与左对齐。
+  private createThinkingBlock(): HTMLDetailsElement {
+    const block = document.createElement('details');
+    block.className = 'thinking-block live-think-block';
+    block.open = true;
+    const summary = document.createElement('summary');
+    summary.textContent = '思考';
+    block.append(summary);
+    return block;
   }
   private scheduleThinkMarkdown(): void {
     if (this.thinkTimer !== undefined) return;

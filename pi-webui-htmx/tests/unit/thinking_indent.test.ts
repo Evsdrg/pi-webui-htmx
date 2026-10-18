@@ -25,3 +25,17 @@ describe('思考块展开后的横向对齐', () => {
     expect(declarations('.thinking-block')).toMatch(/display:\s*flex/);
   });
 });
+
+// 截图里的「行距过大」不是 line-height 的问题：思考块的 markdown 渲染产物
+// 被 .live .live-think 的 white-space:pre-wrap（特异性 0,2,0）压过了
+// .thinking-md 的 normal（0,1,0），HTML 里每个换行符变成可见空行。
+describe('思考块渲染后的空白处理', () => {
+  it('markdown 容器的 white-space 必须是 normal，且不被更高特异性覆盖', () => {
+    expect(declarations('.thinking-md')).toMatch(/white-space:\s*normal/);
+    // pre-wrap 只允许留在纯文本路径上；带 markdown 的容器不能再命中它。
+    const preWrap = rules
+      .filter((m) => /white-space:\s*pre-wrap/.test(m[2]))
+      .map((m) => m[1].trim());
+    expect(preWrap.some((sel) => sel.includes('.live .live-think') && !sel.includes('.thinking-md'))).toBe(false);
+  });
+});

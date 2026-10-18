@@ -237,6 +237,7 @@ kbd { font-size:10px; color:var(--text-dim); margin-left:auto; }
 .thinking-block[open] > summary { margin-bottom:2px; }
 /* 图标保持最浅一档常色：ZCode 的思考图标不随展开变色，层级交给文本。 */
 .thinking-block .thinking-icon { flex:0 0 auto; color:var(--text-dim); }
+.live .live-think-block > summary { font-size:11px; color:var(--text-muted); cursor:pointer; }
 .thinking-block .thinking-preview { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .thinking-block[open] .thinking-preview { display:none; }
 .thinking-block .thinking-body { min-width:0; color:var(--text-muted); }
@@ -269,7 +270,10 @@ kbd { font-size:10px; color:var(--text-dim); margin-left:auto; }
 .live .live-think:empty, .live .live-items:empty { display:none; }
 /* 思考正文（流式全量）：左导线 + 缩进，正文字体而非等宽——长段自然语言
    在等宽下不可读；结构与 ZCode 的 reasoning 内容一致（无底色、细导线）。 */
-.live .live-think { max-height:160px; overflow:auto; margin:0 0 0 8px; padding:2px 0 2px 14px; border-left:1px solid var(--border); white-space:pre-wrap; overflow-wrap:anywhere; color:var(--text-muted); font:12px/1.6 system-ui,"Noto Sans CJK SC",sans-serif; }
+/* 正文始终走 markdown（.thinking-md），white-space 交给它：这里若留
+   pre-wrap，特异性 0,2,0 会压过 .thinking-md 的 normal（0,1,0），渲染产物
+   HTML 里的换行符就变成一个个可见空行——截图里「行距过大」的真正来源。 */
+.live .live-think { max-height:160px; overflow:auto; margin:0 0 0 8px; padding:2px 0 2px 14px; border-left:1px solid var(--border); overflow-wrap:anywhere; color:var(--text-muted); font:12px/1.6 system-ui,"Noto Sans CJK SC",sans-serif; }
 @keyframes blink { 50% { opacity:0; } }
 /* 运行中最新一段工作的标题做扫光（ZCode 用渐变文字表达「还在进行」）：
    它是有含义的活动信号，不是装饰。只在用户未要求减少动效时启用。 */
