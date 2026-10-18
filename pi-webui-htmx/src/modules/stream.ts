@@ -413,12 +413,18 @@ export class LiveView {
     else if (this.previewTimer === undefined) this.previewTimer = setTimeout(() => this.showPreview(), 1500 - elapsed);
     // 思考全文接着上一段写；中间出现工具行时另起一段（与历史侧同构，
     // 保持「时间戳 − 时长 → 时间戳」的先后可读）。
+    //
+    // 只含空白的增量不建块：模型偶尔先发一串换行/空格。CSS 用 :empty 隐藏
+    // 空块，而空白文本让元素「非空」，于是渲染成一条带左边框、没有文字的
+    // 空线（2026-10-18 用户截图）。已有块时照常追加，空白留在原文里不影响。
     let pre = work.items.lastElementChild;
-    if (!(pre instanceof HTMLPreElement) || !pre.classList.contains('live-think')) {
+    const hasBlock = pre instanceof HTMLPreElement && pre.classList.contains('live-think');
+    if (!hasBlock) {
+      if (!delta.trim()) return;
       pre = document.createElement('pre'); pre.className = 'live-think'; work.items.append(pre);
     }
     if (this.thinkingChars >= THINKING_LIMIT) return;
     const part = delta.slice(0, THINKING_LIMIT - this.thinkingChars);
-    pre.append(document.createTextNode(part)); this.thinkingChars += part.length;
+    (pre as HTMLPreElement).append(document.createTextNode(part)); this.thinkingChars += part.length;
   }
 }

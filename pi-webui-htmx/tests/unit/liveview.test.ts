@@ -50,6 +50,22 @@ describe('实时思考增量', () => {
     root.remove();
   });
 
+  // 2026-10-18 用户截图：一条只有竖线、没有文字的空块。
+  // 模型偶尔只发换行/空格的 thinking_delta；这类增量不该建出思考块，
+  // 否则 .live-think 非空（躲过 :empty）却只有空白，左侧竖线就成了一条空线。
+  it('纯空白思考增量不建空块', () => {
+    const root = mount();
+    const view = new LiveView(root);
+    view.begin();
+    view.event({ type: 'message_update', assistantMessageEvent: { type: 'thinking_delta', delta: '\n\n  ' } });
+    expect(root.querySelector('.live-think')).toBeNull();
+    // 先来空白、再来真内容：仍能正常建块并只含真内容。
+    view.event({ type: 'message_update', assistantMessageEvent: { type: 'thinking_delta', delta: '正文' } });
+    const el = root.querySelector('.live-think');
+    expect(el?.textContent).toBe('正文');
+    root.remove();
+  });
+
   it('超过上限后停止追加', () => {
     const root = mount();
     const view = new LiveView(root);
