@@ -50,6 +50,9 @@ type scanSlot struct {
 	// complete 表示这格索引覆盖了整个文件。false 时它只是尾部窗口，
 	// 取页取到窗口边界就必须退回升到全扫（见 scanTail 的说明）。
 	complete bool
+	// capped 表示扫描按 Entries 条数封顶：索引只含最新的 Entries 条。
+	// 取页到边界是「更早不可达」，不能退全扫（见 historyPage）。
+	capped bool
 	// bytes 是 nodes 的粗略字节估计，用于有界控制与诊断。
 	bytes int
 	used  uint64
@@ -57,8 +60,8 @@ type scanSlot struct {
 
 const (
 	// maxCachedNodes 限制单格缓存能占的节点数。
-	// 100000 正是 DefaultLimits().Entries 的上限——超过它 History 本来就会拒绝，
-	// 所以缓存到这么大已经没有意义。
+	// 与 DefaultLimits().Entries 的上限同量级：更大的封顶索引占内存太多，
+	// 不值得常驻（16 MB 上限本身也会把它挡住）。
 	maxCachedNodes = 100000
 
 	// maxCachedBytes 是单格的内存上界。一个 node 约 40 字节实际占用
@@ -84,11 +87,11 @@ func (c *scanCache) slotCount() int {
 // get 返回缓存的扫描结果。路径、大小、mtime 与文件身份全部匹配才算命中。
 // 命中时返回的 map 归调用方只读，不得修改。
 // complete 表示这格索引是否覆盖整个文件。
-func (c *scanCache) get(path string, size, mtime int64) (map[string]node, string, bool, bool) {
+func (c *scanCache) get(path string, size, mtime int64) (map[string]node, string, bool, bool, bool) {
 	// 取不到文件身份时不能命中：宁可多扫一次，也不能用旧索引。
 	dev, ino, ok := fileIdentity(path)
 	if !ok {
-		return nil, "", false, false
+		return nil, "", false, false, false
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -102,14 +105,14 @@ func (c *scanCache) get(path string, size, mtime int64) (map[string]node, string
 		}
 		c.clock++
 		s.used = c.clock
-		return s.nodes, s.last, s.complete, true
+		return s.nodes, s.last, s.complete, s.capped, true
 	}
-	return nil, "", false, false
+	return nil, "", false, false, false
 }
 
-// put 写入缓存。超过上界时不缓存，直接返回——
-// 那种规模的会话 History 也会因 Entries 上限而拒绝，缓存无意义。
-func (c *scanCache) put(path string, size, mtime int64, nodes map[string]node, last string, complete bool) {
+// put 写入缓存。超过上界时不缓存，直接返回——超大会话的索引留在堆上
+// 不受预算约束，风险与收益不成比例（封顶索引也一样按节点数把关）。
+func (c *scanCache) put(path string, size, mtime int64, nodes map[string]node, last string, complete, capped bool) {
 	if len(nodes) > maxCachedNodes {
 		return
 	}
@@ -125,7 +128,7 @@ func (c *scanCache) put(path string, size, mtime int64, nodes map[string]node, l
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.clock++
-	slot := scanSlot{path: path, size: size, mtime: mtime, dev: dev, ino: ino, nodes: nodes, last: last, complete: complete, bytes: est, used: c.clock}
+	slot := scanSlot{path: path, size: size, mtime: mtime, dev: dev, ino: ino, nodes: nodes, last: last, complete: complete, capped: capped, bytes: est, used: c.clock}
 	replaced := false
 	for i := range c.slots {
 		// 同一文件只占一格：尺寸变了就是新版本，替换掉旧的。

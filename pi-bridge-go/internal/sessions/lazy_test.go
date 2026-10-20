@@ -292,7 +292,7 @@ func Test窗口外旧条目展开建完整索引(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, _, complete, ok := store.scan.get(path, st.Size(), st.ModTime().UnixNano())
+	_, _, complete, _, ok := store.scan.get(path, st.Size(), st.ModTime().UnixNano())
 	if !ok {
 		t.Fatal("第一次展开后应有扫描缓存")
 	}

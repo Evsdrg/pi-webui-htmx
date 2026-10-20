@@ -188,24 +188,28 @@ func (s *Store) rawEntry(ctx context.Context, id, entryID string) (json.RawMessa
 	if err != nil {
 		return nil, "", protocol.E("pi_error", "无法读取会话文件")
 	}
-	if !st.Mode().IsRegular() || st.Size() > s.limits.FileBytes {
-		return nil, "", fileTooLargeError("历史文件", st.Size(), s.limits.FileBytes)
+	if !st.Mode().IsRegular() {
+		return nil, "", protocol.E("invalid_history", "历史文件不是常规文件")
 	}
+	// 不检查 FileBytes：这里只按索引读单条记录（ReadAt），与文件总体积无关。
 	mtime := st.ModTime().UnixNano()
 	// 与 History 用同一个缓存键（绝对路径），两边才能互相命中。
-	nodes, _, complete, scanErr := s.scanNodes(ctx, h, f, st.Size(), mtime, 1)
+	nodes, _, complete, capped, scanErr := s.scanNodes(ctx, h, f, st.Size(), mtime, 1)
 	if scanErr == nil {
 		if target, ok := nodes[entryID]; ok && target.size > 0 {
 			if msg, role, ok := s.readIndexed(f, target, entryID); ok {
 				return msg, role, nil
 			}
-		} else if complete {
-			// 完整索引里没有这个条目：与线性扫描得到同样的结论，且不必再扫。
+		} else if complete || capped {
+			// 完整索引（或按条数封顶的索引）里没有这个条目：封顶索引只含
+			// 最新的 Entries 条，更早的条目即使存在也不可读，同样按
+			// 「条目不存在」结论——不必再为它全扫一次（全扫也只会报错）。
 			return nil, "", protocol.E("not_found", "条目不存在")
 		}
 	}
 	// 窗口未命中：全扫一次建完整索引（失败说明文件有问题，交给线性兜底）。
-	if scanErr == nil {
+	// 封顶索引不退全扫：它已含全部可读条目，全扫同样超 Entries 上限。
+	if scanErr == nil && !capped {
 		if full, _, fullErr := s.scanFullAll(ctx, h, f, st.Size(), mtime); fullErr == nil {
 			if target, ok := full[entryID]; ok {
 				if msg, role, ok := s.readIndexed(f, target, entryID); ok {

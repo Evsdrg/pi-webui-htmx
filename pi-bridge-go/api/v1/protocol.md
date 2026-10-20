@@ -12,7 +12,7 @@
 | `POST /api/v1/auth` | Bearer 换 Cookie |
 | `GET /api/v1/capabilities` | 版本、方法、能力、限额；限额来自运行时配置（终端数量/空闲秒数跟随 `--max-terminals`/`--terminal-idle`），不再有写死的阶段字段 |
 | `GET /api/v1/sessions?limit=50&offset=0&cwd=/path` | 磁盘会话目录，不启动 worker；`cwd` 非空时只返回该工作区的会话，并由 `cwds` 给出可选工作区与计数 |
-| `GET /api/v1/sessions/{id}/history?limit=50&before=ENTRY&leafId=LEAF` | 所选持久分支历史，不启动 worker |
+| `GET /api/v1/sessions/{id}/history?limit=200&before=ENTRY&leafId=LEAF` | 所选持久分支历史，不启动 worker；limit 缺省 200，上限 200 |
 | `GET /api/v1/ws` | 文本 JSON 命令/响应/事件 |
 | `/`、`/assets/*`、`/ui/*` | 配置 `--ui-dir` 后的模板、资产和片段 |
 

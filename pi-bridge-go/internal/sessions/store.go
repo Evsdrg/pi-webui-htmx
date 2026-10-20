@@ -37,7 +37,7 @@ type Limits struct {
 // 本机实际最大的会话是 86.8 MB（跑了几周的 CLI 会话）——原先的 64 MiB
 // 上限把它挡在外面，用户点开只看到一句「超过体积上限」，完全无法浏览；
 // 而扫描它只花 125 ms，属于得不偿失的过度保守。
-func DefaultLimits() Limits { return Limits{256 << 20, 8 << 20, 2 << 20, 100000, 10000} }
+func DefaultLimits() Limits { return Limits{2 << 30, 8 << 20, 8 << 20, 100000, 10000} }
 
 // Store 通过 os.Root 访问受管会话目录，防止路径穿越与符号链接逃逸。
 // 列表与查找走内存索引，历史读取按需解析单个文件。
@@ -396,13 +396,17 @@ type ModelRef struct {
 
 // Page 是一页按祖先到后代排序的历史记录。
 type Page struct {
-	SessionID       string            `json:"sessionId"`
-	LeafID          string            `json:"leafId"`
-	LeafSource      string            `json:"leafSource"`
-	Entries         []json.RawMessage `json:"entries"`
-	OldestEntryID   string            `json:"oldestEntryId"`
-	HasMore         bool              `json:"hasMore"`
-	HistoricalModel *ModelRef         `json:"historicalModel,omitempty"`
+	SessionID     string            `json:"sessionId"`
+	LeafID        string            `json:"leafId"`
+	LeafSource    string            `json:"leafSource"`
+	Entries       []json.RawMessage `json:"entries"`
+	OldestEntryID string            `json:"oldestEntryId"`
+	HasMore       bool              `json:"hasMore"`
+	// IndexCapped 表示会话条目数超过索引上限（Entries），已翻到「更早不可达」
+	// 的边界：HasMore=false 且这一页就是能看到的全部。与「没有更早历史」
+	// （同样 HasMore=false）必须区分，前端对后者静默、对前者要说明原因。
+	IndexCapped     bool      `json:"indexCapped,omitempty"`
+	HistoricalModel *ModelRef `json:"historicalModel,omitempty"`
 }
 
 // Listing 是会话目录分页结果。
@@ -591,20 +595,20 @@ type node struct {
 // 否则全扫一次并写入缓存。History、惰性读取与磁盘树共用它（O03/O04）。
 // scanNodes 返回可用于取页的索引。
 //
-// 先查缓存；未命中只扫尾部窗口（快），并告知窗口是否覆盖整个文件。
-// 窗口不够时由调用方走 scanFullAll。
-func (s *Store) scanNodes(ctx context.Context, h Header, f *os.File, size, mtime int64, minNodes int) (map[string]node, string, bool, error) {
+// 先查缓存；未命中只扫尾部窗口（快），并告知窗口是否覆盖整个文件、
+// 是否按条数封顶。窗口不够时由调用方走 scanFullAll。
+func (s *Store) scanNodes(ctx context.Context, h Header, f *os.File, size, mtime int64, minNodes int) (map[string]node, string, bool, bool, error) {
 	// 缓存键用绝对路径：索引里存的是相对路径。
 	abs := filepath.Join(s.dir, filepath.FromSlash(h.path))
-	if nodes, last, complete, ok := s.scan.get(abs, size, mtime); ok {
-		return nodes, last, complete, nil
+	if nodes, last, complete, capped, ok := s.scan.get(abs, size, mtime); ok {
+		return nodes, last, complete, capped, nil
 	}
-	nodes, last, complete, err := s.scanTail(ctx, f, size, h.ID, h.Cwd, minNodes)
+	nodes, last, complete, capped, err := s.scanTail(ctx, f, size, h.ID, h.Cwd, minNodes)
 	if err != nil {
-		return nil, "", false, err
+		return nil, "", false, false, err
 	}
-	s.scan.put(abs, size, mtime, nodes, last, complete)
-	return nodes, last, complete, nil
+	s.scan.put(abs, size, mtime, nodes, last, complete, capped)
+	return nodes, last, complete, capped, nil
 }
 
 // scanFullAll 全量扫描并缓存（记为 complete）。
@@ -615,7 +619,7 @@ func (s *Store) scanFullAll(ctx context.Context, h Header, f *os.File, size, mti
 	if err != nil {
 		return nil, "", err
 	}
-	s.scan.put(abs, size, mtime, nodes, last, true)
+	s.scan.put(abs, size, mtime, nodes, last, true, false)
 	return nodes, last, nil
 }
 
@@ -639,9 +643,13 @@ func (s *Store) History(ctx context.Context, id, leaf, before string, limit int)
 	if err != nil {
 		return Page{}, err
 	}
-	if !st.Mode().IsRegular() || st.Size() > s.limits.FileBytes {
-		return Page{}, fileTooLargeError("历史文件", st.Size(), s.limits.FileBytes)
+	if !st.Mode().IsRegular() {
+		return Page{}, protocol.E("invalid_history", "历史文件不是常规文件")
 	}
+	// 不再检查 FileBytes：这条路径是「倒着读」——尾扫 4 MiB 窗口起步、
+	// 按需扩到 32 MiB，与文件总体积无关。为深翻页时才发生的全扫在门口
+	// 拒掉整条路径，代价是用户完全看不到内容（B 系列同款教训的根源）。
+	// 全扫前的天花板检查在下方退化分支里。
 	// 先把尾部窗口建出来（未命中缓存时只读最后几 MiB），首页与相邻翻页
 	// 都落在窗口内；窗口不够用（要看的页比窗口更早）时才退到全扫。
 	//
@@ -649,23 +657,34 @@ func (s *Store) History(ctx context.Context, id, leaf, before string, limit int)
 	// 多要几十条比全扫便宜几个数量级。
 	mtime := st.ModTime().UnixNano()
 	want := limit + 64
-	nodes, last, complete, err := s.scanNodes(ctx, h, f, st.Size(), mtime, want)
+	nodes, last, complete, capped, err := s.scanNodes(ctx, h, f, st.Size(), mtime, want)
 	if err != nil {
 		return Page{}, err
 	}
-	page, ok, err := s.historyPage(ctx, f, id, leaf, before, limit, nodes, last, complete)
+	page, ok, err := s.historyPage(ctx, f, id, leaf, before, limit, nodes, last, complete, capped)
 	if err != nil {
 		return Page{}, err
 	}
 	if ok {
 		return page, nil
 	}
+	if capped {
+		// 尾扫已按条数封顶：取到边界说明更早的历史不可浏览。
+		// 不能退全扫——全扫同样超 Entries 上限，只会以错误告终。
+		return Page{}, protocol.E("limit_exceeded",
+			fmt.Sprintf("历史条目数超过 %d 条上限，更早的历史不可浏览", s.limits.Entries))
+	}
 	// 窗口不够：全扫一次，之后这份完整索引会进缓存。
+	// 全扫要顺序读完整个文件，这里保留天花板（默认 2 GiB）：首页永远
+	// 不受影响，只有「翻到比尾部窗口更早的历史」才可能碰上。
+	if st.Size() > s.limits.FileBytes {
+		return Page{}, fileTooLargeError("历史文件", st.Size(), s.limits.FileBytes)
+	}
 	nodes, last, err = s.scanFullAll(ctx, h, f, st.Size(), mtime)
 	if err != nil {
 		return Page{}, err
 	}
-	page, _, err = s.historyPage(ctx, f, id, leaf, before, limit, nodes, last, true)
+	page, _, err = s.historyPage(ctx, f, id, leaf, before, limit, nodes, last, true, false)
 	return page, err
 }
 
@@ -674,7 +693,12 @@ func (s *Store) History(ctx context.Context, id, leaf, before string, limit int)
 // 返回 ok=false 表示这份索引不足以回答这次请求（尾部窗口不够早），
 // 调用方应用完整索引重试；complete 为真时不会出现 ok=false——
 // 那时「找不到叶子」「游标不在分支上」都是真实的业务错误，直接返回。
-func (s *Store) historyPage(ctx context.Context, f *os.File, id, leaf, before string, limit int, nodes map[string]node, last string, complete bool) (Page, bool, error) {
+//
+// capped 为真时索引只含最新的 Entries 条：取页撞到边界不再是「退全扫」
+// （全扫同样超上限，只会报错），而是「更早不可达」——干净收页并标记
+// Page.IndexCapped。可能一页都取不出：before 恰好是索引里最旧一条时，
+// 它的父条目已不在索引内。
+func (s *Store) historyPage(ctx context.Context, f *os.File, id, leaf, before string, limit int, nodes map[string]node, last string, complete, capped bool) (Page, bool, error) {
 	if leaf == "" {
 		leaf = last
 	}
@@ -691,7 +715,7 @@ func (s *Store) historyPage(ctx context.Context, f *os.File, id, leaf, before st
 		for start != "" && start != before {
 			n, ok := nodes[start]
 			if !ok {
-				if complete {
+				if complete || capped {
 					return Page{}, false, protocol.E("conflict", "分页游标不在所选分支上")
 				}
 				return Page{}, false, nil
@@ -699,7 +723,7 @@ func (s *Store) historyPage(ctx context.Context, f *os.File, id, leaf, before st
 			start = n.parent
 		}
 		if start == "" {
-			if complete {
+			if complete || capped {
 				return Page{}, false, protocol.E("conflict", "分页游标不在所选分支上")
 			}
 			return Page{}, false, nil
@@ -711,9 +735,15 @@ func (s *Store) historyPage(ctx context.Context, f *os.File, id, leaf, before st
 	selected := make([]string, 0, limit)
 	total := 0
 	cursor := start
+	cappedBoundary := false
 	for cursor != "" && len(selected) < limit {
 		node, ok := nodes[cursor]
 		if !ok {
+			if capped {
+				// 封顶索引的边界：更早的不可达，到此干净收页。
+				cappedBoundary = true
+				break
+			}
 			// 走到窗口边界：页还没取够，交给全扫重来。
 			return Page{}, false, nil
 		}
@@ -732,13 +762,17 @@ func (s *Store) historyPage(ctx context.Context, f *os.File, id, leaf, before st
 	// 轮边界对齐：见 alignToTurn 的说明。它会向前多取条目，
 	// 因此返回更新后的游标，HasMore 必须用它而不是原 cursor。
 	selected, cursor = s.alignToTurn(nodes, selected, total, cursor)
-	// 对齐可能多走了几步，若已踩到窗口边界就退到全扫重来——
-	// 否则会给出比预期短的一页，而且不报错。
 	// 对齐可能多走了几步，若已踩到窗口边界就交给全扫——否则会给出
 	// 比预期短的一页，而且不报错。HasMore 也可能因此算错。
+	// 封顶索引上对齐越过边界同样是「更早不可达」，收页并标记。
 	if !complete && cursor != "" {
 		if _, ok := nodes[cursor]; !ok {
-			return Page{}, false, nil
+			if capped {
+				cappedBoundary = true
+				cursor = ""
+			} else {
+				return Page{}, false, nil
+			}
 		}
 	}
 
@@ -754,7 +788,7 @@ func (s *Store) historyPage(ctx context.Context, f *os.File, id, leaf, before st
 		total += nodes[id].size
 	}
 	buf := make([]byte, total)
-	page := Page{SessionID: id, LeafID: leaf, LeafSource: "disk", Entries: make([]json.RawMessage, 0, len(selected)), HasMore: cursor != ""}
+	page := Page{SessionID: id, LeafID: leaf, LeafSource: "disk", Entries: make([]json.RawMessage, 0, len(selected)), HasMore: cursor != "", IndexCapped: cappedBoundary}
 	at := 0
 	for i := len(selected) - 1; i >= 0; i-- {
 		node := nodes[selected[i]]

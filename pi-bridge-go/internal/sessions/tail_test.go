@@ -65,7 +65,7 @@ func Test尾部窗口扫描与全扫一致(t *testing.T) {
 	if err != nil {
 		t.Fatalf("全扫失败: %v", err)
 	}
-	partial, partialLast, complete, err := store.scanTail(ctx, f, st.Size(), id, cwd, 64)
+	partial, partialLast, complete, _, err := store.scanTail(ctx, f, st.Size(), id, cwd, 64)
 	if err != nil {
 		t.Fatalf("窗口扫描失败: %v", err)
 	}
@@ -225,7 +225,7 @@ func Test窗口内model_change之后逐条一致(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	partial, _, complete, err := store.scanTail(ctx, f, st.Size(), id, cwd, 64)
+	partial, _, complete, _, err := store.scanTail(ctx, f, st.Size(), id, cwd, 64)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -281,7 +281,7 @@ func Test分支会话尾扫lastModelID沿父链(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	partial, partialLast, _, err := store.scanTail(ctx, f, st.Size(), id, cwd, 64)
+	partial, partialLast, _, _, err := store.scanTail(ctx, f, st.Size(), id, cwd, 64)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -828,6 +828,7 @@ type HistoryData struct {
 	LeafID          string
 	Turns           []Turn
 	HasMore         bool
+	IndexCapped     bool
 	OldestEntryID   string
 	HistoricalModel *sessions.ModelRef
 }
@@ -1108,6 +1109,7 @@ func (r *Renderer) RenderHistory(sessionID string, page sessions.Page) (string, 
 		LeafID:          page.LeafID,
 		Turns:           GroupTurns(sessions.ProjectEntries(page.Entries)),
 		HasMore:         page.HasMore,
+		IndexCapped:     page.IndexCapped,
 		OldestEntryID:   page.OldestEntryID,
 		HistoricalModel: page.HistoricalModel,
 	})

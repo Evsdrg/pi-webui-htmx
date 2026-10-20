@@ -46,19 +46,23 @@ const (
 //     起点在窗口之外，就只能算成空。代价可接受：historicalModel 在
 //     lastModelID 为空时本来就会退化为「从最近的助手回复取 provider/model」，
 //     那是它处理旧会话的既有路径，不会显示成错误的模型。窗口覆盖全文时无此问题。
-func (s *Store) scanTail(ctx context.Context, f *os.File, size int64, id, cwd string, minNodes int) (map[string]node, string, bool, error) {
+//
+// 返回值 complete 表示窗口覆盖整个文件；capped 表示扫描按 Entries 条数
+// 封顶提前停止——索引只含最新的 Entries 条，更早的历史不可浏览（见
+// historyPage 对封顶边界的处置）。capped 蕴含 complete=false。
+func (s *Store) scanTail(ctx context.Context, f *os.File, size int64, id, cwd string, minNodes int) (map[string]node, string, bool, bool, error) {
 	if size <= 0 {
-		return nil, "", false, protocol.E("invalid_history", "缺少完整的会话头部")
+		return nil, "", false, false, protocol.E("invalid_history", "缺少完整的会话头部")
 	}
 	// 有效末尾：忽略末尾那段没有换行的半行。Pi 正在追加时这是正常状态，
 	// 与正向扫描遇到 jsonl.ErrIncomplete 就停的行为一致。回看上界取单行上限
 	// 加一点余量：末端那条不完整记录的合法长度不会超过单行上限。
 	end, err := effectiveEnd(f, size, int64(s.limits.LineBytes)+(1<<20))
 	if err != nil {
-		return nil, "", false, err
+		return nil, "", false, false, err
 	}
 	if end <= 0 {
-		return nil, "", false, protocol.E("invalid_history", "缺少完整的会话头部")
+		return nil, "", false, false, protocol.E("invalid_history", "缺少完整的会话头部")
 	}
 	if minNodes < 1 {
 		minNodes = 1
@@ -73,7 +77,7 @@ func (s *Store) scanTail(ctx context.Context, f *os.File, size int64, id, cwd st
 	lo := int64(0)
 	for {
 		if err := ctx.Err(); err != nil {
-			return nil, "", false, err
+			return nil, "", false, false, err
 		}
 		lo = end - window
 		if lo < 0 {
@@ -81,7 +85,7 @@ func (s *Store) scanTail(ctx context.Context, f *os.File, size int64, id, cwd st
 		}
 		buf = make([]byte, end-lo)
 		if _, err := f.ReadAt(buf, lo); err != nil {
-			return nil, "", false, err
+			return nil, "", false, false, err
 		}
 		if lo == 0 || countCompleteLines(buf, lo == 0) >= minNodes || window >= tailMaxBytes {
 			break
@@ -116,19 +120,21 @@ func (s *Store) scanTail(ctx context.Context, f *os.File, size int64, id, cwd st
 		line := buf[lineStart:lineEnd]
 		switch {
 		case len(line) > s.limits.LineBytes:
-			return nil, "", false, protocol.E("limit_exceeded",
+			return nil, "", false, false, protocol.E("limit_exceeded",
 				fmt.Sprintf("历史记录超过单行 %s 上限", humanBytes(int64(s.limits.LineBytes))))
 		default:
 			ref, err := parseRecordRef(line)
 			if err != nil {
-				return nil, "", false, err
+				return nil, "", false, false, err
 			}
 			if _, dup := nodes[ref.id]; dup {
-				return nil, "", false, protocol.E("invalid_history", "历史条目 ID 重复")
+				return nil, "", false, false, protocol.E("invalid_history", "历史条目 ID 重复")
 			}
+			// 条数到顶：停止回看。索引只含最新的 Entries 条，更早的不可浏览。
+			// 不报错——旧设计在这里拒绝整个会话，等于让一条大历史毁了全部；
+			// 封顶后首页照常，翻到边界时由 historyPage 标记 IndexCapped。
 			if len(items) >= s.limits.Entries {
-				return nil, "", false, protocol.E("limit_exceeded",
-					fmt.Sprintf("历史条目数超过 %d 条上限", s.limits.Entries))
+				return nodes, items[0].id, false, true, nil
 			}
 			// size 含行尾换行符：与 scanFile 里 jsonl.Read 返回的长度口径一致，
 			// 两边必须能逐字节比对（取页时按 size 分配并整块读出）。
@@ -143,15 +149,15 @@ func (s *Store) scanTail(ctx context.Context, f *os.File, size int64, id, cwd st
 		line := buf[:lineEnd]
 		var head Header
 		if json.Unmarshal(line, &head) != nil || head.Type != "session" || head.Version != 3 {
-			return nil, "", false, protocol.E("invalid_history", "缺少完整的会话头部")
+			return nil, "", false, false, protocol.E("invalid_history", "缺少完整的会话头部")
 		}
 		if head.ID != id || head.Cwd != cwd {
-			return nil, "", false, protocol.E("conflict", "会话头部已变化")
+			return nil, "", false, false, protocol.E("conflict", "会话头部已变化")
 		}
 		headerSeen = true
 	}
 	if complete && !headerSeen {
-		return nil, "", false, protocol.E("invalid_history", "缺少完整的会话头部")
+		return nil, "", false, false, protocol.E("invalid_history", "缺少完整的会话头部")
 	}
 	if complete {
 		// 窗口覆盖全文时能把父链完整校一遍，行为与 scanFile 一致：
@@ -161,18 +167,18 @@ func (s *Store) scanTail(ctx context.Context, f *os.File, size int64, id, cwd st
 		// 记录上同时成立，先判重复才能给出与正向扫描一致的错误原因。
 		for entryID, n := range nodes {
 			if n.parent == entryID {
-				return nil, "", false, protocol.E("invalid_history", "父链断裂或存在环")
+				return nil, "", false, false, protocol.E("invalid_history", "父链断裂或存在环")
 			}
 			if n.parent == "" {
 				continue
 			}
 			if _, ok := nodes[n.parent]; !ok {
-				return nil, "", false, protocol.E("invalid_history", "父链断裂或存在环")
+				return nil, "", false, false, protocol.E("invalid_history", "父链断裂或存在环")
 			}
 		}
 	}
 	if len(items) == 0 {
-		return nil, "", false, protocol.E("invalid_history", "缺少完整的会话头部")
+		return nil, "", false, false, protocol.E("invalid_history", "缺少完整的会话头部")
 	}
 
 	// 按文件顺序正向重算 lastModelID。items 是逆序的，所以从末位（最旧）
@@ -201,7 +207,7 @@ func (s *Store) scanTail(ctx context.Context, f *os.File, size int64, id, cwd st
 		}
 		nodes[it.id] = n
 	}
-	return nodes, items[0].id, complete, nil
+	return nodes, items[0].id, complete, false, nil
 }
 
 // countCompleteLines 数出缓冲里的完整行数。

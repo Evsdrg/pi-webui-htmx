@@ -132,6 +132,9 @@ func TestHistory模型按所选分支且翻页不回退(t *testing.T) {
 func TestHistory单条超页预算仍可打开(t *testing.T) {
 	cwd := t.TempDir()
 	store, dir := newStore(t, cwd)
+	// 显式压回小预算：本测试钉的是「单条超预算」这个行为，
+	// 不应随默认 PageBytes 变大而失效。
+	store.limits.PageBytes = 2 << 20
 	huge := strings.Repeat("x", 3<<20) // 3 MiB，大于 PageBytes(2MiB)、小于 LineBytes(8MiB)
 	id := writeSession(t, dir, "bigentry", cwd,
 		entry("u1", ""),
@@ -160,6 +163,7 @@ func TestHistory单条超页预算仍可打开(t *testing.T) {
 func TestHistory大条目不挡住更旧历史(t *testing.T) {
 	cwd := t.TempDir()
 	store, dir := newStore(t, cwd)
+	store.limits.PageBytes = 2 << 20
 	huge := strings.Repeat("y", 3<<20)
 	id := writeSession(t, dir, "midbig", cwd,
 		entry("u1", ""),

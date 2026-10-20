@@ -13,7 +13,8 @@ import (
 // 所以这里不再全文件扫描（B37）：头部有界读一次，尾部反向按块找一次。
 // 全局扫描的等价物由会话目录索引的 TTL 缓存承担，不在这里重复。
 func (x *Index) titleForPage(ctx context.Context, e indexEntry) (indexEntry, error) {
-	if e.titleRead || e.size > x.limits.FileBytes {
+	// 不看文件体积：标题读取是首尾两次有界读（B37），任何大小的文件代价都一样。
+	if e.titleRead {
 		return e, nil
 	}
 	if err := ctx.Err(); err != nil {

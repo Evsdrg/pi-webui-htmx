@@ -493,7 +493,7 @@ func (s *Server) serveUIFragments(w http.ResponseWriter, r *http.Request, encodi
 		} else {
 			w.Header().Set("X-Scroll-Mode", "append")
 		}
-		page, perr := s.store.History(r.Context(), id, leaf, before, 50)
+		page, perr := s.store.History(r.Context(), id, leaf, before, 200)
 		if perr != nil {
 			var historyError *protocol.Error
 			if errors.As(perr, &historyError) && historyError.Code == "not_found" {

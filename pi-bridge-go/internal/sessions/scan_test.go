@@ -55,7 +55,7 @@ func Test空行两条扫描路径一致(t *testing.T) {
 	if _, _, err := store.scanFile(context.Background(), f, st.Size(), id, cwd); err != nil {
 		t.Fatalf("全扫应跳过空行: %v", err)
 	}
-	if _, _, _, err := store.scanTail(context.Background(), f, st.Size(), id, cwd, 64); err != nil {
+	if _, _, _, _, err := store.scanTail(context.Background(), f, st.Size(), id, cwd, 64); err != nil {
 		t.Fatalf("尾扫应跳过空行: %v", err)
 	}
 }

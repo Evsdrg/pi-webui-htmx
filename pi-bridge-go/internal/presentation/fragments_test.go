@@ -314,3 +314,40 @@ func Test模板printf用内置语义(t *testing.T) {
 		t.Fatalf("printf 语义不符：\n得到 %q\n期望 %q", got, want)
 	}
 }
+
+// 封顶页（IndexCapped）必须明确告诉用户「更早不可达」，而不是静默地
+// 不给翻页按钮——那与「真的没有更早历史」无法区分，用户会以为历史丢了。
+func Test封顶页显示不可达提示(t *testing.T) {
+	renderer := testRenderer(t)
+	html, err := renderer.RenderHistory("s1", sessions.Page{
+		Entries: []json.RawMessage{
+			json.RawMessage(`{"type":"message","id":"u1","message":{"role":"user","content":[{"type":"text","text":"我的问题"}]}}`),
+		},
+		IndexCapped: true,
+	})
+	if err != nil {
+		t.Fatalf("渲染失败：%v", err)
+	}
+	if strings.Contains(html, "older-sentinel") {
+		t.Fatalf("封顶页不应再给翻页按钮：%s", html)
+	}
+	if !strings.Contains(html, "更早的历史不可浏览") {
+		t.Fatalf("封顶页必须说明更早历史不可达：%s", html)
+	}
+}
+
+// 未封顶且没有更早历史时保持原样：既无按钮也无提示。
+func Test普通末页不显示封顶提示(t *testing.T) {
+	renderer := testRenderer(t)
+	html, err := renderer.RenderHistory("s1", sessions.Page{
+		Entries: []json.RawMessage{
+			json.RawMessage(`{"type":"message","id":"u1","message":{"role":"user","content":[{"type":"text","text":"我的问题"}]}}`),
+		},
+	})
+	if err != nil {
+		t.Fatalf("渲染失败：%v", err)
+	}
+	if strings.Contains(html, "older-sentinel") || strings.Contains(html, "不可浏览") {
+		t.Fatalf("普通末页不应有翻页按钮或封顶提示：%s", html)
+	}
+}
