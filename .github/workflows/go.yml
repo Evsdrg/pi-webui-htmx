@@ -2,9 +2,9 @@ name: Go 检查
 
 on:
   push:
-    paths: ['pi-bridge-go/**', 'pi-webui-htmx/**', '.github/workflows/go.yml']
+    paths: ['pi-bridge-go/**', 'pi-webui-htmx/**', '.github/workflows/go.yml', '.github/scripts/**']
   pull_request:
-    paths: ['pi-bridge-go/**', 'pi-webui-htmx/**', '.github/workflows/go.yml']
+    paths: ['pi-bridge-go/**', 'pi-webui-htmx/**', '.github/workflows/go.yml', '.github/scripts/**']
   workflow_dispatch:
 
 permissions:

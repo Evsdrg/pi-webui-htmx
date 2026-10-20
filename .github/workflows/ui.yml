@@ -2,9 +2,12 @@ name: UI 检查
 
 on:
   push:
-    paths: ['pi-webui-htmx/**', '.github/workflows/ui.yml']
+    # .github/scripts/** 也要触发：安装依赖走的就是那份脚本，改了它却不
+    # 跑一遍 UI 检查，等于让「安装脚本的改动」只能靠 Go 检查间接验证——
+    # 而两者用的安装路径虽然相同，验证的后续步骤并不相同。
+    paths: ['pi-webui-htmx/**', '.github/workflows/ui.yml', '.github/scripts/**']
   pull_request:
-    paths: ['pi-webui-htmx/**', '.github/workflows/ui.yml']
+    paths: ['pi-webui-htmx/**', '.github/workflows/ui.yml', '.github/scripts/**']
   workflow_dispatch:
 
 permissions:
