@@ -1,11 +1,12 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 import { mount } from '../helpers/dom';
 
-// 构造一段带占位按钮的历史片段，形状与桥渲染的一致。
+// 构造一段带占位的历史片段，形状与桥渲染的一致（2026-10-20 起
+// 思考占位是 .thinking-body 上的 data 属性，没有按钮）。
 function fixture(): string {
   return `<article class="turn" data-turn-id="u1">
   <div class="turn-user"><div class="bubble">问题</div><button class="lazy-block" data-lazy="user-image" data-entry-id="u1" data-block-index="1">查看附带图片</button></div>
-  <button class="lazy-block" data-lazy="thinking" hx-get="/ui/sessions/sess-1/lazy?kind=thinking&amp;format=html&amp;entryId=a1&amp;blockIndex=0" data-entry-id="a1" data-block-index="0">查看思考过程</button>
+  <details class="thinking-block"><summary><span class="thinking-preview">思考</span></summary><div class="thinking-body" data-lazy="thinking" data-entry-id="a1" data-block-index="0"></div></details>
   <div class="turn-assistant"><div class="bubble markdown">回答</div></div>
   <ol><li><span class="step-kind">工具</span><pre class="step-detail">工具输出</pre>
     <button class="lazy-block" data-lazy="tool-image" data-entry-id="t1" data-block-index="0">查看工具图片</button>
@@ -13,18 +14,95 @@ function fixture(): string {
 </article>`;
 }
 
+// 打开思考块。jsdom 会在 open 变化后**异步**派发 toggle（与浏览器一致），
+// 这里只翻状态，断言一律用 waitFor 等事件落地。
+function openThinking(document: Document): HTMLDetailsElement {
+  const details = document.querySelector<HTMLDetailsElement>('details.thinking-block')!;
+  details.open = true;
+  return details;
+}
+
+function details_open_twice(document: Document): void {
+  const details = document.querySelector<HTMLDetailsElement>('details.thinking-block')!;
+  details.open = false;
+  details.open = true;
+}
+
 describe('惰性内容占位符', () => {
   beforeEach(() => { vi.restoreAllMocks(); });
 
-  it('思考由声明式片段负责，不再重复走图片fetch委托', async () => {
+  it('展开思考块即自动载入，不再需要按钮', async () => {
     const { document, cleanup } = mount(fixture());
-    const fetchMock = vi.fn();vi.stubGlobal('fetch', fetchMock);
+    // 模拟 htmx 真实行为：把服务端片段换入 target（成功判定看这个）。
+    const ajax = vi.fn(async (_verb: string, _url: string, ctx: { target: HTMLElement }) => {
+      ctx.target.innerHTML = '<div class="lazy-thinking markdown thinking-md">思考内容</div>';
+    });
+    (window as unknown as { htmx: { ajax: unknown } }).htmx = { ajax } as never;
+    const fetchMock = vi.fn(); vi.stubGlobal('fetch', fetchMock);
     const { wireLazy } = await import('@/modules/lazy');
-    const dispose=wireLazy(() => 'sess-1');
-    document.querySelector<HTMLButtonElement>('[data-lazy="thinking"]')!.click();
+    const dispose = wireLazy(() => 'sess-1');
+    const body = document.querySelector<HTMLElement>('.thinking-body[data-lazy="thinking"]')!;
+    openThinking(document);
+    await vi.waitFor(() => expect(ajax).toHaveBeenCalledTimes(1));
+    await new Promise((r) => setTimeout(r, 0));
+    const [verb, url, ctx] = ajax.mock.calls[0] as [string, string, { target: Element; swap: string }];
+    expect(verb).toBe('get');
+    expect(url).toContain('ui/sessions/sess-1/lazy?');
+    expect(url).toContain('kind=thinking');
+    expect(url).toContain('format=html');
+    expect(url).toContain('entryId=a1');
+    expect(url).toContain('blockIndex=0');
+    expect(ctx.target).toBe(body);
+    expect(ctx.swap).toBe('innerHTML');
+    // 载入成功后标记完成：重复展开不再发请求。
     expect(fetchMock).not.toHaveBeenCalled();
-    expect(document.querySelector('[data-lazy="thinking"]')!.getAttribute('hx-get')).toContain('format=html');
-    dispose();cleanup();
+    const details = document.querySelector<HTMLDetailsElement>('details.thinking-block')!;
+    details.open = false;
+    await new Promise((r) => setTimeout(r, 0));
+    openThinking(document);
+    await new Promise((r) => setTimeout(r, 0));
+    expect(ajax).toHaveBeenCalledTimes(1);
+    expect(body.dataset.loaded).toBe('1');
+    dispose(); cleanup();
+  });
+
+  it('载入失败时提示可重试，再次展开会重新请求', async () => {
+    const { document, cleanup } = mount(fixture());
+    // htmx.ajax 失败但 resolve：正文没有换入任何元素即为失败（服务端
+    // 成功时至少有 .lazy-thinking 或「（空）」占位）。
+    const ajax = vi.fn(async () => {});
+    (window as unknown as { htmx: { ajax: unknown } }).htmx = { ajax } as never;
+    const { wireLazy } = await import('@/modules/lazy');
+    const dispose = wireLazy(() => 'sess-1');
+    const body = document.querySelector<HTMLElement>('.thinking-body[data-lazy="thinking"]')!;
+    openThinking(document);
+    await vi.waitFor(() => expect(ajax).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(body.textContent).toContain('载入失败'));
+    expect(body.dataset.loaded).toBeUndefined();
+    // 再次展开：重新请求（重试路径）。
+    details_open_twice(document);
+    await vi.waitFor(() => expect(ajax).toHaveBeenCalledTimes(2));
+    dispose(); cleanup();
+  });
+
+  it('正在载入时重复展开不会叠加请求', async () => {
+    const { document, cleanup } = mount(fixture());
+    let release: (() => void) = () => {};
+    const ajax = vi.fn(() => new Promise<void>((resolve) => { release = resolve; }));
+    (window as unknown as { htmx: { ajax: unknown } }).htmx = { ajax } as never;
+    const { wireLazy } = await import('@/modules/lazy');
+    const dispose = wireLazy(() => 'sess-1');
+    const details = document.querySelector<HTMLDetailsElement>('details.thinking-block')!;
+    openThinking(document);
+    await vi.waitFor(() => expect(ajax).toHaveBeenCalledTimes(1));
+    // 折叠再展开、重复派发：载入进行中一律不叠加。
+    details.open = false;
+    openThinking(document);
+    openThinking(document);
+    await new Promise((r) => setTimeout(r, 0));
+    expect(ajax).toHaveBeenCalledTimes(1);
+    release();
+    dispose(); cleanup();
   });
 
   it('点工具图片占位符拉取二进制并换成 img', async () => {

@@ -35,7 +35,7 @@
         <span class="thinking-preview">思考</span>
         {{if $item.Thinking.Duration}}<span class="thinking-duration">· 持续了 {{workDuration $item.Thinking.Duration}}</span>{{end}}
       </summary>
-      <div class="thinking-body"><button class="lazy-block" data-lazy="thinking" data-entry-id="{{$item.Thinking.EntryID}}" data-block-index="{{$item.Thinking.BlockIndex}}" hx-get="ui/sessions/{{$.SessionID}}/lazy?kind=thinking&amp;format=html&amp;entryId={{$item.Thinking.EntryID}}&amp;blockIndex={{$item.Thinking.BlockIndex}}" hx-target="this" hx-swap="outerHTML" hx-sync="this:drop" hx-disabled-elt="this">载入思考内容</button></div>
+      <div class="thinking-body" data-lazy="thinking" data-entry-id="{{$item.Thinking.EntryID}}" data-block-index="{{$item.Thinking.BlockIndex}}"></div>
       </details>{{end}}{{end}}
     {{else}}<div class="bubble markdown process-text">{{$block.Text}}</div>{{end}}{{end}}
     </div>
@@ -49,8 +49,8 @@
       <summary><span class="tool-name">{{if $item.Step.Name}}{{$item.Step.Name}}{{else}}{{$item.Step.Kind}}{{end}}</span><span class="tool-preview">{{$item.Step.Preview}}</span>{{if $item.Step.Duration}}<span class="tool-duration">{{workDuration $item.Step.Duration}}</span>{{end}}</summary>
       {{if $item.Step.Command}}<pre class="tool-detail tool-command">{{$item.Step.Command}}</pre><pre class="tool-detail tool-output">{{$item.Step.Detail}}</pre>{{else}}<pre class="tool-detail">{{$item.Step.Detail}}</pre>{{end}}
       </details>{{else}}<details class="thinking-block">
-      <summary><span class="thinking-preview">思考</span>{{if $item.Thinking.Duration}}<span class="thinking-duration">· 持续了 {{workDuration $item.Thinking.Duration}}</span>{{end}}</summary>
-      <div class="thinking-body"><button class="lazy-block" data-lazy="thinking" data-entry-id="{{$item.Thinking.EntryID}}" data-block-index="{{$item.Thinking.BlockIndex}}" hx-get="ui/sessions/{{$.SessionID}}/lazy?kind=thinking&amp;format=html&amp;entryId={{$item.Thinking.EntryID}}&amp;blockIndex={{$item.Thinking.BlockIndex}}" hx-target="this" hx-swap="outerHTML" hx-sync="this:drop" hx-disabled-elt="this">载入思考内容</button></div>
+      <summary><svg class="thinking-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9.5 2A5.5 5.5 0 0 0 4 7.5c0 1.7.78 3.21 2 4.21V14a1 1 0 0 0 1 1h5a1 1 0 0 0 1-1v-2.29c1.22-1 2-2.51 2-4.21A5.5 5.5 0 0 0 9.5 2z" /><line x1="7" y1="18" x2="12" y2="18" /><line x1="8" y1="21" x2="11" y2="21" /></svg><span class="thinking-preview">思考</span>{{if $item.Thinking.Duration}}<span class="thinking-duration">· 持续了 {{workDuration $item.Thinking.Duration}}</span>{{end}}</summary>
+      <div class="thinking-body" data-lazy="thinking" data-entry-id="{{$item.Thinking.EntryID}}" data-block-index="{{$item.Thinking.BlockIndex}}"></div>
       </details>{{end}}{{end}}
     </div>
   </details>
