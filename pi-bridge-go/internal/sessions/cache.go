@@ -110,6 +110,27 @@ func (c *scanCache) get(path string, size, mtime int64) (map[string]node, string
 	return nil, "", false, false, false
 }
 
+// drop 作废某个文件的缓存。
+//
+// 用于「按索引读出的字节与记录对不上」这种情形：缓存键（size/mtime/dev/ino）
+// 全部命中却读错，说明文件被原地改写过而我们没察觉（Pi 的 fork 与版本迁移
+// 都是 openSync(file,"w") 原地重写，若长度恰好不变、mtime 又落在同一纳秒，
+// 现有判据看不见）。这时唯一正确的动作是丢掉这份索引重扫，而不是继续用它、
+// 也不是把错误甩给用户。
+func (c *scanCache) drop(path string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	kept := c.slots[:0]
+	for _, s := range c.slots {
+		if s.path == path {
+			c.bytes -= s.bytes
+			continue
+		}
+		kept = append(kept, s)
+	}
+	c.slots = kept
+}
+
 // put 写入缓存。超过上界时不缓存，直接返回——超大会话的索引留在堆上
 // 不受预算约束，风险与收益不成比例（封顶索引也一样按节点数把关）。
 func (c *scanCache) put(path string, size, mtime int64, nodes map[string]node, last string, complete, capped bool) {

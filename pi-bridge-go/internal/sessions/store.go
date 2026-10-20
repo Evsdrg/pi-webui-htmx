@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
 	"os"
@@ -627,6 +628,48 @@ func (s *Store) scanFullAll(ctx context.Context, h Header, f *os.File, size, mti
 // leaf 缺省取磁盘上可恢复的叶子；before 必须是该分支的祖先条目。
 // 忽略末尾没有 LF 的半行，但完整的损坏行一律显式报错。
 func (s *Store) History(ctx context.Context, id, leaf, before string, limit int) (Page, error) {
+	page, err := s.historyOnce(ctx, id, leaf, before, limit)
+	if err == nil {
+		return page, nil
+	}
+	// 索引与磁盘错位时自愈一次。
+	//
+	// 缓存键是 size/mtime/dev/ino，正常的追加与 fork（换 inode）都能识别；
+	// 但 Pi 的 fork 与版本迁移都用 openSync(file,"w") **原地**重写，若长度
+	// 恰好不变、mtime 又落在同一纳秒，就会命中旧索引、按旧偏移读出错位字节。
+	// 那种情况下唯一的正确动作是丢掉这份索引重扫——重扫是本进程内几十毫秒
+	// 的事，而把「读取期间历史文件发生变化」交给用户，他只能反复点重试。
+	//
+	// 只对这一种错误重试：其余错误（文件损坏、游标不在分支上、超过天花板）
+	// 重扫一次也是同样的结论，重试只会让错误变慢。
+	if !isStaleIndexError(err) {
+		return Page{}, err
+	}
+	h, findErr := s.Find(ctx, id)
+	if findErr != nil {
+		return Page{}, err
+	}
+	// 作废缓存后再走一次：scanNodes 未命中就会重扫，新偏移随之生效。
+	s.scan.drop(filepath.Join(s.dir, filepath.FromSlash(h.path)))
+	page, retryErr := s.historyOnce(ctx, id, leaf, before, limit)
+	if retryErr != nil {
+		return Page{}, retryErr
+	}
+	return page, nil
+}
+
+// isStaleIndexError 判断错误是否属于「索引过期」这一类。
+func isStaleIndexError(err error) bool {
+	var e *protocol.Error
+	return errors.As(err, &e) && e.Message == staleIndexMessage
+}
+
+// staleIndexMessage 是索引与磁盘错位时的错误文案。
+// 它只在 History 内部用于触发一次重扫；对外仍应尽可能自愈，不外泄。
+const staleIndexMessage = "读取期间历史文件发生变化"
+
+// historyOnce 是 History 的单次尝试，不含自愈重试。
+func (s *Store) historyOnce(ctx context.Context, id, leaf, before string, limit int) (Page, error) {
 	if limit < 1 || limit > 200 {
 		return Page{}, protocol.E("invalid_params", "limit 必须在 1 到 200 之间")
 	}
@@ -895,8 +938,21 @@ func (s *Store) alignToTurn(nodes map[string]node, selected []string, total int,
 	}
 	// 否则向前多取，直到把某个完整轮的 user 锚点包含进来。
 	// 从 selected 末位的父亲继续向前——调用方传进来的 cursor 正是它。
+	//
+	// 只能追加索引里**真的存在**的条目。窗口扫描时 cursor 很快会落到窗口外，
+	// 而 map 取不到键返回的是零值 node——旧实现把它当成真条目追加进页
+	// （size=0、parent 为空），取页时对空字节做 json.Valid 必然失败，于是
+	// 「索引到不了那里」被报成「读取期间历史文件发生变化」。这个误报在
+	// 生产上真实出现过：一页恰好填满到窗口最旧那条、而它不是 user 时，
+	// 对齐必然多走一步踩到窗口外。
+	//
+	// 正确语义：看不到的祖先就是边界，原样交回游标，由调用方决定退全扫
+	// 还是标记「更早不可达」。
 	for cursor != "" {
-		node := nodes[cursor]
+		node, ok := nodes[cursor]
+		if !ok {
+			break
+		}
 		if total+node.size > s.limits.PageBytes {
 			break
 		}
