@@ -54,5 +54,35 @@ esac
 : > "$log"
 retry "安装 $spec" npm install --global --no-fund --no-audit "$spec"
 echo "包管理器：pnpm $(pnpm --version)"
-retry '安装依赖' pnpm install --frozen-lockfile
+
+# 未批准的构建脚本会让 pnpm 以非零状态退出（实测 pnpm 11：`install
+# --frozen-lockfile` 退出 1，而 `pnpm add` 退出 0）。它是**配置缺口**，
+# 不是网络故障——重试三次也还是同样结果，日志里却只有一句
+# "Run pnpm approve-builds to pick which dependencies"。
+#
+# 所以先单独判一次：命中就直接说清「哪个包、由谁引入、怎么改」，
+# 不再重试，也不让读者误以为是瞬时失败。
+#
+# 管道末尾不能接 head：它提前退出会让 tee/sed 收到 SIGPIPE，配合
+# pipefail 就是整条命令失败——诊断文字还没用上就先被吞掉。
+pnpm install --frozen-lockfile 2>&1 | tee -a "$log" || install_failed=1
+blocks="$(sed -n 's/^\[ERR_PNPM_IGNORED_BUILDS\] Ignored build scripts: //p' "$log" | tail -1)"
+if [ -n "$blocks" ]; then
+  echo "依赖里有未批准的构建脚本：$blocks" >&2
+  echo '这不是网络问题——pnpm 会因此以非零状态退出。按需在' >&2
+  echo 'pi-webui-htmx/pnpm-workspace.yaml 的 allowBuilds 里显式声明：' >&2
+  echo '  allowBuilds:' >&2
+  for name in $(echo "$blocks" | tr ',' '\n' | sed 's/@[0-9][^ ]*$//'); do
+    echo "    \"$name\": false   # 不运行构建脚本（多数前端依赖不需要它）" >&2
+  done
+  echo '改成 true 才会真的执行该依赖的 postinstall。' >&2
+  {
+    echo "--- 谁引入了它 ---"
+    pnpm why "$(echo "$blocks" | tr ',' '\n' | head -1 | sed 's/@[0-9][^ ]*$//')" 2>&1 | head -20 || true
+  } >> "$log"
+  annotate '未批准的构建脚本'
+  exit 1
+fi
+# 其余失败（网络、registry 抖动）仍按瞬时故障重试。
+[ "${install_failed:-0}" = 0 ] || retry '安装依赖' pnpm install --frozen-lockfile
 echo '依赖安装完成'

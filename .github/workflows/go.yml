@@ -21,6 +21,11 @@ jobs:
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
           go-version-file: pi-bridge-go/go.mod
+          # 缓存键默认在仓库根找 go.mod/go.sum，而这个仓库是「Go 桥 + 前端」
+          # 并排布局，go.mod 在 pi-bridge-go/ 下。不指定路径就永远恢复不到缓存：
+          # 每次运行都打印 "Restore cache failed: Dependencies file is not
+          # found"，模块缓存落空，每次都要重新下载整棵依赖树。
+          cache-dependency-path: pi-bridge-go/go.sum
       # 跨目录契约测试要读 UI 包（模板、manifest、dist），所以先构建前端。
       # 安装走与 UI 检查同一个脚本（网络重试 + 失败注解）。
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
