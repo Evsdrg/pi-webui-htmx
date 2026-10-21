@@ -98,6 +98,18 @@ export class Workbench {
    * 不向 Pi 发送 set_thinking，由 Pi 自己按 settings 与模型能力决定。
    */
   private thinkingBySession = new Map<string, string>();
+  /**
+   * thinkingPending 记录「这次切换的 set_thinking 还在途中」的会话。
+   *
+   * 为什么需要它：切换是异步的——change 事件发出命令后，下一次
+   * session.state 可能先回来，而它带的是**切换前**的 thinkingLevel
+   * （Pi 还没处理完）。把这个过期值当成权威去重建下拉，用户刚做的选择
+   * 就被弹回去了，要再选一次才生效。表现就是「第一次切换弹回来，第二次
+   * 才真的切换过去」。
+   *
+   * 在途期间不覆盖用户的选择；命令返回后才恢复「服务端是权威」。
+   */
+  private thinkingPending = new Set<string>();
   private statuses = new Map<string, string>();
   private widgets = new Map<string, { lines: string[]; placement: string }>();
   private commands: { name: string; description: string }[] = [];
@@ -279,11 +291,18 @@ export class Workbench {
     }
     el('thinking-select').addEventListener('change', () => {
       const level = el<HTMLSelectElement>('thinking-select').value;
-      this.thinkingBySession.set(this.sessionId, level);
+      const id = this.sessionId;
+      this.thinkingBySession.set(id, level);
       // 「自动」= 不覆盖：不发命令，只记住本地偏好。Pi 没有对应的读回字段，
       // 因此不能用一次假 set 把状态「确认」下来。
       if (!level) { this.notify('思考强度已设为自动：由模型与 Pi 配置决定。'); return; }
-      void this.command('session.set_thinking', { level }).catch((err) => this.fail(err));
+      // 标记在途：期间到达的 session.state 带的是切换前的值，不能拿它
+      // 重建下拉（见 thinkingPending 的说明）。按会话记，切走再切回也不会串。
+      this.thinkingPending.add(id);
+      void this.command('session.set_thinking', { level })
+        .then(() => { if (this.sessionId === id) void this.refreshThinking(level); })
+        .catch((err) => this.fail(err))
+        .finally(() => { this.thinkingPending.delete(id); });
     }, { signal });
     el('title-form').addEventListener('submit', (event) => { event.preventDefault(); void this.topbar().then((m) => m.saveLocalTitle(this.host)).catch((err) => this.fail(err)); }, { signal });
     // 顶栏功能面板的开关统一走 onClick 里的 [data-action] 委托（见 action()）。
@@ -1081,7 +1100,17 @@ export class Workbench {
     // “自动”不是 Pi 的等级，而是“不覆盖”的 UI 语义：不发送 set_thinking，
     // 由 Pi 按 settings 的 defaultThinkingLevel 与模型自身能力决定。
     const remembered = this.thinkingBySession.get(id);
-    const current = selected ?? remembered ?? select.value;
+    // 优先级：在途切换 > 服务端值 > 本地记忆 > 当前显示。
+    //
+    // 为什么在途切换压过服务端值：切换是异步的，change 之后的下一次
+    // session.state 常常先回来，带的是**切换前**的等级（Pi 还没处理完
+    // set_thinking）。把它当权威就会把用户刚做的选择弹回去——表现正是
+    // 「第一次切换弹回来、第二次才生效」。
+    // 命令返回后（thinkingPending 清掉）服务端重新成为权威：外部改了它，
+    // 界面必须跟随，不能一直咬住本地记忆。
+    const current = this.thinkingPending.has(id)
+      ? (remembered ?? select.value)
+      : (selected ?? remembered ?? select.value);
     select.replaceChildren(new Option('自动', ''), ...levels.map((level) => new Option(level, level)));
     select.value = levels.includes(current) ? current : '';
     select.disabled = this.run !== 'idle' || !levels.length;

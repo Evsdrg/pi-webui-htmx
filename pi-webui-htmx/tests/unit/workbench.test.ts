@@ -1929,3 +1929,67 @@ describe('失联状态与退避重试', () => {
     expect(document.getElementById('connection-notice')?.textContent ?? '').toContain('正在重连');
   });
 });
+
+describe('思考强度：切换后不能被旧状态弹回', () => {
+  // 真机上的一次切换是这样发生的（时序是缺陷的全部原因）：
+  //   1. 用户选 high → change 事件 → 发 session.set_thinking（网络往返，几十毫秒）
+  //   2. 同一次 reconcile / 周期轮询里的 session.state 先回来了，
+  //      它带的是**切换前**的 thinkingLevel（Pi 还没处理完 set_thinking）
+  //   3. refreshThinking 用这个旧值重建下拉 → 选择被弹回原样
+  //   4. 用户第二次选，此时 Pi 已应用上一次的值，于是看起来"第二次才生效"
+  //
+  // 重建选项本身是必要的（等级列表随模型变化），错的是把**过期**的服务端值
+  // 当成权威去覆盖用户刚做的选择。
+  it('set_thinking 在途时，旧 state 不覆盖用户的选择', async () => {
+    const select = document.getElementById('thinking-select') as HTMLSelectElement;
+    workbench.selectSession('s1', '/tmp/a', 'A');
+    await waitFor(() => expect(select.options.length).toBeGreaterThan(1));
+
+    // set_thinking 挂起：模拟网络往返期间 state 先到。
+    let releaseSet!: () => void;
+    const gate = new Promise<void>((resolve) => { releaseSet = resolve; });
+    const base = fake.request.getMockImplementation()!;
+    fake.request.mockImplementation(async (method: string, ...rest: unknown[]) => {
+      if (method === 'session.set_thinking') { await gate; return {}; }
+      // 服务端仍报旧等级：Pi 尚未应用这次切换。
+      if (method === 'session.state') return { sessionId: 's1', isStreaming: false, thinkingLevel: 'off' };
+      return base(method, ...rest);
+    });
+
+    select.value = 'high';
+    select.dispatchEvent(new Event('change', { bubbles: true }));
+    await waitFor(() => expect(fake.request).toHaveBeenCalledWith('session.set_thinking', 's1', { level: 'high' }, 30_000));
+
+    // 在途期间来一次状态刷新（周期轮询就是 15 秒一次）。
+    await vi.advanceTimersByTimeAsync(15_000);
+    expect(select.value).toBe('high');
+
+    releaseSet();
+    await waitFor(() => expect(select.value).toBe('high'));
+  });
+
+  it('切换完成后的状态刷新可以纠正它', async () => {
+    const select = document.getElementById('thinking-select') as HTMLSelectElement;
+    workbench.selectSession('s1', '/tmp/a', 'A');
+    await waitFor(() => expect(select.options.length).toBeGreaterThan(1));
+
+    select.value = 'high';
+    select.dispatchEvent(new Event('change', { bubbles: true }));
+    await waitFor(() => expect(fake.request).toHaveBeenCalledWith('session.set_thinking', 's1', { level: 'high' }, 30_000));
+
+    // 命令已返回。此后再来的 state 是权威：外部（另一个客户端、Pi 自己）
+    // 可能已经改过它，界面必须跟随，不能一直咬住本地记忆。
+    const base = fake.request.getMockImplementation()!;
+    fake.request.mockImplementation(async (method: string, ...rest: unknown[]) => {
+      if (method === 'session.state') return { sessionId: 's1', isStreaming: false, thinkingLevel: 'off' };
+      if (method === 'session.thinking_levels') return ['off', 'high'];
+      return base(method, ...rest);
+    });
+    // 触发一次核对：切走再切回会重读 state。
+    workbench.selectSession('s2', '/tmp/b', 'B');
+    await waitFor(() => expect(document.body.dataset.sessionId).toBe('s2'));
+    workbench.selectSession('s1', '/tmp/a', 'A');
+    await waitFor(() => expect(document.body.dataset.sessionId).toBe('s1'));
+    await waitFor(() => expect(select.value).toBe('off'));
+  });
+});
