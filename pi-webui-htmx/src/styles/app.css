@@ -27,10 +27,15 @@ a { color:var(--accent); }
 .app-shell { display:grid; grid-template-columns:var(--sidebar-width) minmax(0,1fr); height:100dvh; overflow:hidden; transition:grid-template-columns .2s ease; }
 /* 拖动分隔条时不要过渡，否则手感发黏。 */
 .app-shell[data-resizing] { transition:none; }
-.app-shell[data-right-panel=open] { grid-template-columns:var(--sidebar-width) minmax(0,1fr) var(--panel-width); }
+/* 面板打开时多出两列：拖动条 4px + 面板本身。拖动条常驻 DOM，
+   关闭时 display:none——用 visibility 会仍然占一格，主区右侧留一条空白。 */
+.app-shell[data-right-panel=open] { grid-template-columns:var(--sidebar-width) minmax(0,1fr) 4px var(--panel-width); }
 .app-shell[data-sidebar=closed] { grid-template-columns:0 minmax(0,1fr); }
-.app-shell[data-sidebar=closed][data-right-panel=open] { grid-template-columns:0 minmax(0,1fr) var(--panel-width); }
+.app-shell[data-sidebar=closed][data-right-panel=open] { grid-template-columns:0 minmax(0,1fr) 4px var(--panel-width); }
 .app-shell[data-sidebar=closed] .sidebar-column { visibility:hidden; }
+.panel-resizer { display:none; cursor:col-resize; background:var(--border); opacity:.5; touch-action:none; }
+.app-shell[data-right-panel=open] .panel-resizer { display:block; }
+.panel-resizer:hover,.panel-resizer:focus { background:var(--accent); opacity:1; }
 /* 侧栏与其分隔条同属一个 landmark（见 shell.html 的注释）。
    grid 的两列由这一层承担，内部的 aside 与分隔条按顺序排布。 */
 .sidebar-column { display:grid; grid-template-columns:minmax(0,1fr) 4px; min-width:0; overflow:hidden; }
@@ -388,6 +393,11 @@ input,select,textarea { background:var(--bg); border:1px solid var(--border); bo
 /* 散文类文件（Markdown / 纯文本）改为软换行：右栏很窄，长行横向滚动没法读。
    代码与数据仍保持横向滚动，避免折断缩进与结构化内容。 */
 #panel-preview pre.wrap { white-space:pre-wrap; overflow-wrap:anywhere; }
+/* Markdown 预览渲染成 DOM，外面不再套 <pre>；但上面那条 #panel-preview pre
+   仍会命中**文档内部**的代码块，把它们压成 11px、去掉背景。按 .markdown 的
+   既有排版还原回去，并限定在预览容器内，不影响对话正文。 */
+#panel-preview .markdown { font-size:13px; line-height:1.65; }
+#panel-preview .markdown pre { margin:12px 0; font:12px/1.7 ui-monospace,monospace; overflow:auto; tab-size:2; }
 #file-name { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .terminal-actions { display:flex; gap:8px; margin-bottom:12px; }
 .notice { padding:7px 20px; font-size:12px; border-bottom:1px solid var(--border); color:var(--text-muted); background:var(--bg-subtle); }

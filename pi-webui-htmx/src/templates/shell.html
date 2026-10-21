@@ -199,6 +199,9 @@
       <div id="ext-widgets-after" class="ext-widgets"></div>
     </div>
   </main>
+  {{/* 面板宽度拖动条。面板关闭时 CSS 用 display:none 让它不占 grid 列，
+       所以它常驻 DOM 也不需要额外同步显隐。 */}}
+  <div class="panel-resizer" role="separator" aria-label="调整面板宽度" aria-orientation="vertical" tabindex="0"></div>
   <aside id="workspace-panel" class="workspace-panel" aria-label="工作区面板" hidden>
     <header class="panel-header"><strong>工作区</strong><button class="icon-btn" data-action="workspace" aria-label="关闭工作区面板">×</button></header>
     <div class="panel-tabs" role="tablist" aria-label="工作区内容">{{/* 文件树已移到侧栏常驻；右面板留给「从侧栏点开的文件」与变更、终端。

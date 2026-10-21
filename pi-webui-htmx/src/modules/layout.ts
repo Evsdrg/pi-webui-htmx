@@ -113,6 +113,62 @@ export function mountLayout(): () => void {
     if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return; event.preventDefault();
     savePreference('sidebar-width', String(setWidth(Number(resize.getAttribute('aria-valuenow')) + (event.key === 'ArrowLeft' ? -10 : 10))));
   }, { signal: abort.signal });
+  // 右侧工作区面板的宽度。与左侧同一套交互，但可达范围按视口算：
+  // 上限是「主区至少还剩 MIN_MAIN_W」，写死像素在 4K 屏上会显得没拖开。
+  const panelResize = document.querySelector<HTMLElement>('.panel-resizer');
+  if (panelResize) {
+    const MIN_PANEL_W = 260;
+    // 主区最小宽度：再窄对话正文就没法读了。
+    const MIN_MAIN_W = 420;
+    const panelOpen = () => shell.dataset.rightPanel === 'open';
+    const maxPanelWidth = () => Math.max(MIN_PANEL_W, shell.getBoundingClientRect().width - MIN_MAIN_W);
+    const clampPanel = (width: number) => Number.isFinite(width)
+      ? Math.round(Math.min(maxPanelWidth(), Math.max(MIN_PANEL_W, width)))
+      : 390;
+    const setPanelWidth = (width: number) => {
+      const w = clampPanel(width);
+      shell.style.setProperty('--panel-width', `${w}px`);
+      panelResize.setAttribute('aria-valuenow', String(w));
+      panelResize.setAttribute('aria-valuemin', String(MIN_PANEL_W));
+      panelResize.setAttribute('aria-valuemax', String(Math.round(maxPanelWidth())));
+      return w;
+    };
+    // 恢复时也要夹：换个窄屏打开，旧宽度可能让主区消失。
+    setPanelWidth(Number(readPreference('panel-width')) || 390);
+    let panelDrag: { x: number; width: number } | null = null;
+    panelResize.addEventListener('pointerdown', (event) => {
+      if (!panelOpen()) return;
+      const current = Number.parseFloat(shell.style.getPropertyValue('--panel-width')) || 390;
+      panelDrag = { x: event.clientX, width: current };
+      panelResize.setPointerCapture(event.pointerId);
+      shell.setAttribute('data-resizing', '');
+    }, { signal: abort.signal });
+    // 面板在右侧：向左拖是变宽。直接按指针算目标宽度，不累计增量——
+    // 增量式在钳到边界后会把"多drag的距离"丢掉，手感是"拖回来一半才动"。
+    panelResize.addEventListener('pointermove', (event) => {
+      if (!panelDrag) return;
+      setPanelWidth(panelDrag.width - (event.clientX - panelDrag.x));
+    }, { signal: abort.signal });
+    const endPanel = () => {
+      if (!panelDrag) return;
+      panelDrag = null;
+      shell.removeAttribute('data-resizing');
+      savePreference('panel-width', panelResize.getAttribute('aria-valuenow') ?? '390');
+    };
+    panelResize.addEventListener('pointerup', endPanel, { signal: abort.signal });
+    panelResize.addEventListener('pointercancel', endPanel, { signal: abort.signal });
+    panelResize.addEventListener('lostpointercapture', endPanel, { signal: abort.signal });
+    panelResize.addEventListener('keydown', (event) => {
+      if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return;
+      if (!panelOpen()) return;
+      event.preventDefault();
+      const current = Number.parseFloat(shell.style.getPropertyValue('--panel-width')) || 390;
+      const next = setPanelWidth(current + (event.key === 'ArrowLeft' ? 20 : -20));
+      savePreference('panel-width', String(next));
+    }, { signal: abort.signal });
+    // 视口变窄时把宽度重新夹回可达范围，否则主区会被挤没。
+    window.addEventListener('resize', () => setPanelWidth(Number.parseFloat(shell.style.getPropertyValue('--panel-width')) || 390), { signal: abort.signal });
+  }
   const toggle = document.querySelector<HTMLElement>('[aria-controls="sidebar"]');
   const syncExpanded = () => toggle?.setAttribute('aria-expanded', String(matchMedia('(max-width:760px)').matches
     ? shell.dataset.mobileSidebar === 'open' : shell.dataset.sidebar !== 'closed'));

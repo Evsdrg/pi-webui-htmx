@@ -291,6 +291,22 @@ export class Workspace {
       }
     }
     if (!alive()) return;
+    // Markdown 走渲染而不是代码高亮：点开一个 .md 要看的是排版，不是源码。
+    // 与对话正文共用同一套管线（marked + DOMPurify），因此继承同样的白名单——
+    // 预览的是工作区文件，内容可能来自不可信来源，不能带进能触发表单或
+    // 桥命令的控件。SANITIZE 后仍按 .markdown 的既有样式排版。
+    if (languageFor(path) === 'markdown') {
+      const node = document.createElement('div');
+      node.className = 'markdown file-markdown';
+      node.textContent = text;
+      this.showPreview(node);
+      // 引擎已预热时同步完成，避免「先原文后排版」的一次可见跳变；
+      // 未预热（首次打开预览）时退回异步渲染。
+      const { renderMarkdownSync, mountMarkdown } = await import('./markdown');
+      if (!alive()) return;
+      if (!renderMarkdownSync(node)) void mountMarkdown(node);
+      return;
+    }
     const code = document.createElement('code');
     code.id = 'file-content';
     code.textContent = text;
