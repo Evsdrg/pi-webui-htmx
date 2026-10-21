@@ -135,7 +135,9 @@ func main() {
 				_ = f.Close()
 			}
 		}
-		if delay > 0 && delayMethods[cmd.Type] {
+		// slow_prompt 自己负责延迟（放在 agent_start 之后），这里跳过，
+		// 否则会在回合开始前再等一遍，夹具就不是「回合进行中」了。
+		if delay > 0 && delayMethods[cmd.Type] && !(cmd.Type == "prompt" && script["slow_prompt"]) {
 			time.Sleep(time.Duration(delay) * time.Millisecond)
 		}
 		switch cmd.Type {
@@ -207,10 +209,15 @@ func main() {
 				emit(frame{Type: "response", ID: cmd.ID, Success: true})
 				continue
 			}
+			// slow_prompt 模拟「模型请求正在进行」：必须先发 agent_start
+			// 再挂住，才与真机一致（Pi 是先进入回合、再等上游响应）。
+			// 旧写法把延迟放在 agent_start 之前，桥只能看到「prompt 命令在途」
+			// 而看不到回合开始——用它验证「运行中拒绝跳转」等于在测 pending
+			// 这条误判路径（见 turnRunningLocked 的说明）。
+			emit(frame{Type: "agent_start"})
 			if script["slow_prompt"] && delay > 0 {
 				time.Sleep(time.Duration(delay) * time.Millisecond)
 			}
-			emit(frame{Type: "agent_start"})
 			emit(frame{Type: "response", ID: cmd.ID, Success: true})
 			emit(frame{Type: "message_update", AssistantMessageEvent: map[string]any{"type": "text_delta", "contentIndex": 0, "delta": "假回复"}})
 			emit(frame{Type: "agent_settled"})

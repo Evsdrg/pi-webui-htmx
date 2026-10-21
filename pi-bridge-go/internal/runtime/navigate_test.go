@@ -130,14 +130,18 @@ func TestNavigate未启用时报错(t *testing.T) {
 
 func TestNavigate运行中拒绝(t *testing.T) {
 	dir := t.TempDir()
+	// 用 slow_prompt 而不是通用的 FAKE_PI_DELAY_METHOD：后者在 agent_start
+	// **之前**挂住，桥只能看到「prompt 在途」，看不到回合开始。用它当夹具
+	// 等于把「运行中拒绝跳转」建在 pending 这条误判路径上——真机上模型请求
+	// 进行时回合已经开始了（见 turnRunningLocked）。
+	t.Setenv("FAKE_PI_SCRIPT", "slow_prompt")
 	t.Setenv("FAKE_PI_DELAY_MS", "1500")
-	t.Setenv("FAKE_PI_DELAY_METHOD", "prompt")
 	m, cwd := newTestManager(t, navTestConfig(t, dir))
 	w, err := m.Start(context.Background(), "", cwd)
 	if err != nil {
 		t.Fatalf("启动失败: %v", err)
 	}
-	// 起一条会在 pi 侧挂住的 prompt，让 worker 变忙。
+	// 起一条会让 Pi 进入回合后挂住的 prompt。
 	go func() { _ = w.Prompt(context.Background(), "慢请求", "", nil) }()
 	deadline := time.Now().Add(2 * time.Second)
 	for !w.Info().Busy && time.Now().Before(deadline) {

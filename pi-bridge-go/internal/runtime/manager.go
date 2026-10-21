@@ -529,9 +529,34 @@ type Worker struct {
 	logWriter *workerLogWriter
 }
 
+// turnRunningLocked 判断**回合**是否还在跑；调用时必须已持有锁。
+//
+// 这是「能不能编辑、跳转、重载」的判据：它只看回合本身的状态，不含在途命令。
+//
+// 为什么不含 pending：pending 是「有 RPC 命令在途」，与回合无关——前端每
+// 15 秒一次的 session.state 轮询、面板刷新、扩展状态查询都会短暂把它加一。
+// 把它算进忙碌判定，就会让「空闲会话」在并发的只读查询期间被误判成运行中，
+// 用户点「从此处编辑」随机收到「会话正在运行，请先等待当前回合结束」。
+// 实测（lab，空闲会话 + 并发轮询）：30 次 session.navigate 有 4 次被误拒；
+// 轮询越密、点得越巧，命中率越高。生产上模型请求失败后最容易撞见——
+// 那一刻界面刚显示错误、用户第一反应就是去改上一轮提问。
+//
+// 真正代表「回合在跑」的只有四项：
+//   - active：agent_start 之后、agent_settled 之前；
+//   - queued：Pi 里还有排队待发的消息；
+//   - uncertain：有变更命令结果未定，此时跳转可能让叶子归属串线；
+//   - waitingInput：扩展在等人工回执，跳转会打断它。
+func (w *Worker) turnRunningLocked() bool {
+	return w.active || w.queued || w.uncertain || w.waitingInput
+}
+
 // busyLocked 判断是否存在进行中或结果未定的工作；调用时必须已持有锁。
+//
+// 比 turnRunningLocked 多算一项在途命令（pending）。这个更宽的判定用于
+// 「别急着回收或重启进程」的场合：有命令在途时停掉 worker，那条命令的
+// 结果就永远拿不到，Pi 侧也可能已部分执行。**不要**用它判断回合状态。
 func (w *Worker) busyLocked() bool {
-	return w.active || w.queued || w.uncertain || w.waitingInput || w.pending > 0
+	return w.turnRunningLocked() || w.pending > 0
 }
 
 // Info 返回工作进程快照。

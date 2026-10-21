@@ -33,7 +33,9 @@ func (w *Worker) Reload(ctx context.Context) error {
 		w.mu.Unlock()
 		return protocol.E("worker_exited", "工作进程正在关闭")
 	}
-	if w.busyLocked() {
+	// 只挡「回合在跑」，不挡在途命令：并发的 session.state 轮询会让
+	// pending 短暂大于零，用它判定会让空闲会话随机拒绝编辑（见 turnRunningLocked）。
+	if w.turnRunningLocked() {
 		w.mu.Unlock()
 		return protocol.E("busy", "会话正在运行，请先等待当前回合结束")
 	}
@@ -444,7 +446,8 @@ func (w *Worker) Navigate(ctx context.Context, targetID string) (NavigateReply, 
 		w.mu.Unlock()
 		return NavigateReply{}, protocol.E("worker_exited", "工作进程正在关闭")
 	}
-	if w.busyLocked() {
+	// 同上：判据是回合状态，不是在途命令数。
+	if w.turnRunningLocked() {
 		w.mu.Unlock()
 		return NavigateReply{}, protocol.E("busy", "会话正在运行，请先等待当前回合结束")
 	}
