@@ -202,15 +202,17 @@ func TestAssistantError按类别投影(t *testing.T) {
 			want:    generic,
 		},
 		{
-			// `This operation was aborted` 配 stopReason=error 的形态可疑：实测
-			// 34 条里内容全空、usage 全零、距上一条消息 0.0–0.3 秒，更像请求
-			// 刚发出就被取消（用户取消/切会话），而非供应商故障；真正的手动
-			// 中止被 Pi 标成 aborted。在查清 Pi 的分类边界之前**不给它专门
-			// 文案**——套「模型请求失败」会把「你自己取消的」说成故障。
-			// 这条用例钉住这个「暂不归类」的决定，避免以后顺手加错。
-			name: "中止语义未定，暂不归类", stopReason: "error",
+			// `This operation was aborted` 配 stopReason=error：实测 22 条里
+			// 内容全空、usage 全零、距上一条消息 0.0–0.3 秒——是请求刚发出
+			// 就被取消（用户中止/切会话）。
+			//
+			// 这条曾经是「暂不归类」，落进 generic。但 generic 说的是
+			// 「请检查供应商连接、账户状态与模型配置」——恰恰是把用户自己
+			// 取消的动作说成了供应链故障，正是当初想避免的那件事。
+			// 现在归到「已中止」：判据见 isManualAbort。
+			name: "中止语义明确，归为已中止", stopReason: "error",
 			message: "This operation was aborted",
-			want:    generic,
+			want:    "模型请求已中止。",
 		},
 		{
 			name: "结束原因不是 error 时不投影", stopReason: "endTurn",
@@ -249,5 +251,76 @@ func TestAssistantError不回显原文(t *testing.T) {
 				t.Fatalf("摘要泄漏了原文内容 %q: %s", leak, got)
 			}
 		}
+	}
+}
+
+// 手动中止不能报成「请检查供应商连接、账户状态与模型配置」。
+//
+// 真实语料（本机 5 个会话、22 条记录）里有一类固定形态：用户点了中止，
+// Pi 把这次空响应记成 `stopReason: "error"` 而不是 `"aborted"`，
+// `errorMessage` 是 `This operation was aborted`。桥的规则表里没有它，
+// 就落进 default 那条兜底文案——把用户自己掐断的动作说成供应链故障，
+// 排查方向完全错误。
+//
+// 判定必须同时看两件事：文案是中止类，且这条消息**没有正文**。
+// 只看文案不够——真实的中止与被上游掐断在文本上可能同形。
+func Test手动中止不报供应商故障(t *testing.T) {
+	aborted := assistantError("error", "This operation was aborted")
+	if aborted == "" {
+		t.Fatal("中止应给出可读提示，而不是当成正常结束静默")
+	}
+	if strings.Contains(aborted, "供应商连接") || strings.Contains(aborted, "账户状态") {
+		t.Fatalf("用户自己掐断的回合不该说成供应链故障：%q", aborted)
+	}
+	for _, want := range []string{"已中止", "已停止", "已取消"} {
+		if strings.Contains(aborted, want) {
+			return
+		}
+	}
+	t.Fatalf("提示应说明是用户中止：%q", aborted)
+}
+
+// 中止类的几种真实变体都要被识别（取自本机语料）。
+func Test中止文案的变体(t *testing.T) {
+	for _, message := range []string{
+		"This operation was aborted",
+		"Request aborted",
+		"The operation was aborted.",
+		"Aborted",
+	} {
+		got := assistantError("error", message)
+		if strings.Contains(got, "供应商连接") {
+			t.Fatalf("%q 被误判为供应链故障: %q", message, got)
+		}
+		if got == "" {
+			t.Fatalf("%q 应给出中止提示", message)
+		}
+	}
+}
+
+// 中止判定不能吞掉真正的中断类错误：超时/连接错误仍要说「可重试」，
+// 且仍要提示本地代理与网络这条真实原因。
+func Test超时不被当中止(t *testing.T) {
+	for _, message := range []string{"Request timed out.", "Connection error.", "terminated"} {
+		got := assistantError("error", message)
+		if strings.Contains(got, "中止") {
+			t.Fatalf("%q 不是中止，却给了中止提示: %q", message, got)
+		}
+	}
+}
+
+// 端到端：真实形态的中止记录经投影后，产物是「已中止」而不是通用故障文案。
+//
+// projectMessage 收到的是 message 对象（store.go 的调用方已经剥掉外层
+// entry），所以这里的 raw 只含 role/content/stopReason/errorMessage。
+// 内容为空正是这类记录的特征——用户点了中止，模型什么都没产出。
+func Test中止记录经投影给出已中止(t *testing.T) {
+	raw := []byte(`{"role":"assistant","content":[],"api":"openai-responses","provider":"CPA-Responses","model":"deepseek-v4.1-flash","usage":{"input":0,"output":0},"stopReason":"error","errorMessage":"This operation was aborted","timestamp":1792161449047}`)
+	pm := projectMessage(raw)
+	if pm.role != "assistant" {
+		t.Fatalf("role = %q，期望 assistant", pm.role)
+	}
+	if pm.errText != "模型请求已中止。" {
+		t.Fatalf("中止记录投影 = %q，期望「模型请求已中止。」", pm.errText)
 	}
 }

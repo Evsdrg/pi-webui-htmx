@@ -34,6 +34,31 @@ func statusOf(body string) int {
 	return 0
 }
 
+// isManualAbort 判断这条错误是不是「用户自己掐断了回合」。
+//
+// 为什么需要单独判：Pi 大多数时候把中止记成 stopReason="aborted"（此时
+// 根本不会走到这里），但实测有一类记录是 stopReason="error" 且
+// errorMessage 为 "This operation was aborted"——那是空响应被中止时的形态。
+// 不识别它，用户点一下停止就会看到「请检查供应商连接、账户状态与模型配置」。
+//
+// 判据只认「abort」这个词本身，且要求它是完整词：用 contains("abort")
+// 会把 "upstream_aborted_connection" 之外的东西也吞进来，但更重要的是
+// **不能**把连接中断类（timed out / connection error / terminated）误判成
+// 中止——那条要保留「可重试 + 本地代理/网络」的提示，两者给用户的动作不同。
+//
+// 因此这里刻意不把 "interrupted" 收进来：它同时出现在上游流中断的语料里
+// （见下面 stream 那条规则），归它更准确。
+func isManualAbort(body string) bool {
+	if !strings.Contains(body, "abort") {
+		return false
+	}
+	// 排除「被上游/连接层掐断」这类同样含 abort 字样的描述。
+	if hasAny(body, "upstream", "connection", "socket", "tcp", "timeout", "timed out") {
+		return false
+	}
+	return true
+}
+
 // hasAny 判断文本里是否出现任一标记。标记一律用小写，调用方先 ToLower。
 func hasAny(body string, marks ...string) bool {
 	for _, m := range marks {
@@ -64,6 +89,16 @@ func assistantError(stopReason, errorMessage string) string {
 	body := strings.ToLower(errorMessage)
 	status := statusOf(body)
 	switch {
+	case isManualAbort(body):
+		// 用户点了中止。**必须**排在最前：Pi 有时把这次空响应记成
+		// stopReason="error" 而不是 "aborted"（本机语料 22 条，
+		// errorMessage 是 "This operation was aborted"），落进下面的规则
+		// 会被说成供应链故障，把排查方向彻底带偏。
+		//
+		// 文案不写「失败」：这不是故障，是用户自己停的。也不提「重试」，
+		// 因为用户要的往往就是停下来。
+		return "模型请求已中止。"
+
 	case status == 402 && strings.Contains(body, "insufficient balance"):
 		// 402 还可能是套餐不含该模型、账户冻结等原因，只凭状态码就告诉
 		// 用户「余额不足」会把排查引向错误方向；必须同时出现该短语。
