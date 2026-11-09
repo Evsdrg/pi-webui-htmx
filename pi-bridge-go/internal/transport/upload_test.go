@@ -241,3 +241,32 @@ func Test上传dir可来自表单字段(t *testing.T) {
 		t.Fatalf("文件未落盘：%v", err)
 	}
 }
+
+// 整个请求体必须有上限：单文件字段有 4 MiB 限制，但如果不在入口处
+// 用 MaxBytesReader 卡总量，一个塞满非文件字段的请求就能绕过「4 MiB
+// 上限」的直觉——文档承诺与实际行为会不一致。
+func Test上传整个请求体超限时返回413(t *testing.T) {
+	s, _, cwd := newTestServer(t)
+	// 用一个巨大的非文件字段把总量撑过 MaxReadBytes + 头部余量。
+	huge := bytes.Repeat([]byte("a"), int(s.files.MaxReadBytes())+4*64<<10)
+	var body bytes.Buffer
+	w := multipart.NewWriter(&body)
+	// 先写一个合法文件字段（内容很小），再塞一个超大字段。
+	part, _ := w.CreateFormFile("file", "small.txt")
+	_, _ = part.Write([]byte("x"))
+	// 塞一个巨大的 dir 字段（非文件内容，不应计入文件上限）。
+	if err := w.WriteField("dir", string(huge)); err != nil {
+		t.Fatal(err)
+	}
+	_ = w.Close()
+	req := httptest.NewRequest(http.MethodPost, "/ui/files/upload", &body)
+	req.Host = "127.0.0.1:30142"
+	req.Header.Set("Content-Type", w.FormDataContentType())
+	req.Header.Set("Authorization", "Bearer "+testToken)
+	rec := httptest.NewRecorder()
+	s.ServeHTTP(rec, req)
+	if rec.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("整个请求体超限应返回 413，实际 %d：%s", rec.Code, rec.Body.String())
+	}
+	_ = cwd
+}

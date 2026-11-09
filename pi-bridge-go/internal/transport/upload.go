@@ -60,6 +60,13 @@ func (s *Server) serveUpload(w http.ResponseWriter, r *http.Request, enc present
 		writeError(w, enc, http.StatusBadRequest, protocol.E("invalid_params", "multipart 缺少 boundary"))
 		return
 	}
+	// 整个请求体的硬上限 = 单文件上限 + multipart 头部/边界/其余字段的余量。
+	//
+	// 只在文件字段上做 LimitReader 是不够的：一个塞满非文件字段的请求能
+	// 绕过「4 MiB 上限」的直觉，而且巨大字段被截断后会变成「path 必须是
+	// 绝对路径」这类误导性错误。在入口就卡住总量，让超限一律是可读的 413。
+	// 余量取头部上限的 4 倍：path/dir/base/sessionId 各一份，加边界开销。
+	r.Body = http.MaxBytesReader(w, r.Body, s.files.MaxReadBytes()+4*uploadMaxHeaderBytes)
 	reader, err := r.MultipartReader()
 	if err != nil {
 		writeError(w, enc, http.StatusBadRequest, protocol.E("invalid_params", "multipart 解析失败"))
