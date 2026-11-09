@@ -108,39 +108,31 @@ func (s *Server) serveUpload(w http.ResponseWriter, r *http.Request, enc present
 		}
 		switch part.FormName() {
 		case uploadPathField:
-			b, rerr := io.ReadAll(io.LimitReader(part, uploadMaxHeaderBytes))
-			_ = part.Close()
-			if rerr != nil {
-				writeError(w, enc, http.StatusBadRequest, protocol.E("invalid_params", "读取 path 字段失败"))
+			targetPath, err = readUploadField(part, uploadPathField)
+			if err != nil {
+				writeFieldError(w, enc, err)
 				return
 			}
-			targetPath = strings.TrimSpace(string(b))
 		case uploadDirQuery:
 			// dir 同时接受表单字段与查询参数。两种写法都在真实调用里出现过
 			// （curl -F 与 URL query），只认一种会让另一种静默失败。
-			b, rerr := io.ReadAll(io.LimitReader(part, uploadMaxHeaderBytes))
-			_ = part.Close()
-			if rerr != nil {
-				writeError(w, enc, http.StatusBadRequest, protocol.E("invalid_params", "读取 dir 字段失败"))
+			targetDir, err = readUploadField(part, uploadDirQuery)
+			if err != nil {
+				writeFieldError(w, enc, err)
 				return
 			}
-			targetDir = strings.TrimSpace(string(b))
 		case uploadBaseField:
-			b, rerr := io.ReadAll(io.LimitReader(part, uploadMaxHeaderBytes))
-			_ = part.Close()
-			if rerr != nil {
-				writeError(w, enc, http.StatusBadRequest, protocol.E("invalid_params", "读取 base 字段失败"))
+			targetBase, err = readUploadField(part, uploadBaseField)
+			if err != nil {
+				writeFieldError(w, enc, err)
 				return
 			}
-			targetBase = strings.TrimSpace(string(b))
 		case uploadSessionField:
-			b, rerr := io.ReadAll(io.LimitReader(part, uploadMaxHeaderBytes))
-			_ = part.Close()
-			if rerr != nil {
-				writeError(w, enc, http.StatusBadRequest, protocol.E("invalid_params", "读取 sessionId 字段失败"))
+			targetSession, err = readUploadField(part, uploadSessionField)
+			if err != nil {
+				writeFieldError(w, enc, err)
 				return
 			}
-			targetSession = strings.TrimSpace(string(b))
 		case uploadField:
 			if uploaded {
 				_ = part.Close()
@@ -226,6 +218,45 @@ func (s *Server) serveUpload(w http.ResponseWriter, r *http.Request, enc present
 		return
 	}
 	writeJSON(w, enc, http.StatusOK, map[string]any{"path": targetPath, "size": written})
+}
+
+// errBodyTooLarge 表示整个请求体超出预算（由 MaxBytesReader 报出）。
+// 与「字段本身超过 64 KiB」区分开：前者是 413（请求太大），
+// 后者是 400（这个字段写错了）。两者归成同一个码，用户就分不清
+// 「该换个小文件」还是「该改个短路径」。
+var errBodyTooLarge = errors.New("上传超过体积上限")
+
+// readUploadField 读一个非文件字段。
+//
+// 两种失败要分开报：
+//   - 整个请求体超预算（MaxBytesReader 在底层报 MaxBytesError）→ errBodyTooLarge；
+//   - 这个字段本身超过 64 KiB → 明确的「字段超过长度上限」。
+//
+// 为什么不能静默截断：LimitReader 截断后请求继续往下走，最终报出的是
+// 「目标目录不存在」这类**看起来像路径写错了**的错误，而真实原因是字段
+// 过长。多读一个字节来判断越界，让失败原因与实际情况一致。
+func readUploadField(part io.Reader, name string) (string, error) {
+	b, err := io.ReadAll(io.LimitReader(part, uploadMaxHeaderBytes+1))
+	if err != nil {
+		var tooLarge *http.MaxBytesError
+		if errors.As(err, &tooLarge) {
+			return "", errBodyTooLarge
+		}
+		return "", protocol.E("invalid_params", "读取 "+name+" 字段失败")
+	}
+	if len(b) > uploadMaxHeaderBytes {
+		return "", protocol.E("invalid_params", name+" 字段超过长度上限")
+	}
+	return strings.TrimSpace(string(b)), nil
+}
+
+// writeFieldError 把 readUploadField 的错误映射成状态码。
+func writeFieldError(w http.ResponseWriter, enc presentation.Encoding, err error) {
+	if errors.Is(err, errBodyTooLarge) {
+		writeError(w, enc, http.StatusRequestEntityTooLarge, protocol.E("limit_exceeded", "上传超过体积上限"))
+		return
+	}
+	writeError(w, enc, http.StatusBadRequest, err)
 }
 
 // writeUploadError 把 workspace 的错误映射成合适的状态码。

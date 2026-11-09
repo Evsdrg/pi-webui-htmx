@@ -247,16 +247,20 @@ func Test上传dir可来自表单字段(t *testing.T) {
 // 上限」的直觉——文档承诺与实际行为会不一致。
 func Test上传整个请求体超限时返回413(t *testing.T) {
 	s, _, cwd := newTestServer(t)
-	// 用一个巨大的非文件字段把总量撑过 MaxReadBytes + 头部余量。
-	huge := bytes.Repeat([]byte("a"), int(s.files.MaxReadBytes())+4*64<<10)
+	// 用**大量**非文件字段把总量撑过 MaxReadBytes + 头部余量。
+	// 不能用单个超大字段：每个字段自身有 64 KiB 上限，会先被
+	// 「字段超过长度上限」拦成 400，测不到总量这一层。
+	per := 60 << 10
+	count := int(s.files.MaxReadBytes())/per + 8
 	var body bytes.Buffer
 	w := multipart.NewWriter(&body)
-	// 先写一个合法文件字段（内容很小），再塞一个超大字段。
 	part, _ := w.CreateFormFile("file", "small.txt")
 	_, _ = part.Write([]byte("x"))
-	// 塞一个巨大的 dir 字段（非文件内容，不应计入文件上限）。
-	if err := w.WriteField("dir", string(huge)); err != nil {
-		t.Fatal(err)
+	field := strings.Repeat("a", per)
+	for i := 0; i < count; i++ {
+		if err := w.WriteField("dir", field); err != nil {
+			t.Fatal(err)
+		}
 	}
 	_ = w.Close()
 	req := httptest.NewRequest(http.MethodPost, "/ui/files/upload", &body)
@@ -279,16 +283,19 @@ func Test上传整个请求体超限时返回413(t *testing.T) {
 // 顺序不同得到 413 或 400（独立复审实测复现过 400）。
 func Test上传预算在文件字段内耗尽时返回413(t *testing.T) {
 	s, _, _ := newTestServer(t)
-	// 先把余量吃掉：dir 字段 300 KiB，已超过总预算里的 4×64 KiB 余量，
+	// 先用多个合法长度的字段把余量吃掉：每个 60 KiB（各自都在 64 KiB
+	// 上限内），共 5 个 ≈ 300 KiB，已超过总预算里的 4×64 KiB 余量。
 	// 因此剩下的预算不足以读完 4 MiB 的文件内容，超限必然发生在
 	// io.Copy 读文件字段期间（而不是 NextPart 处）。
-	padding := bytes.Repeat([]byte("a"), 300<<10)
-	// 再塞一个必定越过剩余预算的文件。
+	per := 60 << 10
 	big := bytes.Repeat([]byte("b"), int(s.files.MaxReadBytes()))
 	var body bytes.Buffer
 	w := multipart.NewWriter(&body)
-	if err := w.WriteField("dir", string(padding)); err != nil {
-		t.Fatal(err)
+	field := strings.Repeat("a", per)
+	for i := 0; i < 5; i++ {
+		if err := w.WriteField("dir", field); err != nil {
+			t.Fatal(err)
+		}
 	}
 	part, err := w.CreateFormFile("file", "big.bin")
 	if err != nil {
@@ -346,5 +353,35 @@ func Test上传目标并存时拒绝(t *testing.T) {
 				t.Fatalf("%s 应返回 400，实际 %d：%s", c.name, rec.Code, rec.Body.String())
 			}
 		})
+	}
+}
+
+// 非文件字段超长时明确报「字段超过长度上限」。
+//
+// 旧实现用 LimitReader 静默截断，请求继续往下走，最终报出的是
+// 「目标目录不存在」这类看起来像路径写错了的错误——真实原因（字段过长）
+// 被完全掩盖。截断后多读一个字节即可区分。
+func Test上传非文件字段超长时明确报错(t *testing.T) {
+	s, _, _ := newTestServer(t)
+	huge := bytes.Repeat([]byte("a"), 100<<10)
+	var body bytes.Buffer
+	w := multipart.NewWriter(&body)
+	part, _ := w.CreateFormFile("file", "f.txt")
+	_, _ = part.Write([]byte("x"))
+	if err := w.WriteField("path", "/tmp/"+string(huge)); err != nil {
+		t.Fatal(err)
+	}
+	_ = w.Close()
+	req := httptest.NewRequest(http.MethodPost, "/ui/files/upload", &body)
+	req.Host = "127.0.0.1:30142"
+	req.Header.Set("Content-Type", w.FormDataContentType())
+	req.Header.Set("Authorization", "Bearer "+testToken)
+	rec := httptest.NewRecorder()
+	s.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("字段超长应返回 400，实际 %d：%s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "长度上限") {
+		t.Fatalf("错误信息应说明是字段过长，实际：%s", rec.Body.String())
 	}
 }
