@@ -154,11 +154,17 @@ func Test固定目标拒绝中间层符号链接逃逸(t *testing.T) {
 		t.Skipf("无法建符号链接：%v", err)
 	}
 	_, err := f.UploadScratchNamed(strings.NewReader("x"), base, testSession, "evil.txt")
+	// 断言落点而不是只断言「报错了」：任何错误都通过的话，这条测试在
+	// 「因为别的原因失败」时也会变绿，等于没测到逃逸这一层。
 	if err == nil {
-		matches, _ := filepath.Glob(filepath.Join(outside, "*", "evil.txt"))
-		if len(matches) > 0 {
-			t.Fatalf("符号链接逃逸：文件写到了根外 %v", matches)
-		}
+		t.Fatal("中间层符号链接逃逸应当被拒绝")
+	}
+	matches, _ := filepath.Glob(filepath.Join(outside, "*", "evil.txt"))
+	if len(matches) > 0 {
+		t.Fatalf("符号链接逃逸：文件写到了根外 %v", matches)
+	}
+	if _, serr := os.Stat(filepath.Join(outside, "evil.txt")); serr == nil {
+		t.Fatal("符号链接逃逸：文件写到了根外")
 	}
 }
 
@@ -174,9 +180,10 @@ func Test固定目标拒绝会话层符号链接逃逸(t *testing.T) {
 		t.Skipf("无法建符号链接：%v", err)
 	}
 	if _, err := f.UploadScratchNamed(strings.NewReader("x"), base, testSession, "evil.txt"); err == nil {
-		if _, serr := os.Stat(filepath.Join(outside, "evil.txt")); serr == nil {
-			t.Fatal("会话层符号链接逃逸：文件写到了根外")
-		}
+		t.Fatal("会话层符号链接逃逸应当被拒绝")
+	}
+	if _, serr := os.Stat(filepath.Join(outside, "evil.txt")); serr == nil {
+		t.Fatal("会话层符号链接逃逸：文件写到了根外")
 	}
 }
 
