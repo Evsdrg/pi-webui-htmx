@@ -270,3 +270,81 @@ func Test上传整个请求体超限时返回413(t *testing.T) {
 	}
 	_ = cwd
 }
+
+// 请求体预算在**文件字段内部**耗尽时也必须是 413。
+//
+// 与上一条的区别：那里超限发生在非文件字段（错误由 NextPart 报出），
+// 这里前面的 dir 字段吃掉一部分余量，剩下的预算在 io.Copy 读文件内容
+// 时用完。两条路径必须给同一个状态码，否则同一个超限请求会因为字段
+// 顺序不同得到 413 或 400（独立复审实测复现过 400）。
+func Test上传预算在文件字段内耗尽时返回413(t *testing.T) {
+	s, _, _ := newTestServer(t)
+	// 先把余量吃掉：dir 字段 300 KiB，已超过总预算里的 4×64 KiB 余量，
+	// 因此剩下的预算不足以读完 4 MiB 的文件内容，超限必然发生在
+	// io.Copy 读文件字段期间（而不是 NextPart 处）。
+	padding := bytes.Repeat([]byte("a"), 300<<10)
+	// 再塞一个必定越过剩余预算的文件。
+	big := bytes.Repeat([]byte("b"), int(s.files.MaxReadBytes()))
+	var body bytes.Buffer
+	w := multipart.NewWriter(&body)
+	if err := w.WriteField("dir", string(padding)); err != nil {
+		t.Fatal(err)
+	}
+	part, err := w.CreateFormFile("file", "big.bin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := part.Write(big); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequest(http.MethodPost, "/ui/files/upload", &body)
+	req.Host = "127.0.0.1:30142"
+	req.Header.Set("Content-Type", w.FormDataContentType())
+	req.Header.Set("Authorization", "Bearer "+testToken)
+	rec := httptest.NewRecorder()
+	s.ServeHTTP(rec, req)
+	if rec.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("预算在文件字段内耗尽应返回 413，实际 %d：%s", rec.Code, rec.Body.String())
+	}
+}
+
+// 三种目标互斥：并存时直接拒绝，不靠优先级猜。
+// 尤其 base+path：base 模式根本不校验 path 是否在工作区根内，
+// 若把 path 静默降级成文件名，调用方会以为它仍然生效。
+func Test上传目标并存时拒绝(t *testing.T) {
+	s, _, cwd := newTestServer(t)
+	base := t.TempDir()
+	s.files.SetUploadBases(base)
+	cases := []struct {
+		name   string
+		fields map[string]string
+	}{
+		{"base+path", map[string]string{"base": base, "sessionId": "01a1ba81-1c77-72b4-bf0c-31c986eeab7b", "path": filepath.Join(cwd, "x.txt")}},
+		{"base+dir", map[string]string{"base": base, "sessionId": "01a1ba81-1c77-72b4-bf0c-31c986eeab7b", "dir": cwd}},
+		{"path+dir", map[string]string{"path": filepath.Join(cwd, "y.txt"), "dir": cwd}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			var body bytes.Buffer
+			w := multipart.NewWriter(&body)
+			part, _ := w.CreateFormFile("file", "f.txt")
+			_, _ = part.Write([]byte("x"))
+			for k, v := range c.fields {
+				_ = w.WriteField(k, v)
+			}
+			_ = w.Close()
+			req := httptest.NewRequest(http.MethodPost, "/ui/files/upload", &body)
+			req.Host = "127.0.0.1:30142"
+			req.Header.Set("Content-Type", w.FormDataContentType())
+			req.Header.Set("Authorization", "Bearer "+testToken)
+			rec := httptest.NewRecorder()
+			s.ServeHTTP(rec, req)
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("%s 应返回 400，实际 %d：%s", c.name, rec.Code, rec.Body.String())
+			}
+		})
+	}
+}

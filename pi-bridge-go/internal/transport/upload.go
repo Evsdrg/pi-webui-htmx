@@ -152,6 +152,15 @@ func (s *Server) serveUpload(w http.ResponseWriter, r *http.Request, enc present
 			_, rerr := io.Copy(&buf, io.LimitReader(part, s.files.MaxReadBytes()+1))
 			_ = part.Close()
 			if rerr != nil {
+				// 整个请求体的预算在文件字段内部被耗尽时，错误在这里浮现
+				// （前面的字段已经吃掉了一部分余量）。这与「文件本身太大」
+				// 是同一类失败，必须是 413 而不是 400——否则同一个超限请求
+				// 会因字段顺序不同得到两种状态码。
+				var tooLarge *http.MaxBytesError
+				if errors.As(rerr, &tooLarge) {
+					writeError(w, enc, http.StatusRequestEntityTooLarge, protocol.E("limit_exceeded", "上传超过体积上限"))
+					return
+				}
 				writeError(w, enc, http.StatusBadRequest, protocol.E("invalid_request", "读取上传内容失败"))
 				return
 			}
@@ -164,21 +173,30 @@ func (s *Server) serveUpload(w http.ResponseWriter, r *http.Request, enc present
 		writeError(w, enc, http.StatusBadRequest, protocol.E("invalid_params", "请求里没有文件内容"))
 		return
 	}
-	// 三种目标模式，优先级从高到低：
+	// 三种目标模式互斥，优先级从高到低：
 	//   1) base + sessionId  → 固定目标 <base>/piwebui/<会话id>/<文件名>
 	//   2) path              → 明确指定的完整路径（仍须在工作区根内）
 	//   3) dir + 文件名       → dir/<文件名>
 	// 模式 1 会写到工作区根之外，因此 base 必须是启动方批准的白名单项。
+	//
+	// 同时给出多种目标时**直接拒绝**，不靠优先级「猜」：base 模式根本
+	// 不校验 path 是否在工作区根内，若把并存的 path 静默降级成文件名，
+	// 调用方会以为 path 仍然生效。歧义请求没有正确答案，fail-closed
+	// 比猜错安全。
+	if targetBase != "" && (targetPath != "" || targetDir != "") {
+		writeError(w, enc, http.StatusBadRequest, protocol.E("invalid_params", "base 不能与 path/dir 同时使用"))
+		return
+	}
+	if targetPath != "" && targetDir != "" {
+		writeError(w, enc, http.StatusBadRequest, protocol.E("invalid_params", "path 不能与 dir 同时使用"))
+		return
+	}
 	if targetBase != "" {
 		sessionID := targetSession
 		if sessionID == "" {
 			sessionID = strings.TrimSpace(r.URL.Query().Get(uploadSessionQuery))
 		}
-		name := fileName
-		if targetPath != "" {
-			name = filepath.Base(targetPath)
-		}
-		saved, serr := s.files.UploadScratchNamed(bytes.NewReader(buf.Bytes()), targetBase, sessionID, name)
+		saved, serr := s.files.UploadScratchNamed(bytes.NewReader(buf.Bytes()), targetBase, sessionID, fileName)
 		if serr != nil {
 			writeUploadError(w, enc, serr)
 			return
