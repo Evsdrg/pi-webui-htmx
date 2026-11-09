@@ -20,11 +20,30 @@ const isTool = (tool) => tool && typeof tool.name === "string";
 
 const DEFAULT_TIMEOUT_SECONDS = 300;
 const SHELL_TOOLS = ["bash", "powershell"];
+// 措辞必须与**工具 schema 里的 timeout 说明**一致，不能再说「参数说明不适用」。
+//
+// 旧措辞是「未指定 timeout 的命令会在 300 秒后被终止（工具参数说明里的
+// 『无默认超时』在本环境不适用）」——把一处矛盾写进了提示词：模型同时看到
+// 「默认不设超时」与「300 秒后终止」，只能猜。实测这种猜是真金白银的：
+// 历史 58586 次 bash 调用里 timeout 取值散落在 17 种上（300/None/120/180/600…）。
+//
+// 现在两边说同一件事：默认 300 秒（由本扩展在 tool_call 里补齐），要更久
+// 就自己传。schema 那一侧的说明由 zh-system-prompt 的词典同步改成一致口径。
 const TIMEOUT_GUIDELINE =
-  `未指定 timeout 的 bash/powershell 命令会在 ${DEFAULT_TIMEOUT_SECONDS} 秒后被强制终止` +
-  "（工具参数说明里的「无默认超时」在本环境不适用）。" +
+  `bash/powershell 的 timeout 默认 ${DEFAULT_TIMEOUT_SECONDS} 秒（本环境已为未指定的命令自动补上）。` +
   `预计会超过 ${DEFAULT_TIMEOUT_SECONDS} 秒的命令（完整构建、全量测试、依赖安装、大文件下载等）` +
-  "必须显式传 timeout（单位秒）；服务、watch 等常驻进程不要在前台等待，改用 nohup … & 放到后台。";
+  "必须显式传更大的 timeout（单位秒）；服务、watch 等常驻进程不要在前台等待，改用 nohup … & 放到后台。";
+
+// 不要再给命令加「cd 到当前目录」的前缀。
+//
+// 为什么值得单独一条：实测 58586 次 bash 调用里 77.7% 以 `cd` 开头，其中
+// 11558 次（19.7%）cd 的目标就是会话的 cwd 本身——纯粹的重复。模型这么做
+// 是在模仿它见过的脚本，而不是因为需要：bash 工具本身就在 cwd 里执行。
+// 这不只是观感问题：每个前缀都是模型要生成的 token，也让人误以为会话正
+// 处在别的目录。
+const CWD_GUIDELINE =
+  "bash 已经在当前工作目录里执行，不要写 `cd <当前目录> &&` 这样的前缀。" +
+  "确实要换目录时，用 `cd <目标目录> && …`（每次调用都是独立的 shell，不会留存状态）。";
 
 export default function bridgeToolset(pi) {
   const apply = () => {
@@ -50,6 +69,10 @@ export default function bridgeToolset(pi) {
       const rules = (guidelines[name] ??= []);
       if (!rules.includes(TIMEOUT_GUIDELINE)) rules.push(TIMEOUT_GUIDELINE);
     }
+    // cd 那条只挂在 bash 下：powershell 里是 Set-Location，措辞不同，
+    // 硬套过去会让模型按 bash 的语义写 PowerShell。
+    const bashRules = (guidelines.bash ??= []);
+    if (!bashRules.includes(CWD_GUIDELINE)) bashRules.push(CWD_GUIDELINE);
   });
 
   // tool_call 处理器抛错会让 Pi 拦下这次调用，所以只在输入形态确定时改写。

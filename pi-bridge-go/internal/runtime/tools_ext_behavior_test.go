@@ -112,19 +112,31 @@ func Test工具集扩展给命令补默认超时(t *testing.T) {
 
 // Test工具集扩展提醒长任务指定超时 钉住提示词准则：只挂在 shell 工具下、保留 Pi 原有准则、
 // 多轮注入不重复，且明确告诉模型默认值与「长任务须自己指定」。
+//
+// 措辞必须与工具 schema 同一口径（那里也写默认 300 秒）。旧措辞用
+// 「参数说明里的『无默认超时』在本环境不适用」去否定 schema，等于把一处
+// 矛盾塞给模型同时看到两边。
 func Test工具集扩展提醒长任务指定超时(t *testing.T) {
 	r := runToolsExtHarness(t)
 	bash := r.Guidelines["bash"]
-	if len(bash) != 2 || bash[0] != "existing rule" {
-		t.Fatalf("bash 准则应是原有一条 + 新增一条（两次注入不重复），得到 %q", bash)
+	// 原有一条 + timeout 准则 + cd 准则。
+	if len(bash) != 3 || bash[0] != "existing rule" {
+		t.Fatalf("bash 准则应是原有一条 + 新增两条（两次注入不重复），得到 %q", bash)
 	}
 	if !strings.Contains(bash[1], "300") || !strings.Contains(bash[1], "timeout") {
 		t.Fatalf("新增准则应说明 300 秒默认值并要求长任务传 timeout: %q", bash[1])
 	}
-	if got := r.Guidelines["powershell"]; len(got) != 1 || got[0] != bash[1] {
-		t.Fatalf("powershell 应挂同一句准则（Pi 按文本去重，只渲染一次）: %q", got)
+	if strings.Contains(bash[1], "不适用") {
+		t.Fatalf("准则不该再声称 schema 的说明「不适用」——两处必须同一口径: %q", bash[1])
 	}
-	if r.BareGuidelines == nil || len(r.BareGuidelines["bash"]) != 1 {
-		t.Fatalf("没有原有准则时也应建出 bash 准则: %v", r.BareGuidelines)
+	if !strings.Contains(bash[2], "cd") || !strings.Contains(bash[2], "当前工作目录") {
+		t.Fatalf("应有一条告诉模型不必 cd 到当前目录的准则: %q", bash[2])
+	}
+	// powershell 只挂 timeout 那条：cd 的措辞是 bash 语义，硬套会误导。
+	if got := r.Guidelines["powershell"]; len(got) != 1 || got[0] != bash[1] {
+		t.Fatalf("powershell 应只挂 timeout 准则（Pi 按文本去重，只渲染一次）: %q", got)
+	}
+	if r.BareGuidelines == nil || len(r.BareGuidelines["bash"]) != 2 {
+		t.Fatalf("没有原有准则时也应建出两条 bash 准则: %v", r.BareGuidelines)
 	}
 }
