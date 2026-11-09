@@ -227,6 +227,21 @@ export class Workspace {
         input.value = '';
       }, { signal: this.abort.signal });
     }
+    // 页面级兜底：拖到侧栏**之外**时，浏览器默认会导航到那个文件，
+    // 整个工作台（含当前会话界面）被替换掉。这里只拦「拖的是文件」
+    // 且落点在侧栏之外的落点；侧栏自己有更具体的处理。
+    document.addEventListener('dragover', (event) => {
+      if (this.hasFiles(event)) event.preventDefault();
+    }, { signal: this.abort.signal });
+    document.addEventListener('drop', (event) => {
+      if (!this.hasFiles(event)) return;
+      const target = document.getElementById('sidebar-files');
+      if (target && event.target instanceof Node && target.contains(event.target)) return;
+      // 落在侧栏外：不让浏览器接管，也不当作上传目标——用户没把文件
+      // 放到文件区，静默传进当前目录会让人以为「拖到哪儿都行」。
+      event.preventDefault();
+      target?.classList.remove('is-dropping');
+    }, { signal: this.abort.signal });
     const zone = document.getElementById('sidebar-files');
     if (!zone) return;
     let depth = 0;
@@ -243,8 +258,9 @@ export class Workspace {
       event.preventDefault();
       if (event.dataTransfer) event.dataTransfer.dropEffect = 'copy';
     }, { signal: this.abort.signal });
-    zone.addEventListener('dragleave', (event) => {
-      if (!this.hasFiles(event)) return;
+    zone.addEventListener('dragleave', () => {
+      // 这里**不**按 hasFiles 提前返回：Firefox 在 dragleave 阶段
+      // dataTransfer.types 可能为空，提前返回会让计数永不归零、高亮残留。
       depth = Math.max(0, depth - 1);
       if (idle()) zone.classList.remove('is-dropping');
     }, { signal: this.abort.signal });
@@ -256,6 +272,12 @@ export class Workspace {
       const files = event.dataTransfer?.files;
       if (files && files.length > 0) void this.runUpload(files);
     }, { signal: this.abort.signal });
+    // 拖出窗口或按 Esc 取消拖动时浏览器不一定补发 dragleave：
+    // 在 dragend 上无条件复位，避免高亮卡住。
+    document.addEventListener('dragend', () => {
+      depth = 0;
+      zone.classList.remove('is-dropping');
+    }, { signal: this.abort.signal });
   }
 
   /** hasFiles 判断拖动的是文件（而不是选中的文本或页内元素）。 */
@@ -265,21 +287,31 @@ export class Workspace {
   }
 
   private async runUpload(files: FileList): Promise<void> {
-    const cwd = this.path || this.cwd;
-    // 会话 id 与 workbench 同源（服务端渲染进 body 的 data-session-id）：
-    // 固定目标要把它拼进路径，因此每次上传时现读，而不是构造时快照——
-    // 切会话后 body 的 dataset 会更新，缓存的旧值会把文件放进上一个会话目录。
-    const sessionId = document.body.dataset.sessionId ?? '';
     const { uploadFiles, reportUpload, destFromTarget } = await import('./upload');
     const { readUploadTarget } = await import('./upload-target');
     if (this.abort.signal.aborted) return;
-    const dest = destFromTarget(readUploadTarget(), cwd, sessionId);
-    const outcome = await uploadFiles(dest, files, this.abort.signal);
+    // 目的地**每个文件现算**，而不是整批一个快照。
+    //
+    // 会话 id 与 workbench 同源（服务端渲染进 body 的 data-session-id），
+    // 固定目标要把它拼进路径；cwd 取 this.path（当前浏览的目录）。
+    // 用户完全可能在一批文件传完前切会话或切目录——用快照会让剩下的
+    // 文件落进「已经离开的位置」，而用户在新位置永远找不到它们。
+    let cwdUsed: string | null = null;
+    const destOf = (): ReturnType<typeof destFromTarget> => {
+      const cwd = this.path || this.cwd;
+      const sessionId = document.body.dataset.sessionId ?? '';
+      const dest = destFromTarget(readUploadTarget(), cwd, sessionId);
+      if (typeof dest !== 'string' && dest.kind === 'cwd') cwdUsed = dest.dir;
+      return dest;
+    };
+    const outcome = await uploadFiles(() => destOf(), files, this.abort.signal);
     if (this.abort.signal.aborted) return;
     reportUpload(outcome);
-    // 只有落到当前目录才刷新文件树：固定目标的路径可能在工作区之外，
-    // 刷新当前目录只会让人以为文件到了这里。
-    if (outcome.uploaded.length > 0 && typeof dest !== 'string' && dest.kind === 'cwd') await this.list(cwd);
+    // 只有**确实落到此刻正在浏览的目录**才刷新文件树：
+    //   - 固定目标的路径可能在工作区之外，刷新当前目录只会让人以为文件到了这里；
+    //   - 用户若在上传途中切走了目录，刷新会把侧栏拽回旧位置（list 会改 this.path）。
+    const here = this.path || this.cwd;
+    if (outcome.uploaded.length > 0 && cwdUsed !== null && cwdUsed === here) await this.list(here);
   }
 
   private applyFilesCollapsed(collapsed: boolean): void {

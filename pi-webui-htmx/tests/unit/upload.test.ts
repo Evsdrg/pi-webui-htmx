@@ -137,3 +137,36 @@ test('目的地是错误消息时不发请求', async () => {
   expect(fetchMock).not.toHaveBeenCalled();
   expect(outcome.rejected.length).toBe(1);
 });
+
+// ---- 上传途中目标变化：目的地必须每个文件现算 ----
+
+test('一批文件途中切换会话后，剩余文件落到新会话目录', async () => {
+  const fetchMock = vi.fn().mockImplementation(() => Promise.resolve(okResponse('/scratch/piwebui/x/a.txt')));
+  vi.stubGlobal('fetch', fetchMock);
+  // 模拟用户在上传第一个文件期间切了会话：dataset 变了。
+  let reads = 0;
+  const destOf = () => {
+    reads++;
+    const sessionId = reads === 1 ? 'old-session' : 'new-session';
+    return { kind: 'fixed' as const, base: '/scratch', sessionId };
+  };
+  await uploadFiles(destOf, [file('a.txt'), file('b.txt')], new AbortController().signal);
+  const first = (fetchMock.mock.calls[0] as [string, RequestInit])[1].body as FormData;
+  const second = (fetchMock.mock.calls[1] as [string, RequestInit])[1].body as FormData;
+  expect(first.get('sessionId')).toBe('old-session');
+  expect(second.get('sessionId')).toBe('new-session');
+});
+
+test('目的地现算返回错误消息时，该文件记为失败且不再继续', async () => {
+  const fetchMock = vi.fn().mockResolvedValue(okResponse('/repo/a.txt'));
+  vi.stubGlobal('fetch', fetchMock);
+  let calls = 0;
+  const destOf = () => {
+    calls++;
+    return calls === 1 ? cwdDest() : '还没有确定工作目录';
+  };
+  const outcome = await uploadFiles(destOf, [file('a.txt'), file('b.txt')], new AbortController().signal);
+  expect(outcome.uploaded).toEqual(['/repo/a.txt']);
+  expect(outcome.rejected).toEqual(['还没有确定工作目录']);
+  expect(fetchMock).toHaveBeenCalledTimes(1);
+});

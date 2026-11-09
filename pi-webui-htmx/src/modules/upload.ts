@@ -78,21 +78,32 @@ export function destFromTarget(target: UploadTarget, cwd: string, sessionId: str
 }
 
 /**
+ * 目的地来源：固定值，或每个文件现算一次的函数。
+ *
+ * 为什么要允许函数：固定目标把会话 id 拼进路径，而用户完全可能在一批
+ * 文件传完之前切换会话或切换目录。整批共用一个快照会让剩下的文件落进
+ * 「已经离开的那个会话/目录」，用户在新位置永远找不到它们。现算的
+ * 语义是「文件落到你此刻看到的那个位置」，与按钮/拖放所在位置一致。
+ */
+export type DestinationSource = UploadDestination | string | ((file: File) => UploadDestination | string);
+
+/**
  * uploadFiles 逐个上传。
  *
  * 串行而不是并发：桥对同名文件是「先到先得」，并发上传两个同名文件时
  * 谁成功取决于调度，用户看到的提示会自相矛盾。串行让结果与选择顺序一致。
  */
-export async function uploadFiles(dest: UploadDestination | string, files: FileList | File[], signal: AbortSignal): Promise<UploadOutcome> {
+export async function uploadFiles(dest: DestinationSource, files: FileList | File[], signal: AbortSignal): Promise<UploadOutcome> {
   const outcome: UploadOutcome = { uploaded: [], rejected: [] };
-  if (typeof dest === 'string') {
-    outcome.rejected.push(dest);
-    return outcome;
-  }
   for (const file of Array.from(files)) {
     if (signal.aborted) break;
+    const resolved = typeof dest === 'function' ? dest(file) : dest;
+    if (typeof resolved === 'string') {
+      outcome.rejected.push(resolved);
+      return outcome;
+    }
     try {
-      const saved = await uploadOne(dest, file, signal);
+      const saved = await uploadOne(resolved, file, signal);
       outcome.uploaded.push(saved);
     } catch (error) {
       if (signal.aborted) break;
