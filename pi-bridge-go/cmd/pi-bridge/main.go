@@ -191,6 +191,20 @@ func serve() error {
 		return err
 	}
 	defer files.Close()
+	// 上传是桥里唯一的写入口，因此必须在那里拒绝「写进去就能接管本服务」的
+	// 目录。清单按**运行时事实**给，不写死部署路径：桥自己的可执行文件所在
+	// 目录、UI 发布目录、状态目录、agent 目录。前两者尤其致命——可执行文件
+	// 被替换 = 远程代码执行，UI 目录被替换 = 向所有浏览器注入脚本。
+	//
+	// 桥自己的位置**只能**用 os.Executable() 取：--pi 是 Pi 的路径，不是桥的。
+	// 实测这个混淆会让部署目录整个漏保护——deploy/pi-bridge 就在 deploy 下，
+	// 而 deploy/ui 因为 --ui-dir 被保护，看上去「目录已经被护住了」。
+	self, err := os.Executable()
+	if err != nil {
+		// 取不到真实路径时不能静默跳过：那会让上传可以覆盖桥自己。
+		return fmt.Errorf("无法确定桥自身的可执行文件路径，拒绝在不设防的情况下启动：%w", err)
+	}
+	files.Protect(protectWritable(self, *uiDir, *stateDir, *agentDir)...)
 
 	termCfg := terminal.Defaults()
 	termCfg.MaxTerminals = *maxTerminals
@@ -313,4 +327,34 @@ func privateOrOverlay(ip net.IP) bool {
 		return v4[0] == 100 && v4[1]&0xc0 == 64
 	}
 	return false
+}
+
+// protectWritable 列出上传写入时一律拒绝的目录。
+//
+// 判据是「写进去就能接管本服务或污染所有浏览器」，而不是「这些目录重要」：
+//
+//	桥自身可执行文件所在目录  可执行文件可被替换 → 远程代码执行
+//	UI 发布目录        外壳与 assets 可被替换 → 向所有浏览器注入脚本
+//	状态目录 / agent 目录  会话索引、凭据、receipts 与插件配置都在里面
+//
+// 目录按真实路径交给 workspace.Protect；解析失败的项原样保留（宁严勿松）。
+// 空值与不存在的目录直接跳过——它们本来就写不进去。
+func protectWritable(selfExe, uiDir, stateDir, agentDir string) []string {
+	var out []string
+	if selfExe != "" {
+		// 传进来的是可执行文件本身（os.Executable 的结果），保护它所在的目录：
+		// 同名替换、改名替换、旁边放一个同名脚本都在这条之内。
+		if abs, err := filepath.Abs(selfExe); err == nil {
+			out = append(out, filepath.Dir(abs))
+		}
+	}
+	for _, d := range []string{uiDir, stateDir, agentDir} {
+		if d == "" {
+			continue
+		}
+		if abs, err := filepath.Abs(d); err == nil {
+			out = append(out, abs)
+		}
+	}
+	return out
 }

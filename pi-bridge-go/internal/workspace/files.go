@@ -46,10 +46,11 @@ type Files struct {
 	limits  Limits
 	gitPath string
 
-	// mu 保护 roots（已打开的根目录句柄）。打开句柄是慢操作，
-	// 因此临界区只覆盖查表与插入，不要在持锁期间遍历目录。
-	mu    sync.Mutex
-	roots map[string]*os.Root
+	// mu 保护 roots（已打开的根目录句柄）与 protected（写入拒绝清单）。
+	// 打开句柄是慢操作，因此临界区只覆盖查表与插入，不要在持锁期间遍历目录。
+	mu        sync.Mutex
+	roots     map[string]*os.Root
+	protected []string
 
 	// indexMu 保护 indexCache。它与 mu **从不同时持有**：索引构建会遍历
 	// 大量文件，构建期间已经放开 indexMu（见 indexFor），因此不存在
@@ -323,4 +324,138 @@ func (f *Files) Roots() []string {
 	out := make([]string, len(f.policy.roots))
 	copy(out, f.policy.roots)
 	return out
+}
+
+// Protect 声明写入时一律拒绝的路径前缀（真实路径）。
+//
+// 为什么需要它：生产的工作区根是 /opt/helloworld，而桥自己的二进制、
+// 启动脚本与 UI 发布目录都在这棵树里。只靠「必须在工作区根内」这一条，
+// 网页就能把二进制换掉——那是「网页能不能写文件」变成「网页能不能接管
+// 服务」的差别。拒绝清单由启动方按运行时事实给出（可执行文件所在目录、
+// UI 目录、状态目录、agent 目录），而不是在这里写死某个部署路径。
+//
+// 传入的路径先解析符号链接；解析失败的直接按原样保留（宁严勿松）。
+func (f *Files) Protect(paths ...string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, p := range paths {
+		if p == "" {
+			continue
+		}
+		abs, err := filepath.Abs(p)
+		if err != nil {
+			continue
+		}
+		if real, err := filepath.EvalSymlinks(abs); err == nil {
+			abs = real
+		}
+		f.protected = append(f.protected, filepath.Clean(abs))
+	}
+}
+
+// resolveTarget 把「准备写入的目标路径」映射到授权根内。
+//
+// 与 resolve 的差别：目标**还不存在**，所以不能对整条路径做 EvalSymlinks。
+// 做法是解析父目录的真实路径，再把文件基名原样接上——这样最后一段的
+// 符号链接不会被跟随（配合 O_EXCL，指向链接的写入直接失败），而父目录
+// 里的 .. 与链接逃逸仍然被真实路径比对挡住。
+func (f *Files) resolveTarget(path string) (root, rel string, err error) {
+	if path == "" {
+		return "", "", protocol.E("invalid_params", "path 不能为空")
+	}
+	if !filepath.IsAbs(path) {
+		return "", "", protocol.E("invalid_params", "path 必须是绝对路径")
+	}
+	clean := filepath.Clean(path)
+	base := filepath.Base(clean)
+	// 基名必须是普通文件名：上游已经把 filename 清洗过，这里是最后一道。
+	if base == "." || base == ".." || base == string(filepath.Separator) {
+		return "", "", protocol.E("invalid_params", "文件名不合法")
+	}
+	parentReal, err := filepath.EvalSymlinks(filepath.Dir(clean))
+	if err != nil {
+		return "", "", protocol.E("not_found", "目标目录不存在")
+	}
+	if st, serr := os.Stat(parentReal); serr != nil || !st.IsDir() {
+		return "", "", protocol.E("not_found", "目标目录不存在")
+	}
+	best := ""
+	for _, r := range f.policy.roots {
+		relDir, rerr := filepath.Rel(r, parentReal)
+		if rerr != nil || relDir == ".." || strings.HasPrefix(relDir, ".."+string(filepath.Separator)) {
+			continue
+		}
+		if best == "" || len(r) > len(best) {
+			best = r
+		}
+	}
+	if best == "" {
+		return "", "", protocol.E("forbidden", "路径不在已配置的工作区根内")
+	}
+	full := filepath.Join(parentReal, base)
+	f.mu.Lock()
+	protected := append([]string(nil), f.protected...)
+	f.mu.Unlock()
+	for _, p := range protected {
+		if full == p || strings.HasPrefix(full, p+string(filepath.Separator)) {
+			return "", "", protocol.E("forbidden", "该目录不允许写入")
+		}
+	}
+	relDir, err := filepath.Rel(best, parentReal)
+	if err != nil {
+		return "", "", protocol.E("forbidden", "无法解析相对路径")
+	}
+	return best, filepath.ToSlash(filepath.Join(relDir, base)), nil
+}
+
+// errUploadExists 表示目标已存在。上传**永不覆盖**：覆盖是网页能造成
+// 的最容易误触的破坏（同名文件撞上用户源码），而「想改内容」有编辑类
+// 工具，不该由上传顺手完成。
+var errUploadExists = protocol.E("conflict", "目标文件已存在，上传不覆盖")
+
+// Upload 把一个流写入工作区根内的新文件，返回写入字节数。
+//
+// 为什么会整体读进内存再写：上限是 MaxReadByte（默认 4 MiB），与读取
+// 上限同源；一次性读入让「超限」发生在任何字节落盘之前，因此失败不会
+// 留下半截文件——半截文件比明确失败更糟，它会被后续工具当成完整输入。
+//
+// 落盘用 os.Root 的 O_CREATE|O_EXCL：内核侧保证不跟随最后一段符号链接、
+// 且目标已存在时直接失败，不依赖 Go 侧先查后写（那之间有竞态）。
+func (f *Files) Upload(src io.Reader, path string, perm os.FileMode) (int64, error) {
+	root, rel, err := f.resolveTarget(path)
+	if err != nil {
+		return 0, err
+	}
+	data, err := readAtMost(src, f.limits.MaxReadByte)
+	if err != nil {
+		if errors.Is(err, errTooLarge) {
+			return 0, protocol.E("limit_exceeded", "文件超过上传体积上限")
+		}
+		return 0, protocol.E("invalid_request", "读取上传内容失败")
+	}
+	if len(data) == 0 {
+		return 0, protocol.E("invalid_params", "文件内容为空")
+	}
+	r, err := f.rootFor(root)
+	if err != nil {
+		return 0, err
+	}
+	if perm == 0 {
+		perm = 0o644
+	}
+	file, err := r.OpenFile(rel, os.O_CREATE|os.O_EXCL|os.O_WRONLY, perm)
+	if err != nil {
+		if errors.Is(err, os.ErrExist) {
+			return 0, errUploadExists
+		}
+		return 0, protocol.E("forbidden", "无法创建目标文件")
+	}
+	n, werr := file.Write(data)
+	cerr := file.Close()
+	if werr != nil || cerr != nil {
+		// 写一半失败：删掉半截文件再报错。
+		_ = r.Remove(rel)
+		return 0, protocol.E("pi_error", "写入文件失败")
+	}
+	return int64(n), nil
 }

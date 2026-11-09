@@ -49,6 +49,7 @@ export class Workspace {
       if (button) void this.action(button.dataset.action ?? '').catch(onError);
     }, { signal: this.abort.signal });
     this.mountSidebarFiles();
+    this.mountUpload();
     bridge.addEventListener('disconnected', () => {
       this.terminal?.disconnected();
     }, { signal: this.abort.signal });
@@ -207,6 +208,71 @@ export class Workspace {
         savePreference('sidebar-files-ratio', String(currentRatio()));
       }, { signal: this.abort.signal });
     }
+  }
+
+  /**
+   * 上传：工具按钮选文件，或把文件直接拖进侧栏文件区。
+   *
+   * 拖放目标选整个 .sidebar-files 而不是只有列表：列表在目录展开后是
+   * 嵌套结构，把 dragover 挂在它上面会让「拖到子目录」误判成拖到父目录。
+   * 当前目标目录始终是 this.path（与文件列表显示的是同一个）。
+   */
+  private mountUpload(): void {
+    const input = elOrNull<HTMLInputElement>('upload-input');
+    if (input) {
+      input.addEventListener('change', () => {
+        const files = input.files;
+        if (files && files.length > 0) void this.runUpload(files);
+        // 清空 value：否则连续选同一个文件不会再触发 change。
+        input.value = '';
+      }, { signal: this.abort.signal });
+    }
+    const zone = document.getElementById('sidebar-files');
+    if (!zone) return;
+    let depth = 0;
+    const idle = (): boolean => depth === 0;
+    zone.addEventListener('dragenter', (event) => {
+      if (!this.hasFiles(event)) return;
+      event.preventDefault();
+      depth++;
+      zone.classList.add('is-dropping');
+    }, { signal: this.abort.signal });
+    zone.addEventListener('dragover', (event) => {
+      if (!this.hasFiles(event)) return;
+      // 不 preventDefault 的话浏览器会用默认行为打开这个文件。
+      event.preventDefault();
+      if (event.dataTransfer) event.dataTransfer.dropEffect = 'copy';
+    }, { signal: this.abort.signal });
+    zone.addEventListener('dragleave', (event) => {
+      if (!this.hasFiles(event)) return;
+      depth = Math.max(0, depth - 1);
+      if (idle()) zone.classList.remove('is-dropping');
+    }, { signal: this.abort.signal });
+    zone.addEventListener('drop', (event) => {
+      if (!this.hasFiles(event)) return;
+      event.preventDefault();
+      depth = 0;
+      zone.classList.remove('is-dropping');
+      const files = event.dataTransfer?.files;
+      if (files && files.length > 0) void this.runUpload(files);
+    }, { signal: this.abort.signal });
+  }
+
+  /** hasFiles 判断拖动的是文件（而不是选中的文本或页内元素）。 */
+  private hasFiles(event: DragEvent): boolean {
+    const types = event.dataTransfer?.types;
+    return types ? Array.from(types).includes('Files') : false;
+  }
+
+  private async runUpload(files: FileList): Promise<void> {
+    const dir = this.path || this.cwd;
+    const { uploadFiles, reportUpload } = await import('./upload');
+    if (this.abort.signal.aborted) return;
+    const outcome = await uploadFiles(dir, files, this.abort.signal);
+    if (this.abort.signal.aborted) return;
+    reportUpload(outcome);
+    // 有成功的才刷新：全失败时刷一遍列表只会让人以为上传成功了。
+    if (outcome.uploaded.length > 0) await this.list(dir);
   }
 
   private applyFilesCollapsed(collapsed: boolean): void {
@@ -424,6 +490,7 @@ export class Workspace {
   private async action(action: string): Promise<void> {
     switch (action) {
       case 'files-up': { const parent = '/' + this.path.split('/').filter(Boolean).slice(0, -1).join('/'); await this.list(parent); break; }
+      case 'files-upload': el<HTMLInputElement>('upload-input').click(); break;
       case 'files-refresh': await this.list(this.path || this.cwd); break;
       case 'file-close':
         this.generation++; this.previewRequest?.abort();

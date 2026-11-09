@@ -856,6 +856,10 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.serveMCPProbe(w, r, encoding)
 		return
 	}
+	if r.Method == http.MethodPost && r.URL.Path == "/ui/files/upload" {
+		s.serveUpload(w, r, encoding)
+		return
+	}
 	if r.Method != http.MethodGet {
 		writeError(w, encoding, 405, protocol.E("invalid_request", "请求方法不被允许"))
 		return

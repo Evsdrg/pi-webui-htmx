@@ -227,9 +227,9 @@ for(const [name,relative] of Object.entries(manifest.templates??{})){
   'row':{from:'export.html `row-{{.Kind}}`，Kind 由 sessions/export.go 枚举 user/assistant/thinking/toolCall/toolResult/info',suffixes:['','user','assistant','thinking','toolCall','toolResult','info']},
   // is-*：mc.html:2 `mc-tag is-{{.Status}}`（status 来自 magic-context 库的
   //   status 列：active/archived/dismissed/pending/dropped）；is-running（模板+TS）、
-  //   is-collapsed（workspace.ts toggle）、is-primary/is-danger（模板静态）、
-  //   is-grow（models.css 实用类）。
-  'is':{from:'mc.html `mc-tag is-{{.Status}}` + 模板/TS 的 is-running、is-collapsed、is-primary、is-danger、is-grow',suffixes:['','running','collapsed','active','archived','superseded','dismissed','pending','dropped','grow','primary','danger']},
+  //   is-collapsed（workspace.ts toggle）、is-dropping（workspace.ts 拖放上传落点）、
+  //   is-primary/is-danger（模板静态）、is-grow（models.css 实用类）。
+  'is':{from:'mc.html `mc-tag is-{{.Status}}` + 模板/TS 的 is-running、is-collapsed、is-dropping、is-primary、is-danger、is-grow',suffixes:['','running','collapsed','dropping','active','archived','superseded','dismissed','pending','dropped','grow','primary','danger']},
  };
  // htmx/浏览器运行时会自己挂上的类：不在我方任何源码里出现。
  const RUNTIME_CLASSES=new Set([

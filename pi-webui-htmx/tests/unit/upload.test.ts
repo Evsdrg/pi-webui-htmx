@@ -1,0 +1,94 @@
+// 上传：把文件送到桥的写入口。
+// 桥那边「不覆盖 / 越界拒绝 / 受保护目录」的判定由 Go 测试钉住，
+// 这里只钉前端的两件事：请求形状正确，以及失败原因原样呈现给用户。
+import { afterEach, expect, test, vi } from 'vitest';
+import { uploadFiles, reportUpload } from '@/modules/upload';
+import { clearToasts } from '@/modules/toast';
+
+afterEach(() => { vi.unstubAllGlobals(); clearToasts(); document.body.replaceChildren(); });
+
+function okResponse(path: string): Response {
+  return new Response(JSON.stringify({ ok: true, path, size: 5 }), {
+    status: 200,
+    headers: { 'Content-Type': 'application/json' },
+  });
+}
+
+function errResponse(status: number, message: string): Response {
+  return new Response(JSON.stringify({ ok: false, error: { code: 'conflict', message } }), {
+    status,
+    headers: { 'Content-Type': 'application/json' },
+  });
+}
+
+const file = (name: string, content = 'hello') => new File([content], name, { type: 'text/plain' });
+
+test('上传把目录与文件放进同一份 multipart', async () => {
+  const fetchMock = vi.fn().mockResolvedValue(okResponse('/repo/a.txt'));
+  vi.stubGlobal('fetch', fetchMock);
+  const outcome = await uploadFiles('/repo', [file('a.txt')], new AbortController().signal);
+  expect(outcome.uploaded).toEqual(['/repo/a.txt']);
+  expect(outcome.rejected).toEqual([]);
+  const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+  expect(url).toBe('ui/files/upload');
+  expect(init.method).toBe('POST');
+  const body = init.body as FormData;
+  expect(body.get('dir')).toBe('/repo');
+  expect((body.get('file') as File).name).toBe('a.txt');
+});
+
+test('多个文件串行上传，顺序与选择一致', async () => {
+  const calls: string[] = [];
+  const fetchMock = vi.fn().mockImplementation((_url: string, init: RequestInit) => {
+    const body = init.body as FormData;
+    calls.push((body.get('file') as File).name);
+    return Promise.resolve(okResponse('/repo/x'));
+  });
+  vi.stubGlobal('fetch', fetchMock);
+  await uploadFiles('/repo', [file('b.txt'), file('a.txt')], new AbortController().signal);
+  expect(calls).toEqual(['b.txt', 'a.txt']);
+});
+
+test('被拒绝的文件保留桥给出的原因', async () => {
+  vi.stubGlobal('fetch', vi.fn().mockResolvedValue(errResponse(409, '目标文件已存在，上传不覆盖')));
+  const outcome = await uploadFiles('/repo', [file('dup.txt')], new AbortController().signal);
+  expect(outcome.uploaded).toEqual([]);
+  expect(outcome.rejected[0]).toContain('dup.txt');
+  expect(outcome.rejected[0]).toContain('目标文件已存在');
+});
+
+test('部分成功时两边的结果都记下来', async () => {
+  const fetchMock = vi.fn()
+    .mockResolvedValueOnce(okResponse('/repo/ok.txt'))
+    .mockResolvedValueOnce(errResponse(403, '该目录不允许写入'));
+  vi.stubGlobal('fetch', fetchMock);
+  const outcome = await uploadFiles('/repo', [file('ok.txt'), file('bad.txt')], new AbortController().signal);
+  expect(outcome.uploaded).toEqual(['/repo/ok.txt']);
+  expect(outcome.rejected[0]).toContain('该目录不允许写入');
+});
+
+test('没有工作目录时不发请求', async () => {
+  const fetchMock = vi.fn();
+  vi.stubGlobal('fetch', fetchMock);
+  const outcome = await uploadFiles('', [file('a.txt')], new AbortController().signal);
+  expect(fetchMock).not.toHaveBeenCalled();
+  expect(outcome.rejected.length).toBe(1);
+});
+
+test('中止后不再继续上传剩余文件', async () => {
+  const controller = new AbortController();
+  const fetchMock = vi.fn().mockImplementation(() => {
+    controller.abort();
+    return Promise.reject(new DOMException('aborted', 'AbortError'));
+  });
+  vi.stubGlobal('fetch', fetchMock);
+  await uploadFiles('/repo', [file('a.txt'), file('b.txt')], controller.signal);
+  expect(fetchMock).toHaveBeenCalledTimes(1);
+});
+
+test('部分失败时提示里同时给出成功数与失败原因', () => {
+  reportUpload({ uploaded: ['/repo/a.txt'], rejected: ['b.txt: 目标文件已存在，上传不覆盖'] });
+  const text = document.body.textContent ?? '';
+  expect(text).toContain('已上传 1 个');
+  expect(text).toContain('目标文件已存在');
+});
