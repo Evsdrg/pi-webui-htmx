@@ -511,3 +511,78 @@ func TestCall忽略fields里的id与type(t *testing.T) {
 		t.Fatalf("普通字段必须原样传递，得到 %v", sent["command"])
 	}
 }
+
+// Pi 的错误帧不一定带 id：命令解析失败（`Failed to parse command`）
+// 与未知命令（`Unknown command: undefined`，缺 type 字段时）都只给
+// {"type":"response","success":false,...}。旧实现按 id 查 pending，
+// 查不到就**静默丢弃**，于是调用方只能等满自己的 ctx 超时（生产上
+// 是 30 秒），期间连接还被这条无人认领的错误占着。
+//
+// 语义：唯一在途的命令可以安全地把这条无 id 的失败认领给它——
+// Pi 是按行串行处理的，一个响应必然对应某个已发出的命令；而在途
+// 只有一条时，它没有第二个候选。
+func TestCall认领无ID的错误帧(t *testing.T) {
+	c, _, out := newPair(t, nil)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	go func() {
+		testutil.WaitFor(t, "命令写入 stdin", func() bool { return c.pendingCount() == 1 })
+		out.push(`{"type":"response","success":false,"error":"Unknown command: undefined"}` + "\n")
+	}()
+	start := time.Now()
+	_, err := c.Call(ctx, "get_tree", nil)
+	elapsed := time.Since(start)
+	var re *RPCError
+	if !errors.As(err, &re) {
+		t.Fatalf("无 id 的错误帧应作为 RPCError 返回，实际 %v（耗时 %v）", err, elapsed)
+	}
+	if !strings.Contains(re.Message, "Unknown command") {
+		t.Fatalf("错误消息应原样带回：%q", re.Message)
+	}
+	if elapsed > 2*time.Second {
+		t.Fatalf("不该等到超时才返回，实际耗时 %v", elapsed)
+	}
+}
+
+// 在途命令不止一条时不能猜：无 id 的错误帧无法归属，只能记日志丢弃，
+// 让各自的调用方按自己的超时收场。这条钉住「不误伤」。
+func TestCall不认领无ID帧当有多条在途(t *testing.T) {
+	c, _, out := newPair(t, nil)
+	ctx, cancel := context.WithTimeout(context.Background(), 600*time.Millisecond)
+	defer cancel()
+	done := make(chan error, 1)
+	go func() {
+		_, err := c.Call(ctx, "get_tree", nil)
+		done <- err
+	}()
+	testutil.WaitFor(t, "第一条命令写入 stdin", func() bool { return c.pendingCount() == 1 })
+	// 第二条在途命令：此时无 id 帧不唯一归属。
+	ctx2, cancel2 := context.WithTimeout(context.Background(), 600*time.Millisecond)
+	defer cancel2()
+	go func() { _, _ = c.Call(ctx2, "get_state", nil) }()
+	testutil.WaitFor(t, "两条命令在途", func() bool { return c.pendingCount() == 2 })
+	out.push(`{"type":"response","success":false,"error":"Unknown command: undefined"}` + "\n")
+	// 两条都应各自超时（而不是被这条帧错误地判成 RPCError）。
+	err := <-done
+	var unknown *UnknownOutcome
+	if !errors.As(err, &unknown) {
+		t.Fatalf("多条在途时不应认领无 id 帧，期望 UnknownOutcome，实际 %v", err)
+	}
+}
+
+// 无 id 的**成功**帧不能认领：那可能是任何东西（例如 Pi 主动推送的
+// 非事件型确认），把它当成命令结果会让调用方拿到错的数据。
+func TestCall不认领无ID的成功帧(t *testing.T) {
+	c, _, out := newPair(t, nil)
+	ctx, cancel := context.WithTimeout(context.Background(), 600*time.Millisecond)
+	defer cancel()
+	go func() {
+		testutil.WaitFor(t, "命令写入 stdin", func() bool { return c.pendingCount() == 1 })
+		out.push(`{"type":"response","success":true,"data":{"tree":[]}}` + "\n")
+	}()
+	_, err := c.Call(ctx, "get_tree", nil)
+	var unknown *UnknownOutcome
+	if !errors.As(err, &unknown) {
+		t.Fatalf("无 id 的成功帧不应被认领，期望超时，实际 %v", err)
+	}
+}

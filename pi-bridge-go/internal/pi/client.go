@@ -139,6 +139,37 @@ func frameID(head []byte) string {
 	return id
 }
 
+// deliver 把一条 response 帧交给等待它的调用方。
+//
+// 正常路径按 id 匹配。无 id 的**失败**帧是 Pi 的真实行为（命令解析失败、
+// 未知命令都只回 {"type":"response","success":false,...}，实测：缺 type
+// 字段的帧得到 `Unknown command: undefined`），按 id 查不到就静默丢弃的话，
+// 调用方只能等满自己的 ctx 超时——生产上是 30 秒，期间还占着在途名额。
+//
+// 认领规则：
+//   - 只在「在途恰好一条」时认领。Pi 按行串行处理，一个响应必然对应某个
+//     已发出的命令；在途只有一条时它没有第二个候选。
+//   - 多条在途时无法归属，只能丢弃：宁可让各自的调用方按自己的超时收场，
+//     也不要把错误按给无辜的命令。
+//   - 成功帧一律不认领：无 id 的成功响应可能属于别的语义，把它当命令结果
+//     会让调用方拿到错的数据。
+func (c *Client) deliver(id string, rr result) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if ch, ok := c.pending[id]; ok {
+		delete(c.pending, id)
+		ch <- rr
+		return
+	}
+	if id != "" || rr.err == nil || len(c.pending) != 1 {
+		return
+	}
+	for pendingID, ch := range c.pending {
+		delete(c.pending, pendingID)
+		ch <- rr
+	}
+}
+
 // rejectPending 给某个等待中的调用方回报错误，不影响连接本身。
 func (c *Client) rejectPending(id string, cause error) {
 	c.mu.Lock()
@@ -355,12 +386,7 @@ func (c *Client) read() {
 			if !frame.Success {
 				rr.err = &RPCError{Message: frame.Error}
 			}
-			c.mu.Lock()
-			if ch, ok := c.pending[frame.ID]; ok {
-				delete(c.pending, frame.ID)
-				ch <- rr
-			}
-			c.mu.Unlock()
+			c.deliver(frame.ID, rr)
 		} else if c.onEvent != nil {
 			c.onEvent(json.RawMessage(b))
 		}
