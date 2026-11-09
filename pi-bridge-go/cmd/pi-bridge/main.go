@@ -57,6 +57,7 @@ func serve() error {
 	maxWorkers := flag.Int("max-workers", 4, "活跃工作进程上限")
 	maxTerminals := flag.Int("max-terminals", 4, "并发终端上限")
 	terminalIdle := flag.Duration("terminal-idle", 10*time.Minute, "空闲终端的回收时间")
+	uploadBase := flag.String("upload-base", "/tmp", "上传「固定目标」模式允许的基路径，逗号分隔（落点恒为 <base>/piwebui/<会话id>/）")
 	flag.Parse()
 
 	if *root == "" {
@@ -205,6 +206,18 @@ func serve() error {
 		return fmt.Errorf("无法确定桥自身的可执行文件路径，拒绝在不设防的情况下启动：%w", err)
 	}
 	files.Protect(protectWritable(self, *uiDir, *stateDir, *agentDir)...)
+	// 固定目标上传（<base>/piwebui/<会话id>/）会写到工作区根之外，
+	// 因此可用基路径必须由启动方声明：网页只能在白名单里选，传任意绝对
+	// 路径进来一律拒绝。声明了但不存在的目录会被跳过（见 SetUploadBases）。
+	files.SetUploadBases(strings.Split(*uploadBase, ",")...)
+	if len(files.UploadBases()) == 0 && strings.TrimSpace(*uploadBase) != "" {
+		slog.Warn("--upload-base 里没有任何可用的基路径，上传只能落在当前目录", "值", *uploadBase)
+	}
+	// 受保护目录优先于上传白名单。两者撞上时上传会一直 403，而用户只看到
+	// 「该目录不允许写入」——把撞车的目录打出来，否则这是最难查的一类配置错。
+	if shadowed := files.ShadowedUploadBases(); len(shadowed) > 0 {
+		slog.Warn("--upload-base 里的这些目录同时也在受保护清单里，写入会被拒绝", "目录", shadowed)
+	}
 
 	termCfg := terminal.Defaults()
 	termCfg.MaxTerminals = *maxTerminals

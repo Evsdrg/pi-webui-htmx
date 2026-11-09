@@ -30,6 +30,12 @@ const (
 	uploadPathField = "path"
 	// uploadDirQuery 是没有 path 字段时的目标目录（必须已在授权根内）。
 	uploadDirQuery = "dir"
+	// uploadBaseField 是固定目标模式的基路径（必须是启动方批准的白名单项）。
+	uploadBaseField = "base"
+	// uploadSessionField 是固定目标模式要拼进路径的会话 id。
+	uploadSessionField = "sessionId"
+	// uploadSessionQuery 是 sessionId 的查询参数形式（与表单字段同义）。
+	uploadSessionQuery = "sessionId"
 	// uploadMaxHeaderBytes 限制 multipart 头部的体积，避免用超长文件名
 	// 或巨量字段做内存放大。文件本体另由 workspace 的体积上限约束。
 	uploadMaxHeaderBytes = 64 << 10
@@ -61,11 +67,13 @@ func (s *Server) serveUpload(w http.ResponseWriter, r *http.Request, enc present
 	}
 
 	var (
-		targetPath string
-		targetDir  string
-		fileName   string
-		uploaded   bool
-		written    int64
+		targetPath    string
+		targetDir     string
+		targetBase    string
+		targetSession string
+		fileName      string
+		uploaded      bool
+		written       int64
 	)
 	// 文件内容先缓冲再落盘，而不是边读边写。
 	//
@@ -110,6 +118,22 @@ func (s *Server) serveUpload(w http.ResponseWriter, r *http.Request, enc present
 				return
 			}
 			targetDir = strings.TrimSpace(string(b))
+		case uploadBaseField:
+			b, rerr := io.ReadAll(io.LimitReader(part, uploadMaxHeaderBytes))
+			_ = part.Close()
+			if rerr != nil {
+				writeError(w, enc, http.StatusBadRequest, protocol.E("invalid_params", "读取 base 字段失败"))
+				return
+			}
+			targetBase = strings.TrimSpace(string(b))
+		case uploadSessionField:
+			b, rerr := io.ReadAll(io.LimitReader(part, uploadMaxHeaderBytes))
+			_ = part.Close()
+			if rerr != nil {
+				writeError(w, enc, http.StatusBadRequest, protocol.E("invalid_params", "读取 sessionId 字段失败"))
+				return
+			}
+			targetSession = strings.TrimSpace(string(b))
 		case uploadField:
 			if uploaded {
 				_ = part.Close()
@@ -131,6 +155,28 @@ func (s *Server) serveUpload(w http.ResponseWriter, r *http.Request, enc present
 	}
 	if !uploaded {
 		writeError(w, enc, http.StatusBadRequest, protocol.E("invalid_params", "请求里没有文件内容"))
+		return
+	}
+	// 三种目标模式，优先级从高到低：
+	//   1) base + sessionId  → 固定目标 <base>/piwebui/<会话id>/<文件名>
+	//   2) path              → 明确指定的完整路径（仍须在工作区根内）
+	//   3) dir + 文件名       → dir/<文件名>
+	// 模式 1 会写到工作区根之外，因此 base 必须是启动方批准的白名单项。
+	if targetBase != "" {
+		sessionID := targetSession
+		if sessionID == "" {
+			sessionID = strings.TrimSpace(r.URL.Query().Get(uploadSessionQuery))
+		}
+		name := fileName
+		if targetPath != "" {
+			name = filepath.Base(targetPath)
+		}
+		saved, serr := s.files.UploadScratchNamed(bytes.NewReader(buf.Bytes()), targetBase, sessionID, name)
+		if serr != nil {
+			writeUploadError(w, enc, serr)
+			return
+		}
+		writeJSON(w, enc, http.StatusOK, map[string]any{"path": saved, "size": len(buf.Bytes())})
 		return
 	}
 	if targetPath == "" {

@@ -284,6 +284,15 @@
               <div class="config-field"><label class="switch"><input id="default-auto-retry" type="checkbox"><span>自动重试</span></label><span class="hint">模型请求失败时自动重试；工作进程启动时按此设置。仅保存在本机浏览器。</span></div>
               <fieldset class="queue-modes"><legend>运行中发送方式</legend><label class="switch"><input type="radio" name="default-queue-kind" value="steering" checked><span>插入指令（本轮结束后立即执行）</span></label><label class="switch"><input type="radio" name="default-queue-kind" value="followUp"><span>完成后追加（排到队列末尾）</span></label></fieldset>
             </div>
+            <div class="config-group">
+              <div class="config-detail-header"><h3 class="config-detail-title">上传目标</h3></div>
+              <div class="config-field"><label class="switch"><input id="upload-to-cwd" type="checkbox" checked><span>上传到当前目录</span></label><span class="hint">开着时，文件落在侧栏文件区正在浏览的目录里；关掉则集中收到下面配置的统一目录。</span></div>
+              <div class="config-field" id="upload-base-field" hidden><label for="upload-base">统一目标目录</label>
+                <input id="upload-base" type="text" class="mono" list="upload-base-options" placeholder="/tmp" spellcheck="false" autocapitalize="off" autocomplete="off">
+                <datalist id="upload-base-options"></datalist>
+                <span class="hint" id="upload-base-hint">文件会放到 <code class="mono">…</code>。只接受桥启动时批准的目录。</span>
+              </div>
+            </div>
           </section>
           {{/* 扩展 */}}
           <section class="config-detail-stack" data-settings-panel="extensions" hidden>

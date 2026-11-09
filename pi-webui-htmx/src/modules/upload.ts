@@ -14,6 +14,8 @@
 // wsRequestBytes 去猜只会猜错（那是 WS 帧预算，不是上传上限）。
 
 import { showToast } from './toast';
+import type { UploadTarget } from './upload-target';
+import { effectiveBase } from './upload-target';
 
 interface UploadReply { path: string; size: number }
 
@@ -23,9 +25,19 @@ export interface UploadOutcome {
   rejected: string[];
 }
 
-function uploadOne(dir: string, file: File, signal: AbortSignal): Promise<string> {
+/** 上传目的地：当前目录，或固定目标（基路径 + 会话 id）。 */
+export type UploadDestination =
+  | { kind: 'cwd'; dir: string }
+  | { kind: 'fixed'; base: string; sessionId: string };
+
+function uploadOne(dest: UploadDestination, file: File, signal: AbortSignal): Promise<string> {
   const body = new FormData();
-  body.set('dir', dir);
+  if (dest.kind === 'cwd') {
+    body.set('dir', dest.dir);
+  } else {
+    body.set('base', dest.base);
+    body.set('sessionId', dest.sessionId);
+  }
   body.set('file', file, file.name);
   return fetch('ui/files/upload', {
     method: 'POST',
@@ -50,21 +62,37 @@ function uploadOne(dir: string, file: File, signal: AbortSignal): Promise<string
 }
 
 /**
- * uploadFiles 逐个上传到 dir。
+ * destFromTarget 把设置里的上传目标解析成实际请求目的地。
+ *
+ * 固定目标需要会话 id：它被拼进路径（<base>/piwebui/<会话id>/），
+ * 因此没有会话时不猜——直接报错让用户先选会话，而不是把文件塞进
+ * 一个猜出来的目录。
+ */
+export function destFromTarget(target: UploadTarget, cwd: string, sessionId: string): UploadDestination | string {
+  if (target.toCurrent) {
+    if (!cwd) return '还没有确定工作目录';
+    return { kind: 'cwd', dir: cwd };
+  }
+  if (!sessionId) return '统一目标目录需要先选中一个会话（文件名里要用会话 id）';
+  return { kind: 'fixed', base: effectiveBase(target), sessionId };
+}
+
+/**
+ * uploadFiles 逐个上传。
  *
  * 串行而不是并发：桥对同名文件是「先到先得」，并发上传两个同名文件时
  * 谁成功取决于调度，用户看到的提示会自相矛盾。串行让结果与选择顺序一致。
  */
-export async function uploadFiles(dir: string, files: FileList | File[], signal: AbortSignal): Promise<UploadOutcome> {
+export async function uploadFiles(dest: UploadDestination | string, files: FileList | File[], signal: AbortSignal): Promise<UploadOutcome> {
   const outcome: UploadOutcome = { uploaded: [], rejected: [] };
-  if (!dir) {
-    outcome.rejected.push('还没有确定工作目录');
+  if (typeof dest === 'string') {
+    outcome.rejected.push(dest);
     return outcome;
   }
   for (const file of Array.from(files)) {
     if (signal.aborted) break;
     try {
-      const saved = await uploadOne(dir, file, signal);
+      const saved = await uploadOne(dest, file, signal);
       outcome.uploaded.push(saved);
     } catch (error) {
       if (signal.aborted) break;

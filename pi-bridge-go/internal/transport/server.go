@@ -899,6 +899,11 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				"connectionQueueBytes": outboundQueueLimit, "requestIdsPerConnection": claimsMaxHold,
 				"terminals": terminals, "terminalIdleSeconds": terminalIdle,
 			},
+			// 上传「固定目标」模式可用的基路径（启动方批准的白名单）。
+			// 设置页据此告诉用户能选哪些目录；落点恒为 <base>/piwebui/<会话id>/。
+			// 报空数组而不是省略字段：前端要能区分「没有可用基路径」与「老桥不认这个字段」。
+			"uploadBases":  append([]string{}, s.files.UploadBases()...),
+			"uploadSubdir": "piwebui",
 		})
 	case "/api/v1/sessions":
 		limit, err := number(r, "limit", 50)

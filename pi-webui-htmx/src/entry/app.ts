@@ -1,7 +1,7 @@
 import htmx from 'htmx.org';
 import '@/styles/app.css';
 import { mountScroll } from '@/modules/scroll';
-import { mountLayout } from '@/modules/layout';
+import { mountLayout, mountUploadTarget } from '@/modules/layout';
 import { Workbench } from '@/modules/workbench';
 import { swapRoots } from '@/lib/swap';
 
@@ -11,6 +11,10 @@ htmx.config.allowScriptTags = false;
 htmx.config.historyCacheSize = 0;
 const scroll = mountScroll();
 const disposeLayout = mountLayout();
+// 上传目标偏好：设置页的开关与基路径输入。挂在布局之后是因为它与
+// 侧栏宽度这类本机偏好同属一卦，也共用同一份 localStorage 前缀。
+const uploadAbort = new AbortController();
+mountUploadTarget(uploadAbort.signal);
 const app = new Workbench(scroll.bottom);
 app.start();
 

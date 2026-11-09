@@ -51,6 +51,10 @@ Pi 会话的第二份副本**。Magic Context 的 `context.db` 只读打开（`m
 体积上限与 `files.read` 同源（默认 4 MiB），超限时不留半截文件；经隧道另受 relay
 的 4 MiB 请求体上限约束，分片上传属未立项。
 
+「固定目标」模式（`base`+`sessionId`，落点 `<base>/piwebui/<会话id>/`）会写到
+工作区根外，因此 `base` 只能取 `--upload-base` 白名单里的目录；网页不能指定任意
+绝对路径，否则等于「能写全盘」。会话 id 拼进路径前按单段安全成分校验。
+
 **跨目录改动**：两侧分别提交并同时通过才算完成；`PI_WEBUI_DIR=../pi-webui-htmx
 go test -race ./...` 覆盖跨目录契约，缺 UI 直接失败。
 

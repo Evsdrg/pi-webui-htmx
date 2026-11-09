@@ -265,14 +265,21 @@ export class Workspace {
   }
 
   private async runUpload(files: FileList): Promise<void> {
-    const dir = this.path || this.cwd;
-    const { uploadFiles, reportUpload } = await import('./upload');
+    const cwd = this.path || this.cwd;
+    // 会话 id 与 workbench 同源（服务端渲染进 body 的 data-session-id）：
+    // 固定目标要把它拼进路径，因此每次上传时现读，而不是构造时快照——
+    // 切会话后 body 的 dataset 会更新，缓存的旧值会把文件放进上一个会话目录。
+    const sessionId = document.body.dataset.sessionId ?? '';
+    const { uploadFiles, reportUpload, destFromTarget } = await import('./upload');
+    const { readUploadTarget } = await import('./upload-target');
     if (this.abort.signal.aborted) return;
-    const outcome = await uploadFiles(dir, files, this.abort.signal);
+    const dest = destFromTarget(readUploadTarget(), cwd, sessionId);
+    const outcome = await uploadFiles(dest, files, this.abort.signal);
     if (this.abort.signal.aborted) return;
     reportUpload(outcome);
-    // 有成功的才刷新：全失败时刷一遍列表只会让人以为上传成功了。
-    if (outcome.uploaded.length > 0) await this.list(dir);
+    // 只有落到当前目录才刷新文件树：固定目标的路径可能在工作区之外，
+    // 刷新当前目录只会让人以为文件到了这里。
+    if (outcome.uploaded.length > 0 && typeof dest !== 'string' && dest.kind === 'cwd') await this.list(cwd);
   }
 
   private applyFilesCollapsed(collapsed: boolean): void {

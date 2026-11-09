@@ -1,3 +1,5 @@
+import { baseApproved, effectiveBase, readUploadTarget, resolveUploadDir, saveUploadTarget } from './upload-target';
+
 export function readPreference(key: string): string { try { return localStorage.getItem(`pi-ui:${key}`) ?? ''; } catch { return ''; } }
 export function savePreference(key: string, value: string): void { try { localStorage.setItem(`pi-ui:${key}`, value); } catch { /* 禁用存储时保持当前页面可用。 */ } }
 export function clampSidebar(width: number): number { return Number.isFinite(width) ? Math.min(380, Math.max(200, width)) : 260; }
@@ -198,6 +200,74 @@ export function mountLayout(): () => void {
   }
   return () => { observer?.disconnect(); abort.abort(); };
 }
+
+/**
+ * mountUploadTarget 接线设置页的「上传目标」。
+ *
+ * 三块内容：
+ *   1. 「上传到当前目录」开关 → 决定 base 字段是否可用；
+ *   2. 基路径输入框 → datalist 里列出 capabilities 报的可用目录，
+ *      填了未批准的路径时给即时提示（桥仍会拒绝，但让用户早点知道）；
+ *   3. 落点预览 → 把「会放到哪」直接写出来，而不是让用户自己拼路径。
+ *
+ * 读 capabilities 是异步的：失败时只是没有 datalist 与预览里的白名单，
+ * 输入与保存照常可用——设置本身是本机偏好，不该依赖网络往返。
+ */
+export function mountUploadTarget(signal: AbortSignal): void {
+  const toCurrent = document.getElementById('upload-to-cwd') as HTMLInputElement | null;
+  const field = document.getElementById('upload-base-field');
+  const base = document.getElementById('upload-base') as HTMLInputElement | null;
+  const options = document.getElementById('upload-base-options');
+  const hint = document.getElementById('upload-base-hint');
+  if (!toCurrent || !field || !base) return;
+  const approved: string[] = [];
+
+  // 提示整段重建，而不是「先清空再补一句」。
+  //
+  // 旧写法用 hint.textContent = '' 清空，那会把里面的 <span id="upload-resolved">
+  // 一起删掉——之后每次 sync 都往一个已脱离文档的节点里写，用户看到的预览
+  // 永远停在第一次的值（实测就是这样：切开关后预览不更新）。
+  const renderHint = (target: { toCurrent: boolean; base: string }, dir: string): void => {
+    if (!hint) return;
+    const want = effectiveBase(target).replace(/\/+$/, '');
+    // 白名单为空说明桥没有配置任何基路径（或还没读到 capabilities）：
+    // 这时不报错，只让上传时的 403 去说明真相。
+    if (!target.toCurrent && approved.length > 0 && !baseApproved(want, approved)) {
+      hint.replaceChildren(`这个目录没有被桥批准。可用：${approved.join('、')}`);
+      return;
+    }
+    const code = Object.assign(document.createElement('code'), { className: 'mono', textContent: dir });
+    hint.replaceChildren('文件会放到 ', code, '。只接受桥启动时批准的目录。');
+  };
+
+  const sync = (): void => {
+    const target = { toCurrent: toCurrent.checked, base: base.value };
+    field.hidden = toCurrent.checked;
+    renderHint(target, resolveUploadDir(target, document.body.dataset.sessionId ?? ''));
+  };
+
+  toCurrent.checked = readUploadTarget().toCurrent;
+  base.value = readUploadTarget().base;
+  toCurrent.addEventListener('change', () => { saveUploadTarget({ toCurrent: toCurrent.checked, base: base.value }); sync(); }, { signal });
+  base.addEventListener('input', () => { saveUploadTarget({ toCurrent: toCurrent.checked, base: base.value }); sync(); }, { signal });
+  sync();
+
+  void (async () => {
+    try {
+      const response = await fetch('api/v1/capabilities', { cache: 'no-store', signal });
+      if (!response.ok) return;
+      const data = (await response.json()) as { uploadBases?: string[] };
+      for (const item of data.uploadBases ?? []) approved.push(item);
+      if (options) {
+        options.replaceChildren(...approved.map((item) => Object.assign(document.createElement('option'), { value: item })));
+      }
+      sync();
+    } catch {
+      /* 读不到就只少了列表与提示，不影响保存与上传。 */
+    }
+  })();
+}
+
 export function closeMobileSidebar(): void {
   const shell = document.getElementById('workbench'); if (shell) shell.dataset.mobileSidebar = 'closed';
   const backdrop = document.querySelector<HTMLElement>('.sidebar-backdrop'); if (backdrop) backdrop.hidden = true;
