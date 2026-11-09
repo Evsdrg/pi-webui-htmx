@@ -1,6 +1,8 @@
 package workspace
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -137,5 +139,43 @@ func Test被保护的基路径可查(t *testing.T) {
 	}
 	if shadowed[0] != protected {
 		t.Fatalf("报告的是 %s，期望 %s", shadowed[0], protected)
+	}
+}
+
+// 中间层符号链接逃逸（review 时发现的真实漏洞）：
+// base 可能是世界可写的共享目录（/tmp、/scratch），piwebui 这层完全可能
+// 被别的进程预先放成指向根外的符号链接。只对 base 做 EvalSymlinks 挡不住
+// 这一点——建目录与写文件必须都在「以 base 为根的 os.Root」里进行。
+func Test固定目标拒绝中间层符号链接逃逸(t *testing.T) {
+	f, dirs := newScratchFiles(t, "")
+	base := dirs[0]
+	outside := t.TempDir()
+	if err := os.Symlink(outside, filepath.Join(base, "piwebui")); err != nil {
+		t.Skipf("无法建符号链接：%v", err)
+	}
+	_, err := f.UploadScratchNamed(strings.NewReader("x"), base, testSession, "evil.txt")
+	if err == nil {
+		matches, _ := filepath.Glob(filepath.Join(outside, "*", "evil.txt"))
+		if len(matches) > 0 {
+			t.Fatalf("符号链接逃逸：文件写到了根外 %v", matches)
+		}
+	}
+}
+
+// 会话 id 那层若是符号链接，同样不能跟出去。
+func Test固定目标拒绝会话层符号链接逃逸(t *testing.T) {
+	f, dirs := newScratchFiles(t, "")
+	base := dirs[0]
+	outside := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(base, "piwebui"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(base, "piwebui", testSession)); err != nil {
+		t.Skipf("无法建符号链接：%v", err)
+	}
+	if _, err := f.UploadScratchNamed(strings.NewReader("x"), base, testSession, "evil.txt"); err == nil {
+		if _, serr := os.Stat(filepath.Join(outside, "evil.txt")); serr == nil {
+			t.Fatal("会话层符号链接逃逸：文件写到了根外")
+		}
 	}
 }

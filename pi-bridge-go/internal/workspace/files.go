@@ -50,10 +50,11 @@ type Files struct {
 	// mu 保护 roots（已打开的根目录句柄）、protected（写入拒绝清单）
 	// 与 uploadBases（固定目标上传的批准基路径）。
 	// 打开句柄是慢操作，因此临界区只覆盖查表与插入，不要在持锁期间遍历目录。
-	mu          sync.Mutex
-	roots       map[string]*os.Root
-	protected   []string
-	uploadBases []string
+	mu           sync.Mutex
+	roots        map[string]*os.Root
+	scratchRoots map[string]*os.Root
+	protected    []string
+	uploadBases  []string
 
 	// indexMu 保护 indexCache。它与 mu **从不同时持有**：索引构建会遍历
 	// 大量文件，构建期间已经放开 indexMu（见 indexFor），因此不存在
@@ -90,6 +91,10 @@ func (f *Files) Close() {
 		_ = r.Close()
 	}
 	f.roots = map[string]*os.Root{}
+	for _, r := range f.scratchRoots {
+		_ = r.Close()
+	}
+	f.scratchRoots = map[string]*os.Root{}
 }
 
 // resolve 把绝对路径映射到某个授权根，并返回根内相对路径。
@@ -421,28 +426,32 @@ func (f *Files) ShadowedUploadBases() []string {
 	return out
 }
 
-// scratchDir 计算固定目标的目录：<base>/piwebui/<会话id>。
+// scratchDir 计算固定目标：返回**已验证的基路径真实路径**与其下的相对路径
+// piwebui/<会话id>。
 //
-// 两段都必须校验：base 必须在白名单里（用真实路径比对，避免经符号链接
-// 绕过），会话 id 必须能安全拼进路径（它来自客户端）。
-func (f *Files) scratchDir(base, sessionID string) (string, error) {
+// 为什么拆开返回而不直接拼绝对路径：基路径（/tmp、/scratch）可能是世界
+// 可写的共享目录，中间层 piwebui 完全可能被别的进程预先放成指向根外的
+// 符号链接。只对 base 做 EvalSymlinks 挡不住这一点——必须把后续的建目录
+// 与写文件都放进「以 base 为根的 os.Root」里，让内核在解析每一段时都把
+// 逃逸挡回去（见 UploadScratchNamed）。
+func (f *Files) scratchDir(base, sessionID string) (baseReal, rel string, err error) {
 	if !safePathSegment(sessionID) {
-		return "", protocol.E("invalid_params", "会话 ID 不合法")
+		return "", "", protocol.E("invalid_params", "会话 ID 不合法")
 	}
 	if base == "" {
-		return "", protocol.E("invalid_params", "缺少上传基路径")
+		return "", "", protocol.E("invalid_params", "缺少上传基路径")
 	}
 	real, err := filepath.EvalSymlinks(filepath.Clean(base))
 	if err != nil {
-		return "", protocol.E("not_found", "上传基路径不存在")
+		return "", "", protocol.E("not_found", "上传基路径不存在")
 	}
 	f.mu.Lock()
 	approved := slices.Contains(f.uploadBases, real)
 	f.mu.Unlock()
 	if !approved {
-		return "", protocol.E("forbidden", "上传基路径未获批准")
+		return "", "", protocol.E("forbidden", "上传基路径未获批准")
 	}
-	return filepath.Join(real, uploadSubdir, sessionID), nil
+	return real, filepath.Join(uploadSubdir, sessionID), nil
 }
 
 // UploadScratch 按固定目标规则上传：<base>/piwebui/<会话id>/<文件名>。
@@ -456,44 +465,76 @@ func (f *Files) UploadScratch(src io.Reader, base, sessionID string) (string, er
 // 与 Upload 的差别：目录不存在时会创建（<base>/piwebui/<会话id>/ 是
 // 桥的领地，不是用户手写的目录树），但文件本身仍然 O_EXCL 不覆盖，
 // 受保护目录判定也照旧生效。
+//
+// 建目录与写文件都在「以 base 为根的 os.Root」内进行：base 可能是共享
+// 目录，中间层 piwebui 若是预先放置的符号链接，绝对路径写法会一路跟到
+// 根外（review 时实测复现过：/tmp/piwebui → 别处，文件落到了根外）。
+// os.Root 让内核在每一段解析上都拒绝逃逸，这是它与字符串前缀比对的
+// 根本差别。
 func (f *Files) UploadScratchNamed(src io.Reader, base, sessionID, name string) (string, error) {
-	dir, err := f.scratchDir(base, sessionID)
+	baseReal, rel, err := f.scratchDir(base, sessionID)
 	if err != nil {
 		return "", err
 	}
-	base64Name := strings.TrimSpace(name)
-	if base64Name == "" {
-		base64Name = "upload"
+	fileName := strings.TrimSpace(name)
+	if fileName == "" {
+		fileName = "upload"
 	}
-	clean, ok := sanitizeBaseName(base64Name)
+	clean, ok := sanitizeBaseName(fileName)
 	if !ok {
 		return "", protocol.E("invalid_params", "文件名不合法")
 	}
-	target := filepath.Join(dir, clean)
-	if err := f.ensureScratchDir(dir); err != nil {
-		return "", err
-	}
-	// 目录建好之后统一走 Upload：它负责体积上限、不覆盖、受保护目录。
-	return target, f.uploadTo(src, target, 0o644)
-}
-
-// ensureScratchDir 建 <base>/piwebui/<会话id>/（0700）。
-//
-// 用 0700 而不是 0755：scratch 里的东西是上传内容和会话产物，
-// 不打算给同机其它用户看。
-func (f *Files) ensureScratchDir(dir string) error {
+	// 受保护判定用拼回的绝对路径（真实基路径 + 相对路径）。
+	abs := filepath.Join(baseReal, rel)
 	f.mu.Lock()
 	protected := append([]string(nil), f.protected...)
 	f.mu.Unlock()
 	for _, p := range protected {
-		if dir == p || strings.HasPrefix(dir, p+string(filepath.Separator)) {
-			return protocol.E("forbidden", "该目录不允许写入")
+		if abs == p || strings.HasPrefix(abs, p+string(filepath.Separator)) {
+			return "", protocol.E("forbidden", "该目录不允许写入")
 		}
 	}
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return protocol.E("forbidden", "无法创建上传目录")
+	// 以 base 为根打开 os.Root：之后所有操作都相对它，中间层符号链接
+	// 无法再逃逸。0700 是因为 scratch 里是上传内容与会话产物，不给
+	// 同机其它用户看。
+	r, err := f.scratchRoot(baseReal)
+	if err != nil {
+		return "", err
 	}
-	return nil
+	if err := r.MkdirAll(rel, 0o700); err != nil {
+		return "", protocol.E("forbidden", "无法创建上传目录")
+	}
+	target := filepath.Join(abs, clean)
+	return target, f.writeScratchFile(r, filepath.Join(rel, clean), src)
+}
+
+// scratchRoot 按基路径打开并缓存 os.Root。
+//
+// 与 roots（工作区根句柄）分开缓存：两者的生命周期与语义都不同，
+// 混在一起会让「哪个根管哪条路径」变模糊。
+func (f *Files) scratchRoot(base string) (*os.Root, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if r, ok := f.scratchRoots[base]; ok {
+		return r, nil
+	}
+	r, err := os.OpenRoot(base)
+	if err != nil {
+		return nil, protocol.E("not_found", "上传基路径不存在")
+	}
+	if f.scratchRoots == nil {
+		f.scratchRoots = map[string]*os.Root{}
+	}
+	f.scratchRoots[base] = r
+	return r, nil
+}
+
+// writeScratchFile 在 scratch 根内独占创建文件。
+func (f *Files) writeScratchFile(r *os.Root, rel string, src io.Reader) error {
+	_, err := f.writeExclusive(func(perm os.FileMode) (*os.File, error) {
+		return r.OpenFile(rel, os.O_CREATE|os.O_EXCL|os.O_WRONLY, perm)
+	}, func() { _ = r.Remove(rel) }, src, 0o644)
+	return err
 }
 
 // safePathSegment 判断一个字符串能否安全地作为单段路径成分。
@@ -613,22 +654,10 @@ func (f *Files) Upload(src io.Reader, path string, perm os.FileMode) (int64, err
 	}, func() { _ = r.Remove(rel) }, src, perm)
 }
 
-// uploadTo 把内容写到一条**已校验过的绝对路径**（不起过 os.Root）。
-//
-// 只给固定目标路径用：那条路径由 scratchDir 算出来，父目录已在
-// ensureScratchDir 里建好并做过受保护判定。工作区根内的写入仍然走
-// Upload（经 os.Root，多一层内核侧逃逸保护）。
-func (f *Files) uploadTo(src io.Reader, abs string, perm os.FileMode) error {
-	_, err := f.writeExclusive(func(perm os.FileMode) (*os.File, error) {
-		return os.OpenFile(abs, os.O_CREATE|os.O_EXCL|os.O_WRONLY, perm)
-	}, func() { _ = os.Remove(abs) }, src, perm)
-	return err
-}
-
 // writeExclusive 是所有上传落盘的共同实现：先整体读入（保证超限不留
 // 半截文件），再以 O_EXCL 独占创建（保证不覆盖、不跟随最后一段链接）。
 // open 与 cleanup 由调用方给出，因为工作区根内走 os.Root、固定目标走
-// 绝对路径，两者的句柄类型不同。
+// 各自基路径的 os.Root，两者的句柄来源不同。
 func (f *Files) writeExclusive(open func(os.FileMode) (*os.File, error), cleanup func(), src io.Reader, perm os.FileMode) (int64, error) {
 	// 为什么会整体读进内存再写：上限是 MaxReadByte（默认 4 MiB），与读取
 	// 上限同源；一次性读入让「超限」发生在任何字节落盘之前，因此失败不会
