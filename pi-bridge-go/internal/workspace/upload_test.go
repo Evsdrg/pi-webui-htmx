@@ -118,3 +118,46 @@ func Test上传父目录不存在时报错(t *testing.T) {
 		t.Fatal("父目录不存在应当报错，而不是自动创建")
 	}
 }
+
+// 工作区根被改名重建后，缓存的根句柄仍指向旧 inode：
+// 路径校验看到的是新目录，写入却落进已消失的旧目录（独立复审实测复现）。
+func Test上传在工作区根重建后不得写进旧目录(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "wt")
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	policy, err := New([]string{root})
+	if err != nil {
+		t.Fatal(err)
+	}
+	f, err := NewFiles(policy, DefaultLimits())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(f.Close)
+	old := root + "-old"
+	if err := os.Rename(root, old); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.Upload(strings.NewReader("x"), filepath.Join(root, "new.txt"), 0o644); err != nil {
+		t.Logf("上传返回错误（可接受）：%v", err)
+	}
+	if _, serr := os.Stat(filepath.Join(old, "new.txt")); serr == nil {
+		t.Fatalf("写进了被删掉的旧工作区根（stale inode）：%s", old)
+	}
+	if _, serr := os.Stat(filepath.Join(root, "new.txt")); serr != nil {
+		t.Fatalf("文件应落在重建后的根内：%v", serr)
+	}
+}
+
+func mustTestPolicy(t *testing.T, root string) *Policy {
+	t.Helper()
+	p, err := New([]string{root})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return p
+}

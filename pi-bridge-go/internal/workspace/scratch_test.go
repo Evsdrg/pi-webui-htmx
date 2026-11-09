@@ -179,3 +179,63 @@ func Test固定目标拒绝会话层符号链接逃逸(t *testing.T) {
 		}
 	}
 }
+
+// 相对符号链接绕过受保护判定（独立复审实测复现）：
+// os.Root 允许跟随「指向根内」的相对链接，而受保护判定原先只看
+// 拼出来的绝对路径字符串。base 里预置 `piwebui -> protected` 时，
+// 拼接结果仍叫 base/piwebui/...，实际落点却在受保护目录里。
+func Test固定目标不得经相对符号链接写进受保护目录(t *testing.T) {
+	base := t.TempDir()
+	protected := filepath.Join(base, "protected")
+	if err := os.MkdirAll(protected, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	f, err := NewFiles(mustTestPolicy(t, t.TempDir()), DefaultLimits())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(f.Close)
+	f.Protect(protected)
+	f.SetUploadBases(base)
+	if err := os.Symlink("protected", filepath.Join(base, "piwebui")); err != nil {
+		t.Skipf("无法建符号链接：%v", err)
+	}
+	if _, uerr := f.UploadScratchNamed(strings.NewReader("evil"), base, testSession, "evil.txt"); uerr == nil {
+		t.Fatal("经相对符号链接写进受保护目录应当被拒绝")
+	}
+	if _, serr := os.Stat(filepath.Join(protected, testSession, "evil.txt")); serr == nil {
+		t.Fatalf("文件写进了受保护目录 %s", protected)
+	}
+}
+
+// 基路径被删除重建后，缓存的 os.Root 指向已消失的 inode：
+// 上传会返回 200 并把文件写进「看不见的旧目录」，响应路径却是新的。
+func Test固定目标在基路径重建后不得写进旧目录(t *testing.T) {
+	base := filepath.Join(t.TempDir(), "up")
+	if err := os.MkdirAll(base, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	f, err := NewFiles(mustTestPolicy(t, t.TempDir()), DefaultLimits())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(f.Close)
+	f.SetUploadBases(base)
+	// 先上传一次，让 scratchRoots 缓存住句柄。
+	if _, err := f.UploadScratchNamed(strings.NewReader("1"), base, testSession, "a.txt"); err != nil {
+		t.Fatal(err)
+	}
+	old := base + "-old"
+	if err := os.Rename(base, old); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(base, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.UploadScratchNamed(strings.NewReader("2"), base, testSession, "b.txt"); err != nil {
+		t.Logf("重建后上传返回错误（可接受）：%v", err)
+	}
+	if _, serr := os.Stat(filepath.Join(old, "piwebui", testSession, "b.txt")); serr == nil {
+		t.Fatalf("写进了被删掉的旧基路径（stale inode）：%s", old)
+	}
+}

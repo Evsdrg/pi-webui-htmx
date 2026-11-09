@@ -132,6 +132,12 @@ func (f *Files) resolve(path string) (string, string, error) {
 	return best, filepath.ToSlash(rel), nil
 }
 
+// rootFor 取工作区根句柄。
+//
+// 句柄是启动时打开的 fd，它绑定的是**当初那个 inode**：若根目录被改名
+// 重建，路径校验会看到新目录，而写入仍落到旧 inode（review 时实测复现：
+// 上传返回 200，文件却出现在 `根目录-old` 里）。因此这里比对一次 inode，
+// 不一致就重开——「被校验的父目录」和「实际写入的父目录」必须是同一个。
 func (f *Files) rootFor(root string) (*os.Root, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -139,7 +145,32 @@ func (f *Files) rootFor(root string) (*os.Root, error) {
 	if !ok {
 		return nil, protocol.E("forbidden", "工作区根未打开")
 	}
+	if !sameInode(r, root) {
+		_ = r.Close()
+		fresh, err := os.OpenRoot(root)
+		if err != nil {
+			delete(f.roots, root)
+			return nil, protocol.E("not_found", "工作区根已不可用")
+		}
+		f.roots[root] = fresh
+		return fresh, nil
+	}
 	return r, nil
+}
+
+// sameInode 判断根句柄与路径是否指向同一个目录。
+// 句柄一侧用 Root.Stat(".")（不经过任何中间段），路径一侧用 os.Stat
+// （根路径在 Policy 里已是真实路径，不存在链接歧义）。
+func sameInode(r *os.Root, path string) bool {
+	fi, err := r.Stat(".")
+	if err != nil {
+		return false
+	}
+	di, err := os.Stat(path)
+	if err != nil {
+		return false
+	}
+	return os.SameFile(fi, di)
 }
 
 // Stat 返回单个文件或目录的元数据。
@@ -486,13 +517,8 @@ func (f *Files) UploadScratchNamed(src io.Reader, base, sessionID, name string) 
 	}
 	// 受保护判定用拼回的绝对路径（真实基路径 + 相对路径）。
 	abs := filepath.Join(baseReal, rel)
-	f.mu.Lock()
-	protected := append([]string(nil), f.protected...)
-	f.mu.Unlock()
-	for _, p := range protected {
-		if abs == p || strings.HasPrefix(abs, p+string(filepath.Separator)) {
-			return "", protocol.E("forbidden", "该目录不允许写入")
-		}
+	if f.isProtected(abs) {
+		return "", protocol.E("forbidden", "该目录不允许写入")
 	}
 	// 以 base 为根打开 os.Root：之后所有操作都相对它，中间层符号链接
 	// 无法再逃逸。0700 是因为 scratch 里是上传内容与会话产物，不给
@@ -504,8 +530,38 @@ func (f *Files) UploadScratchNamed(src io.Reader, base, sessionID, name string) 
 	if err := r.MkdirAll(rel, 0o700); err != nil {
 		return "", protocol.E("forbidden", "无法创建上传目录")
 	}
-	target := filepath.Join(abs, clean)
+	// 建完目录必须**重新**解析真实路径再判一次受保护。
+	//
+	// 上面的字符串比对只能看见「按名字拼出来的路径」，而 os.Root 允许
+	// 跟随指向根内的**相对**符号链接：base 里若被预先放了
+	// `piwebui -> protected`，拼接结果仍叫 base/piwebui/...，实际却落在
+	// 受保护目录里（review 时实测复现）。目录已由 MkdirAll 建好（或本就
+	// 存在），此刻 EvalSymlinks 能看到真实落点；仍以 base 为根写文件，
+	// 因此「解析到的落点」与「真正写入的位置」是同一个。
+	real, rerr := filepath.EvalSymlinks(abs)
+	if rerr != nil {
+		return "", protocol.E("forbidden", "无法解析上传目录")
+	}
+	if f.isProtected(real) {
+		return "", protocol.E("forbidden", "该目录不允许写入")
+	}
+	target := filepath.Join(real, clean)
 	return target, f.writeScratchFile(r, filepath.Join(rel, clean), src)
+}
+
+// isProtected 判断某个**已解析的真实路径**是否落在受保护清单内。
+// 清单里的路径由 Protect 规范化，调用方必须传入真实路径，否则字符串
+// 比对会漏（见 UploadScratchNamed 里「建完目录再解析一次」的理由）。
+func (f *Files) isProtected(real string) bool {
+	f.mu.Lock()
+	protected := append([]string(nil), f.protected...)
+	f.mu.Unlock()
+	for _, p := range protected {
+		if real == p || strings.HasPrefix(real, p+string(filepath.Separator)) {
+			return true
+		}
+	}
+	return false
 }
 
 // scratchRoot 按基路径打开并缓存 os.Root。
@@ -516,7 +572,13 @@ func (f *Files) scratchRoot(base string) (*os.Root, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if r, ok := f.scratchRoots[base]; ok {
-		return r, nil
+		if sameInode(r, base) {
+			return r, nil
+		}
+		// 基路径被删除重建：旧 fd 指向已消失的 inode，继续用会把文件
+		// 写进「看不见的旧目录」，而响应里的路径是新的（实测复现）。
+		_ = r.Close()
+		delete(f.scratchRoots, base)
 	}
 	r, err := os.OpenRoot(base)
 	if err != nil {
