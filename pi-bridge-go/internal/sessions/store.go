@@ -131,6 +131,11 @@ type Entry struct {
 	// Failed 表示工具结果报错，与 Pi Web 的 isError 同义。
 	// 工具块的边框与配色由它决定。
 	Failed bool `json:"failed,omitempty"`
+	// ToolArgs 是这次调用的**原始参数 JSON**（与 ToolCall 的摘要同源）。
+	// 摘要把参数压成一行文本，够看清「执行了什么」，但不足以还原结构：
+	// todowrite 的任务清单、codemode 的脚本正文都只存在于原始参数里。
+	// 为空表示没有可关联的调用参数，或参数不是合法 JSON。
+	ToolArgs json.RawMessage `json:"toolArgs,omitempty"`
 }
 
 // ProjectEntries 把原始条目投影成渲染友好的结构。
@@ -142,11 +147,11 @@ type Entry struct {
 // 解码，单个字段的畸形只降级它自己，不会把整条消息清零。
 func ProjectEntries(raw []json.RawMessage) []Entry {
 	out := make([]Entry, 0, len(raw))
-	// calls 记录本页里已出现的 toolCall 摘要，按 toolCallId 索引：
-	// toolResult 只带 id 与输出，命令/路径在之前的 assistant 消息里。
+	// calls 记录本页里已出现的 toolCall，按 toolCallId 索引：
+	// toolResult 只带 id 与输出，命令/路径/原始参数在之前的 assistant 消息里。
 	// 同一页内按出现顺序登记即可——toolCall 一定写在其结果之前；
 	// 结果落在页面窗口之外时查不到，退化为只显示输出（不发散猜测）。
-	calls := make(map[string]string, len(raw))
+	calls := make(map[string]projectedCall, len(raw))
 	for _, r := range raw {
 		var item struct {
 			Type      string          `json:"type"`
@@ -169,13 +174,16 @@ func ProjectEntries(raw []json.RawMessage) []Entry {
 			case "assistant":
 				e.Kind, e.Text = KindAssistant, pm.text
 				e.Error, e.Usage = pm.errText, pm.usage
-				for id, summary := range pm.calls {
-					calls[id] = summary
+				for id, c := range pm.calls {
+					calls[id] = c
 				}
 			case "toolResult":
 				e.Kind, e.Text = KindTool, pm.text
 				e.ToolName, e.Failed = pm.toolName, pm.failed
-				e.ToolCall = calls[pm.toolCallID]
+				if c, ok := calls[pm.toolCallID]; ok {
+					e.ToolCall = c.summary
+					e.ToolArgs = c.args
+				}
 			default:
 				e.Kind, e.Text = KindOther, pm.text
 			}
@@ -198,9 +206,9 @@ type projectedMessage struct {
 	usage    *Usage
 	toolName string
 	failed   bool
-	// calls 是这条 assistant 消息里每个 toolCall 的摘要，按调用 id 索引。
-	// 工具结果的正文只有输出，命令/路径全在这里（见 Entry.ToolCall）。
-	calls map[string]string
+	// calls 是这条 assistant 消息里每个 toolCall，按调用 id 索引。
+	// 工具结果的正文只有输出，命令/路径/原始参数全在这里（见 Entry.ToolCall）。
+	calls map[string]projectedCall
 	// toolCallID 是 toolResult 指向的调用 id，用于把 calls 关联回来。
 	toolCallID string
 }
@@ -256,13 +264,24 @@ func projectMessage(raw json.RawMessage) projectedMessage {
 	return pm
 }
 
+// projectedCall 是一条 toolCall 的投影：给「一行摘要」用的文本，
+// 以及给结构化渲染用的原始参数。
+//
+// 为什么两者都要：摘要够看清「执行了什么」（历史行的预览），但 todowrite
+// 的任务清单、codemode 的脚本正文只存在于原始参数里，压平后无法还原。
+// args 是原始 JSON 的拷贝，非对象/非法 JSON 时为 nil——渲染层据此退回纯文本。
+type projectedCall struct {
+	summary string
+	args    json.RawMessage
+}
+
 // projectToolCalls 取出 assistant 消息里每个 toolCall 的「做了什么」摘要，
 // 按调用 id 索引，供后面的 toolResult 关联。
 //
 // 摘要按工具类型挑最有信息量的字段：bash 是 command（多行只取首行），
 // 文件类是 path，其余退回参数 JSON 原文的前缀——宁可粗一点，也不要出现
 // 「只有输出、不知道执行了什么」的行。
-func projectToolCalls(content json.RawMessage) map[string]string {
+func projectToolCalls(content json.RawMessage) map[string]projectedCall {
 	if shapeOf(content) != shapeArray {
 		return nil
 	}
@@ -275,15 +294,22 @@ func projectToolCalls(content json.RawMessage) map[string]string {
 	if json.Unmarshal(content, &blocks) != nil {
 		return nil
 	}
-	var out map[string]string
+	var out map[string]projectedCall
 	for _, b := range blocks {
 		if b.Type != "toolCall" || b.ID == "" {
 			continue
 		}
 		if out == nil {
-			out = make(map[string]string, 2)
+			out = make(map[string]projectedCall, 2)
 		}
-		out[b.ID] = toolCallSummary(b.Name, b.Arguments)
+		call := projectedCall{summary: toolCallSummary(b.Name, b.Arguments)}
+		// 只保留对象形态的参数：数组/标量没有可读的键，渲染层也用不上。
+		// 拷贝一份是因为 b.Arguments 指向 content 的子切片，而 content 属于
+		// 单条消息的解码结果——留引用会把整条消息钉在内存里。
+		if shapeOf(b.Arguments) == shapeObject {
+			call.args = append(json.RawMessage(nil), b.Arguments...)
+		}
+		out[b.ID] = call
 	}
 	return out
 }
@@ -294,6 +320,12 @@ const toolCallSummaryRunes = 300
 
 // toolCallSummary 生成一条 toolCall 的参数摘要。
 func toolCallSummary(name string, arguments json.RawMessage) string {
+	// Magic Context 的 ctx_* 与 todowrite 的参数没有 command/path，退回
+	// JSON 原文时历史行会显示 `{"drop":[12,15,18]}` 这种半截机器文本。
+	// 这几种工具的参数形状稳定，按语义提取一句人话；提取失败仍退回原文。
+	if s, ok := memoryToolSummary(name, arguments); ok {
+		return clipRunes(s, toolCallSummaryRunes)
+	}
 	var args struct {
 		Command string `json:"command"`
 		Path    string `json:"path"`
@@ -311,6 +343,112 @@ func toolCallSummary(name string, arguments json.RawMessage) string {
 	}
 	// 其它工具：参数 JSON 原文，够认出「在干什么」即可。
 	return clipRunes(strings.TrimSpace(string(arguments)), toolCallSummaryRunes)
+}
+
+// memoryToolSummary 给 ctx_* 与 todowrite 生成一行可读摘要。
+//
+// 为什么单独处理：这几类工具占历史行的 2.8%，而它们的参数 JSON 压平后
+// （`{"drop":[12,15,18]}`、`{"todos":[{...}]}`）既不好看也读不出意图。
+// 返回 false 表示「不是这几类工具或参数不可解析」，交给通用分支。
+func memoryToolSummary(name string, arguments json.RawMessage) (string, bool) {
+	if len(arguments) == 0 {
+		return "", false
+	}
+	switch name {
+	case "ctx_reduce":
+		var p struct {
+			Drop []int `json:"drop"`
+		}
+		if json.Unmarshal(arguments, &p) != nil || len(p.Drop) == 0 {
+			return "", false
+		}
+		tags := make([]string, 0, 3)
+		for i, n := range p.Drop {
+			if i == 3 {
+				tags = append(tags, "…")
+				break
+			}
+			tags = append(tags, "§"+strconv.Itoa(n))
+		}
+		return strings.Join(tags, " "), true
+	case "ctx_memory":
+		var p struct {
+			Action  string `json:"action"`
+			Content string `json:"content"`
+		}
+		if json.Unmarshal(arguments, &p) != nil || p.Action == "" {
+			return "", false
+		}
+		content := strings.TrimSpace(p.Content)
+		if content == "" {
+			return p.Action, true
+		}
+		return p.Action + " " + clipRunes(content, 80), true
+	case "ctx_search":
+		var p struct {
+			Query string `json:"query"`
+		}
+		if json.Unmarshal(arguments, &p) != nil || strings.TrimSpace(p.Query) == "" {
+			return "", false
+		}
+		return strings.TrimSpace(p.Query), true
+	case "ctx_note":
+		var p struct {
+			Action  string `json:"action"`
+			Content string `json:"content"`
+		}
+		if json.Unmarshal(arguments, &p) != nil || p.Action == "" {
+			return "", false
+		}
+		if c := strings.TrimSpace(p.Content); c != "" {
+			return p.Action + " " + clipRunes(c, 80), true
+		}
+		return p.Action, true
+	case "ctx_expand":
+		var p struct {
+			Tag   int `json:"tag"`
+			Start int `json:"start"`
+			End   int `json:"end"`
+		}
+		if json.Unmarshal(arguments, &p) != nil {
+			return "", false
+		}
+		if p.Tag > 0 {
+			return "§" + strconv.Itoa(p.Tag), true
+		}
+		if p.Start > 0 && p.End > 0 {
+			return "§" + strconv.Itoa(p.Start) + "-§" + strconv.Itoa(p.End), true
+		}
+		return "", false
+	case "todowrite":
+		var p struct {
+			Todos []struct {
+				Content string `json:"content"`
+				Status  string `json:"status"`
+			} `json:"todos"`
+		}
+		if json.Unmarshal(arguments, &p) != nil || len(p.Todos) == 0 {
+			return "", false
+		}
+		done, active := 0, 0
+		for _, t := range p.Todos {
+			switch t.Status {
+			case "completed":
+				done++
+			case "in_progress":
+				active++
+			}
+		}
+		s := strconv.Itoa(len(p.Todos)) + " 项"
+		if active > 0 {
+			s += " · " + strconv.Itoa(active) + " 进行中"
+		}
+		if done > 0 {
+			s += " · " + strconv.Itoa(done) + " 已完成"
+		}
+		return s, true
+	}
+	return "", false
 }
 
 // clipRunes 按码点截断，不切断多字节字符。

@@ -8,6 +8,7 @@
 package presentation
 
 import (
+	"encoding/json"
 	"fmt"
 	"html/template"
 	"os"
@@ -205,7 +206,13 @@ func mimeFor(name string) string {
 // workDuration 把整秒数写成中文时长（「6 秒」「1 分 17 秒」），工具行与
 // 思考行共用同一写法；Duration 为 0 时模板里的 if 已经拦掉，不会渲染。
 func funcMap() template.FuncMap {
-	return template.FuncMap{"workDuration": formatWorkDuration}
+	return template.FuncMap{
+		"workDuration": formatWorkDuration,
+		// 三个新函数只服务于结构化工具行（todowrite / codemode）。
+		// 它们是纯函数，模板里直接调用，避免在模板里写逻辑。
+		"todoSummary": todoSummary,
+		"codeSummary": codeSummary,
+	}
 }
 
 // Encoding 是响应的内容编码。
@@ -643,6 +650,32 @@ type Step struct {
 	// Images 是这一步里可延后加载的图片块下标；
 	// 详情只放文字，base64 图片等用户点了才取。
 	Images []int
+	// Args 是这次调用的原始参数 JSON（来自 sessions.Entry.ToolArgs）。
+	// 仅当工具的渲染需要结构而不是一行文本时使用：todowrite 的任务清单、
+	// codemode 的脚本正文都只存在于这里，Command 的摘要压平后无法还原。
+	Args json.RawMessage
+	// Todos 是 todowrite 的解析结果（按状态排序后的快照），
+	// nil 表示该步不是 todowrite 或参数不可解析。
+	Todos []TodoItem
+	// Code 是 codemode 脚本正文；CodeCommands 是脚本里调用的工具序列。
+	// 两者都为空表示该步不是 codemode 或无法解析。
+	Code         string
+	CodeCommands []CodeCommand
+}
+
+// TodoItem 是 todowrite 快照里的一条任务。
+type TodoItem struct {
+	Content  string
+	Status   string // pending / in_progress / completed / cancelled
+	Priority string // high / medium / low，空表示未标注
+}
+
+// CodeCommand 是 codemode 脚本里的一次工具调用，以及它的那段输出。
+// Output 为空表示「命令数与输出段数不匹配」，调用方应退回整段呈现。
+type CodeCommand struct {
+	Name   string
+	Input  string // 参数的紧凑文本（原样截取，不解析成键值）
+	Output string
 }
 
 // previewRunes 是收起预览保留的码点数。约「一行加一点上下文」的体量：
@@ -729,6 +762,27 @@ type FlowItem struct {
 	Kind     string // "tool" | "thinking"
 	Step     Step
 	Thinking ThinkingBlock
+	// Group 非空表示这一项是一组「相邻同名工具」的聚合（只出现在 Kind=="tool"）。
+	// 聚合在 finalize 里生成：连续 N(>=3) 个同名工具折成一项，
+	// 组内仍按时间顺序保留各次调用。为什么在服务端做而不是前端：
+	// 历史渲染直接吃这个结构，前端只需按 Group 是否存在换一种模板。
+	Group *ToolGroup
+}
+
+// ToolGroup 是一组相邻同名工具的聚合。
+//
+// 为什么只聚合同名：真实会话里最长的是 bash ×46，其次是 bash ×25；
+// 把不同类型混成一组会打乱时间顺序（bash → read → bash 折成一组后，
+// 读者无法判断第二个 bash 是否看到了 read 的结果）。
+type ToolGroup struct {
+	// Name 是这一组的工具名，标题行显示为「<Name> ×<Count>」。
+	Name string
+	// Count 是本组的调用次数。
+	Count int
+	// Failed 是本组里失败的次数，大于 0 时标题行标红。
+	Failed int
+	// Items 是组内各项（Kind 恒为 "tool"），保持原始时间顺序。
+	Items []FlowItem
 }
 
 // workBlock 返回末尾的工作段；末尾不是工作段时新开一段。
@@ -915,7 +969,21 @@ func GroupTurns(entries []sessions.Entry) []Turn {
 			if previewSource == "" {
 				previewSource = e.Text
 			}
-			step := Step{Kind: "工具", Detail: e.Text, Command: e.ToolCall, Preview: toolPreview(previewSource), EntryID: e.ID, Images: images, Name: e.ToolName, OK: !e.Failed, Duration: secondsBetween(assistantAt, e.Timestamp)}
+			step := Step{Kind: "工具", Detail: e.Text, Command: e.ToolCall, Preview: toolPreview(previewSource), EntryID: e.ID, Images: images, Name: e.ToolName, OK: !e.Failed, Duration: secondsBetween(assistantAt, e.Timestamp), Args: e.ToolArgs}
+			// 结构化渲染的两个特例。解析失败一律留空，模板退回纯文本：
+			// 把无法确定的内容猜成结构，比不渲染更糟。
+			switch e.ToolName {
+			case "todowrite":
+				step.Todos = parseTodos(e.ToolArgs)
+			case "codemode":
+				var payload struct {
+					Code string `json:"code"`
+				}
+				if len(e.ToolArgs) > 0 && json.Unmarshal(e.ToolArgs, &payload) == nil {
+					step.Code = payload.Code
+					step.CodeCommands = parseCodeCommands(payload.Code, e.Text)
+				}
+			}
 			if current < 0 {
 				turns = append(turns, Turn{ID: e.ID, EntryIDs: []string{e.ID}, start: e.Timestamp, end: e.Timestamp})
 				current = len(turns) - 1
@@ -943,6 +1011,58 @@ func GroupTurns(entries []sessions.Entry) []Turn {
 	return turns
 }
 
+// toolGroupMinRun 是开始归组的最小连续同名次数。
+//
+// 为什么是 3：2 次同名折叠出来的组只有一行标题 + 两行内容，反而比直接
+// 平铺更难扫读；3 次起刷屏才开始明显。真实会话里 bash 的连续 run
+// 有 46/25/23/21/20/19… 的极端值，这个阈值能吃掉绝大部分噪音。
+const toolGroupMinRun = 3
+
+// groupTools 把每个工作段里「连续 N(>=toolGroupMinRun) 次同名工具」折成一项。
+//
+// 只处理相邻同名：一旦遇到不同类型的工具或思考，当前候选组就结算。
+// 思考项是天然的分隔符——它代表模型改变了思路，前后的同名调用不该合并。
+func (t *Turn) groupTools() {
+	for bi := range t.Flow {
+		b := &t.Flow[bi]
+		if b.Kind != "work" || len(b.Items) == 0 {
+			continue
+		}
+		grouped := make([]FlowItem, 0, len(b.Items))
+		// run 收集当前连续同名工具的下标区间 [start, i)。
+		start := 0
+		flush := func(end int) {
+			if end-start >= toolGroupMinRun {
+				name, failed := b.Items[start].Step.Name, 0
+				items := make([]FlowItem, 0, end-start)
+				for k := start; k < end; k++ {
+					if !b.Items[k].Step.OK {
+						failed++
+					}
+					items = append(items, b.Items[k])
+				}
+				grouped = append(grouped, FlowItem{Kind: "tool", Group: &ToolGroup{Name: name, Count: end - start, Failed: failed, Items: items}})
+				start = end
+				return
+			}
+			grouped = append(grouped, b.Items[start:end]...)
+			start = end
+		}
+		// 间隔点 = 非工具项，或与之不同名的工具。
+		for i := 1; i <= len(b.Items); i++ {
+			if i == len(b.Items) {
+				flush(i)
+				break
+			}
+			cur, prev := b.Items[i], b.Items[i-1]
+			if cur.Kind != "tool" || prev.Kind != "tool" || cur.Step.Name != prev.Step.Name {
+				flush(i)
+			}
+		}
+		b.Items = grouped
+	}
+}
+
 // finalize 把 Flow 切成「一个过程组」与「最终正文」两部分，并生成过程组摘要。
 //
 // 判据（对齐 ZCode 的回合形态）：最终正文 = Flow 中**最后一个正文块**；
@@ -951,6 +1071,9 @@ func GroupTurns(entries []sessions.Entry) []Turn {
 // 个正文块」就是模型的最终回答。没有正文块的回合（中断、纯工具）整个 Flow
 // 都是过程。
 func (t *Turn) finalize() {
+	// 归组必须在算摘要之前：workSummary 数的是项数，聚合后一个 Group 只算
+	// 一项会低估工具数——所以 workSummary/processSummary 都要认得 Group。
+	t.groupTools()
 	// 保留每个工作段自身的摘要：它是「这一段做了什么」的紧凑事实，
 	// 供测试与后续可能的展开态复用；过程组标题另外由 processSummary 聚合。
 	for j := range t.Flow {
@@ -989,6 +1112,13 @@ func processSummary(blocks []FlowBlock) string {
 		for _, item := range b.Items {
 			switch item.Kind {
 			case "tool":
+				if item.Group != nil {
+					// 聚合项代表组内全部调用：计数按 Count 还原，否则
+					// 折叠标题会把 bash ×46 显示成「1 个工具」。
+					tools += item.Group.Count
+					failures += item.Group.Failed
+					continue
+				}
 				tools++
 				if !item.Step.OK {
 					failures++
@@ -1050,6 +1180,11 @@ func workSummary(w *FlowBlock) string {
 	for _, item := range w.Items {
 		switch item.Kind {
 		case "tool":
+			if item.Group != nil {
+				tools += item.Group.Count
+				failures += item.Group.Failed
+				continue
+			}
 			tools++
 			if !item.Step.OK {
 				failures++

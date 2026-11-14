@@ -224,6 +224,45 @@ kbd { font-size:10px; color:var(--text-dim); margin-left:auto; }
    更容易一眼找到。两块各自滚动，长命令不会把输出挤走。 */
 .tool-call .tool-command { color:var(--text); border-left:2px solid var(--border); padding-left:8px; margin-left:1px; }
 .tool-call .tool-output { color:var(--text-muted); }
+/* ==== 聚合组（相邻同名工具） ==== */
+/* 组标题用与单行工具相同的排版，但底色略深：它代表「一批」，不是一次调用。
+   组内成员沿用 .tool-call 的全部样式，只额外缩进一级并加左导线，
+   让「一个组里有哪些次调用」在视觉上成立。 */
+.tool-group { font-family:var(--font-mono); font-size:11px; line-height:1.5; }
+.tool-group > summary { display:flex; align-items:center; gap:7px; min-width:0; padding:4px 0; cursor:pointer; list-style:none; }
+.tool-group .tool-name { flex:0 0 auto; color:var(--text); font-family:var(--font-mono); font-size:11px; font-weight:600; }
+.tool-group[data-ok=false] .tool-name { color:var(--danger); }
+.tool-group-failed { flex:0 0 auto; color:var(--danger); font-size:11px; }
+.tool-group .tool-chevron { flex:0 0 auto; color:var(--text-dim); opacity:.5; transition:transform .15s ease, opacity .15s ease; }
+.tool-group[open] .tool-chevron { opacity:1; transform:rotate(90deg); }
+.tool-group > summary:hover .tool-chevron { opacity:1; }
+/* 组内列表：左导线 + 缩进，避免与外层工具行混淆。 */
+.tool-group-body { display:flex; flex-direction:column; gap:2px; margin-left:9px; padding-left:9px; border-left:1px solid var(--border); }
+/* ==== todowrite 任务清单 ==== */
+.todo-list { list-style:none; margin:2px 0 0; padding:0 0 0 2px; display:flex; flex-direction:column; gap:2px; }
+.todo-item { display:flex; align-items:flex-start; gap:6px; color:var(--text-muted); font-size:11px; line-height:1.6; }
+.todo-item .todo-mark { flex:0 0 auto; width:10px; text-align:center; font-family:var(--font-mono); }
+/* 状态标记用字符而不是图片：等宽下对齐稳定，也不额外增加首屏资源。 */
+.todo-item[data-status=completed] .todo-mark::before { content:"✓"; }
+.todo-item[data-status=in_progress] .todo-mark::before { content:"●"; color:var(--accent); }
+.todo-item[data-status=pending] .todo-mark::before { content:"○"; }
+.todo-item[data-status=cancelled] .todo-mark::before { content:"×"; }
+.todo-item[data-status=completed] .todo-content { color:var(--text-dim); text-decoration:line-through; }
+.todo-item[data-status=in_progress] .todo-content { color:var(--text); }
+.todo-item[data-status=cancelled] .todo-content { color:var(--text-dim); text-decoration:line-through; }
+.todo-item[data-priority=high] .todo-content { font-weight:600; }
+/* ==== codemode 命令列表 ==== */
+.code-commands { display:flex; flex-direction:column; gap:2px; margin-top:2px; }
+.code-command { font-family:var(--font-mono); font-size:11px; }
+.code-command > summary { display:flex; align-items:baseline; gap:7px; min-width:0; padding:2px 0; cursor:pointer; list-style:none; }
+.code-command-name { flex:0 0 auto; color:var(--text); font-weight:600; }
+.code-command-input { flex:1 1 auto; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--text-dim); }
+.code-command .tool-output { margin:0; padding:2px 0 2px 8px; border-left:1px solid var(--border); max-height:240px; overflow:auto; }
+/* 「脚本正文」永远排在命令列表之后，默认收起：多数时候看命令与输出就够。 */
+.code-source { margin-top:2px; }
+.code-source > summary { color:var(--text-dim); font-family:var(--font-mono); font-size:11px; cursor:pointer; list-style:none; padding:2px 0; }
+.code-source .tool-detail { max-height:280px; overflow:auto; }
+
 /* 两处时长显示同一形态：不抢占宽度、等宽数字，避免秒数变化时文字抖动。 */
 .tool-duration,.thinking-duration { flex:0 0 auto; color:var(--text-dim); font-size:11px; font-variant-numeric:tabular-nums; }
 /* 工具详情与思考正文都要原样保留换行；长行（路径、单行 JSON）必须就地折断，

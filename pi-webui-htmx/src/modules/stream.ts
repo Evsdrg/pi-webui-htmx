@@ -71,18 +71,78 @@ const LIVE_MARKDOWN_INTERVAL_MS = 350;
 // 结算后历史路径仍会完整渲染。
 const LIVE_MARKDOWN_LIMIT = 60_000;
 
-// 实时工具行的预览：bash 显示命令首行，文件工具显示路径。
-// 运行期间用户必须能看到工具在做什么——此前对 bash 一律返回空，
-// 整个运行期只见「bash + 工具已开始执行」，结算重读历史后才看到命令与输出。
+// 实时工具行的预览：bash 显示命令首行，文件工具显示路径，
+// Magic Context 的 ctx_* 与 todowrite 按参数语义给一句人话。
+//
+// 最后那一组为什么必要：这几种工具没有 command/path，此前一律渲染成
+// 只有工具名的空行（实测占全部调用的 2.8%，其中 ctx_* 1,970 次、
+// todowrite 1,153 次）。连续七八个空行连在一起就是截图里那种刷屏——
+// 每一行都占高度，却不携带任何信息。
 const TOOL_PREVIEW_CHARS = 120;
-function toolPreview(toolName: string, args: Record<string, unknown>): string {
+function clipPreview(s: string, limit = TOOL_PREVIEW_CHARS): string {
+  return s.length > limit ? s.slice(0, limit) + '…' : s;
+}
+export function toolPreview(toolName: string, args: Record<string, unknown>): string {
   if (toolName === 'bash') {
     // 多行命令（heredoc、脚本）只取第一行进预览，全文在展开详情里。
-    const first = text(args.command).split('\n')[0] ?? '';
-    return first.length > TOOL_PREVIEW_CHARS ? first.slice(0, TOOL_PREVIEW_CHARS) + '…' : first;
+    return clipPreview(text(args.command).split('\n')[0] ?? '');
   }
   const fileTools = new Set(['read', 'edit', 'write', 'grep', 'find', 'ls']);
-  return fileTools.has(toolName) ? text(args.path).slice(0, 240) : '';
+  if (fileTools.has(toolName)) return text(args.path).slice(0, 240);
+  switch (toolName) {
+    case 'ctx_reduce': {
+      const drop = Array.isArray(args.drop) ? args.drop as unknown[] : [];
+      if (drop.length === 0) return '';
+      const tags = drop.slice(0, 3).map((n) => `§${String(n)}`);
+      if (drop.length > 3) tags.push('…');
+      return tags.join(' ');
+    }
+    case 'ctx_memory':
+    case 'ctx_note': {
+      const action = text(args.action);
+      const content = text(args.content);
+      if (!action) return '';
+      return content ? `${action} ${clipPreview(content, 80)}` : action;
+    }
+    case 'ctx_search':
+      return clipPreview(text(args.query));
+    case 'ctx_expand': {
+      const tag = Number(args.tag);
+      if (Number.isFinite(tag) && tag > 0) return `§${tag}`;
+      const start = Number(args.start); const end = Number(args.end);
+      if (Number.isFinite(start) && Number.isFinite(end) && start > 0 && end > 0) return `§${start}-§${end}`;
+      return '';
+    }
+    case 'todowrite': {
+      const todos = Array.isArray(args.todos) ? args.todos as Record<string, unknown>[] : [];
+      if (todos.length === 0) return '';
+      let done = 0; let active = 0;
+      for (const t of todos) {
+        const st = text(t.status);
+        if (st === 'completed') done++;
+        else if (st === 'in_progress') active++;
+      }
+      const parts = [`${todos.length} 项`];
+      if (active > 0) parts.push(`${active} 进行中`);
+      if (done > 0) parts.push(`${done} 已完成`);
+      return parts.join(' · ');
+    }
+    case 'codemode': {
+      // 脚本里调用了哪些工具：tools.<name>( 是 codemode 的固定形态。
+      const code = text(args.code);
+      if (!code) return '';
+      const names: string[] = [];
+      for (const m of code.matchAll(/\btools\.([a-zA-Z_][\w]*)\s*\(/g)) {
+        const n = m[1] ?? '';
+        if (n && !names.includes(n)) names.push(n);
+      }
+      if (names.length === 0) return '脚本';
+      const shown = names.slice(0, 4).join(', ');
+      return `${shown}${names.length > 4 ? ' 等' : ''} · ${names.length} 个工具`;
+    }
+    default:
+      return '';
+  }
 }
 
 // 实时工具输出的保留上限：只留尾部（命令输出的错误通常在末尾），
@@ -107,6 +167,29 @@ const TOOL_OUTPUT_LIMIT = 20_000;
 function toolOutput(body: string): string {
   if (body.length <= TOOL_OUTPUT_LIMIT) return body;
   return `[…前文已省略]\n${body.slice(-TOOL_OUTPUT_LIMIT)}`;
+}
+
+// todoList 把 todowrite 的 todos 渲染成勾选清单；无有效任务时返回 null。
+// 与桥侧 history 的渲染保持同一语义：状态用 data-status 区分，
+// priority=high 加粗。实时侧与历史侧因此看起来是同一个东西。
+function todoList(args: Record<string, unknown>): HTMLElement | null {
+  const todos = Array.isArray(args.todos) ? args.todos as Record<string, unknown>[] : [];
+  const items = todos
+    .map((t) => ({ content: text(t.content).trim(), status: text(t.status), priority: text(t.priority) }))
+    .filter((t) => t.content !== '');
+  if (items.length === 0) return null;
+  const rank: Record<string, number> = { in_progress: 0, pending: 1, completed: 2, cancelled: 3 };
+  items.sort((a, b) => (rank[a.status] ?? 1) - (rank[b.status] ?? 1));
+  const list = document.createElement('ul'); list.className = 'todo-list';
+  for (const t of items) {
+    const li = document.createElement('li'); li.className = 'todo-item';
+    li.dataset.status = t.status || 'pending';
+    if (t.priority === 'high') li.dataset.priority = 'high';
+    const mark = document.createElement('span'); mark.className = 'todo-mark'; mark.setAttribute('aria-hidden', 'true');
+    const content = document.createElement('span'); content.className = 'todo-content'; content.textContent = t.content;
+    li.append(mark, content); list.append(li);
+  }
+  return list;
 }
 
 // toolDetailSeed 是工具行刚创建时展开详情的初始内容：展开即可看到完整调用
@@ -335,7 +418,14 @@ export class LiveView {
     }
     const detail = document.createElement('pre'); detail.className = 'tool-detail tool-output';
     detail.textContent = command ? '' : toolDetailSeed(name, args);
-    row.append(detail); work.items.append(row);
+    row.append(detail);
+    // todowrite 展开即见清单：实时回合里「模型在做什么」是用户最想知道的事，
+    // 而工具结果是同一份 JSON 数组的文本。这里按入参渲染，不依赖结果到达。
+    if (name === 'todowrite') {
+      const list = todoList(args);
+      if (list) row.append(list);
+    }
+    work.items.append(row);
   }
   // findToolRow 按 toolCallId 定位工具行；缺 ID 时退回最后一个运行中的行。
   private findToolRow(callId: string): HTMLElement | null {

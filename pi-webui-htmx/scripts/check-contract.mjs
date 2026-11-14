@@ -163,6 +163,8 @@ for(const [name,relative] of Object.entries(manifest.templates??{})){
   'diff-no-new','diff-no-old', // 新旧行号列，样式走共享的 .diff-no
   'file-node',       // 目录行容器，样式在 .file-item/.file-children
   'stats-copy',      // 会话详情里放复制按钮的网格列
+  'tool-todos',      // todowrite 行的语义标记：样式落在内部的 .todo-list/.todo-item
+  'tool-code',       // codemode 行的语义标记：样式落在内部的 .code-commands/.code-command
  ]);
  const missing=new Set();
  for(const body of bodies)for(const mm of body.matchAll(/class="([^"]*)"/g)){

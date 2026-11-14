@@ -20,16 +20,7 @@
     <summary class="process-summary">{{$turn.ProcessSummary}}</summary>
     <div class="process-body">
     {{range $block := $turn.Process}}{{if eq $block.Kind "work"}}
-      {{range $item := $block.Items}}{{if eq $item.Kind "tool"}}<details class="tool-call" data-ok="{{if $item.Step.OK}}true{{else}}false{{end}}" data-entry-id="{{$item.Step.EntryID}}">
-      <summary>
-        <span class="tool-name">{{if $item.Step.Name}}{{$item.Step.Name}}{{else}}{{$item.Step.Kind}}{{end}}</span>
-        <span class="tool-preview">{{$item.Step.Preview}}</span>
-        {{if $item.Step.Duration}}<span class="tool-duration">{{workDuration $item.Step.Duration}}</span>{{end}}
-        <svg class="tool-chevron" width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="3.5 2 6.5 5 3.5 8" /></svg>
-      </summary>
-      {{if $item.Step.Command}}<pre class="tool-detail tool-command">{{$item.Step.Command}}</pre><pre class="tool-detail tool-output">{{$item.Step.Detail}}</pre>{{else}}<pre class="tool-detail">{{$item.Step.Detail}}</pre>{{end}}
-      {{if and $item.Step.EntryID $item.Step.Images}}{{range $item.Step.Images}}<button class="lazy-block" data-lazy="tool-image" data-entry-id="{{$item.Step.EntryID}}" data-block-index="{{.}}">查看工具图片</button>{{end}}{{end}}
-      </details>{{else}}<details class="thinking-block">
+      {{range $item := $block.Items}}{{if eq $item.Kind "tool"}}{{template "toolItem" $item}}{{else}}<details class="thinking-block">
       <summary>
         <svg class="thinking-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9.5 2A5.5 5.5 0 0 0 4 7.5c0 1.7.78 3.21 2 4.21V14a1 1 0 0 0 1 1h5a1 1 0 0 0 1-1v-2.29c1.22-1 2-2.51 2-4.21A5.5 5.5 0 0 0 9.5 2z" /><line x1="7" y1="18" x2="12" y2="18" /><line x1="8" y1="21" x2="11" y2="21" /></svg>
         <span class="thinking-preview">思考</span>
@@ -45,10 +36,7 @@
   <details class="turn-process" data-process-group>
     <summary class="process-summary">{{$block.Summary}}</summary>
     <div class="process-body">
-    {{range $item := $block.Items}}{{if eq $item.Kind "tool"}}<details class="tool-call" data-ok="{{if $item.Step.OK}}true{{else}}false{{end}}" data-entry-id="{{$item.Step.EntryID}}">
-      <summary><span class="tool-name">{{if $item.Step.Name}}{{$item.Step.Name}}{{else}}{{$item.Step.Kind}}{{end}}</span><span class="tool-preview">{{$item.Step.Preview}}</span>{{if $item.Step.Duration}}<span class="tool-duration">{{workDuration $item.Step.Duration}}</span>{{end}}</summary>
-      {{if $item.Step.Command}}<pre class="tool-detail tool-command">{{$item.Step.Command}}</pre><pre class="tool-detail tool-output">{{$item.Step.Detail}}</pre>{{else}}<pre class="tool-detail">{{$item.Step.Detail}}</pre>{{end}}
-      </details>{{else}}<details class="thinking-block">
+    {{range $item := $block.Items}}{{if eq $item.Kind "tool"}}{{template "toolItem" $item}}{{else}}<details class="thinking-block">
       <summary><svg class="thinking-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9.5 2A5.5 5.5 0 0 0 4 7.5c0 1.7.78 3.21 2 4.21V14a1 1 0 0 0 1 1h5a1 1 0 0 0 1-1v-2.29c1.22-1 2-2.51 2-4.21A5.5 5.5 0 0 0 9.5 2z" /><line x1="7" y1="18" x2="12" y2="18" /><line x1="8" y1="21" x2="11" y2="21" /></svg><span class="thinking-preview">思考</span>{{if $item.Thinking.Duration}}<span class="thinking-duration">· 持续了 {{workDuration $item.Thinking.Duration}}</span>{{end}}</summary>
       <div class="thinking-body" data-lazy="thinking" data-entry-id="{{$item.Thinking.EntryID}}" data-block-index="{{$item.Thinking.BlockIndex}}"></div>
       </details>{{end}}{{end}}
@@ -62,3 +50,55 @@
   <div class="turn-actions"><button class="icon-btn" data-action="copy-turn" aria-label="复制此回合内容">复制</button></div>
 </article>
 {{end}}
+
+{{/* 单个工具项：聚合组内的成员与普通工具行共用这一份。
+     三种形态按优先级：
+       1. Group 非空   → 聚合组（相邻同名工具折叠）
+       2. Todos 非空   → todowrite 的任务清单
+       3. CodeCommands → codemode 的命令与各自输出
+       其余退回「一行预览 + 命令/输出」的原样式。 */}}
+{{define "toolItem"}}{{if .Group}}
+<details class="tool-group" data-ok="{{if eq .Group.Failed 0}}true{{else}}false{{end}}">
+  <summary>
+    <span class="tool-name">{{.Group.Name}} ×{{.Group.Count}}</span>
+    {{if .Group.Failed}}<span class="tool-group-failed">{{.Group.Failed}} 个失败</span>{{end}}
+    <svg class="tool-chevron" width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="3.5 2 6.5 5 3.5 8" /></svg>
+  </summary>
+  <div class="tool-group-body">{{range $member := .Group.Items}}{{template "toolItem" $member}}{{end}}</div>
+</details>
+{{else if .Step.Todos}}
+<details class="tool-call tool-todos" data-ok="{{if .Step.OK}}true{{else}}false{{end}}" data-entry-id="{{.Step.EntryID}}">
+  <summary>
+    <span class="tool-name">{{.Step.Name}}</span>
+    <span class="tool-preview">{{todoSummary .Step.Todos}}</span>
+    {{if .Step.Duration}}<span class="tool-duration">{{workDuration .Step.Duration}}</span>{{end}}
+    <svg class="tool-chevron" width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="3.5 2 6.5 5 3.5 8" /></svg>
+  </summary>
+  <ul class="todo-list">{{range $todo := .Step.Todos}}<li class="todo-item" data-status="{{$todo.Status}}"{{if eq $todo.Priority "high"}} data-priority="high"{{end}}><span class="todo-mark" aria-hidden="true"></span><span class="todo-content">{{$todo.Content}}</span></li>{{end}}</ul>
+</details>
+{{else if .Step.CodeCommands}}
+<details class="tool-call tool-code" data-ok="{{if .Step.OK}}true{{else}}false{{end}}" data-entry-id="{{.Step.EntryID}}">
+  <summary>
+    <span class="tool-name">{{.Step.Name}}</span>
+    <span class="tool-preview">{{codeSummary .Step.CodeCommands}}</span>
+    {{if .Step.Duration}}<span class="tool-duration">{{workDuration .Step.Duration}}</span>{{end}}
+    <svg class="tool-chevron" width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="3.5 2 6.5 5 3.5 8" /></svg>
+  </summary>
+  <div class="code-commands">{{range $cmd := .Step.CodeCommands}}<details class="code-command">
+    <summary><span class="code-command-name">{{$cmd.Name}}</span><span class="code-command-input">{{$cmd.Input}}</span></summary>
+    <pre class="tool-detail tool-output">{{$cmd.Output}}</pre>
+  </details>{{end}}</div>
+  <details class="code-source"><summary>脚本正文</summary><pre class="tool-detail">{{.Step.Code}}</pre></details>
+</details>
+{{else}}
+<details class="tool-call" data-ok="{{if .Step.OK}}true{{else}}false{{end}}" data-entry-id="{{.Step.EntryID}}">
+  <summary>
+    <span class="tool-name">{{if .Step.Name}}{{.Step.Name}}{{else}}{{.Step.Kind}}{{end}}</span>
+    <span class="tool-preview">{{.Step.Preview}}</span>
+    {{if .Step.Duration}}<span class="tool-duration">{{workDuration .Step.Duration}}</span>{{end}}
+    <svg class="tool-chevron" width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="3.5 2 6.5 5 3.5 8" /></svg>
+  </summary>
+  {{if .Step.Command}}<pre class="tool-detail tool-command">{{.Step.Command}}</pre><pre class="tool-detail tool-output">{{.Step.Detail}}</pre>{{else}}<pre class="tool-detail">{{.Step.Detail}}</pre>{{end}}
+  {{if and .Step.EntryID .Step.Images}}{{with $step := .Step}}{{range $step.Images}}<button class="lazy-block" data-lazy="tool-image" data-entry-id="{{$step.EntryID}}" data-block-index="{{.}}">查看工具图片</button>{{end}}{{end}}{{end}}
+</details>
+{{end}}{{end}}
