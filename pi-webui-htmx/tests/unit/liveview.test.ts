@@ -382,3 +382,128 @@ describe('实时过程摘要与时间线', () => {
     root.remove();
   });
 });
+
+// ---- 实时聚合：相邻同名工具在运行中就归组 ----
+//
+// 历史侧已按「相邻同名 ≥3」归组，但实时流此前逐行铺开：模型连续发
+// bash ×46 时，运行期间用户看到的就是 46 个等高行。这里对齐历史侧
+// 的判据与外观（同一套 .tool-group 结构），让运行中与结算后一致。
+describe('实时工具聚合', () => {
+  const startTool = (view: LiveView, name: string, callId: string, args: Record<string, unknown> = {}) => {
+    view.event({ type: 'tool_execution_start', toolName: name, toolCallId: callId, args });
+    view.event({ type: 'tool_execution_end', toolCallId: callId, result: { content: [{ type: 'text', text: 'ok' }] } });
+  };
+
+  it('连续三个同名工具归成一个组', () => {
+    stubSyncRaf();
+    const root = mount();
+    const view = new LiveView(root);
+    view.begin();
+    startTool(view, 'bash', 'c1', { command: 'ls' });
+    startTool(view, 'bash', 'c2', { command: 'pwd' });
+    startTool(view, 'bash', 'c3', { command: 'id' });
+    const groups = root.querySelectorAll('.tool-group');
+    expect(groups.length).toBe(1);
+    expect(groups[0]!.querySelector('.tool-name')!.textContent).toBe('bash ×3');
+    // 组内保留三次调用
+    expect(groups[0]!.querySelectorAll('.live-tool').length).toBe(3);
+    // 外层不应再有裸工具行
+    expect(root.querySelectorAll('#live-flow > .live-items > .live-tool').length).toBe(0);
+  });
+
+  it('两次同名不归组', () => {
+    stubSyncRaf();
+    const root = mount();
+    const view = new LiveView(root);
+    view.begin();
+    startTool(view, 'bash', 'c1', { command: 'ls' });
+    startTool(view, 'bash', 'c2', { command: 'pwd' });
+    expect(root.querySelectorAll('.tool-group').length).toBe(0);
+    expect(root.querySelectorAll('.live-tool').length).toBe(2);
+  });
+
+  it('不同工具打断连续序列', () => {
+    stubSyncRaf();
+    const root = mount();
+    const view = new LiveView(root);
+    view.begin();
+    startTool(view, 'bash', 'c1', { command: 'ls' });
+    startTool(view, 'bash', 'c2', { command: 'pwd' });
+    startTool(view, 'read', 'c3', { path: '/a' });
+    startTool(view, 'bash', 'c4', { command: 'id' });
+    // 没有连续 3 次同名，整段都不归组
+    expect(root.querySelectorAll('.tool-group').length).toBe(0);
+    expect(root.querySelectorAll('.live-tool').length).toBe(4);
+  });
+
+  it('思考打断连续序列', () => {
+    stubSyncRaf();
+    const root = mount();
+    const view = new LiveView(root);
+    view.begin();
+    startTool(view, 'bash', 'c1', { command: 'ls' });
+    startTool(view, 'bash', 'c2', { command: 'pwd' });
+    view.event({ type: 'message_update', assistantMessageEvent: { type: 'thinking_delta', delta: '再查一下' } });
+    startTool(view, 'bash', 'c3', { command: 'id' });
+    expect(root.querySelectorAll('.tool-group').length).toBe(0);
+  });
+
+  it('组内仍能按 toolCallId 收到流式输出与结束状态', () => {
+    stubSyncRaf();
+    const root = mount();
+    const view = new LiveView(root);
+    view.begin();
+    // 先起三行让它们成组
+    for (const id of ['c1', 'c2', 'c3']) {
+      view.event({ type: 'tool_execution_start', toolName: 'bash', toolCallId: id, args: { command: 'ls ' + id } });
+    }
+    // 组已成立；后续输出必须落到组内那一行
+    view.event({ type: 'tool_execution_update', toolCallId: 'c2', partialResult: { content: [{ type: 'text', text: 'streaming-out' }] } });
+    const rows = root.querySelectorAll('.tool-group .live-tool');
+    expect(rows.length).toBe(3);
+    const row2 = Array.from(rows).find((r) => (r as HTMLElement).dataset.toolCallId === 'c2')!;
+    expect(row2.querySelector('.tool-output')!.textContent).toContain('streaming-out');
+    view.event({ type: 'tool_execution_end', toolCallId: 'c2', result: { content: [{ type: 'text', text: 'done' }] } });
+    expect((row2 as HTMLElement).dataset.state).toBe('done');
+  });
+
+  it('组标题计入失败数', () => {
+    stubSyncRaf();
+    const root = mount();
+    const view = new LiveView(root);
+    view.begin();
+    view.event({ type: 'tool_execution_start', toolName: 'bash', toolCallId: 'c1', args: { command: 'ls' } });
+    view.event({ type: 'tool_execution_start', toolName: 'bash', toolCallId: 'c2', args: { command: 'pwd' } });
+    view.event({ type: 'tool_execution_start', toolName: 'bash', toolCallId: 'c3', args: { command: 'id' } });
+    view.event({ type: 'tool_execution_end', toolCallId: 'c2', isError: true, result: { content: [{ type: 'text', text: 'boom' }] } });
+    const group = root.querySelector('.tool-group')!;
+    expect(group.getAttribute('data-ok')).toBe('false');
+    expect(group.querySelector('.tool-group-failed')!.textContent).toContain('1');
+  });
+});
+
+// 跨回合复位：run 候选持有上一回合的行引用，clear 时必须一并清空。
+// 否则下一回合的同名工具会往已移除的行里追加，标题计数越滚越大。
+describe('实时聚合跨回合复位', () => {
+  it('clear 之后同名工具重新从零计数', () => {
+    stubSyncRaf();
+    const root = mount();
+    const view = new LiveView(root);
+    const run = (ids: string[]) => {
+      for (const id of ids) {
+        view.event({ type: 'tool_execution_start', toolName: 'bash', toolCallId: id, args: { command: 'ls' } });
+        view.event({ type: 'tool_execution_end', toolCallId: id, result: { content: [{ type: 'text', text: 'ok' }] } });
+      }
+    };
+    view.begin();
+    run(['a1', 'a2', 'a3']);
+    expect(root.querySelectorAll('.tool-group').length).toBe(1);
+
+    view.clear();
+    view.begin();
+    run(['b1', 'b2']);
+    // 新回合只有 2 次同名：不该成组，也不该继承上一回合的计数。
+    expect(root.querySelectorAll('.tool-group').length).toBe(0);
+    expect(root.querySelectorAll('.live-tool').length).toBe(2);
+  });
+});

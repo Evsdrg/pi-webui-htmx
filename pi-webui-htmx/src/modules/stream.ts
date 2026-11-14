@@ -163,6 +163,9 @@ function thinkingIcon(): SVGSVGElement {
   svg.append(path, l1, l2);
   return svg;
 }
+// TOOL_GROUP_MIN_RUN 是实时归组的最小连续同名次数，与桥侧
+// presentation.toolGroupMinRun 保持一致：2 次折叠比展开更烦。
+const TOOL_GROUP_MIN_RUN = 3;
 const TOOL_OUTPUT_LIMIT = 20_000;
 function toolOutput(body: string): string {
   if (body.length <= TOOL_OUTPUT_LIMIT) return body;
@@ -248,6 +251,10 @@ export class LiveView {
   // 标题行（状态 + 思考预览）与项容器，活动信号只挂在最新一段上。
   private segment: 'work' | 'text' | null = null;
   private work: { group: HTMLDetailsElement; status: HTMLElement; preview: HTMLElement; items: HTMLElement; tools: number } | null = null;
+  // 实时归组：run 记录当前「连续同名工具」的候选（未满 3 个时先按普通行铺开），
+  // 满 3 个时把这几行搬进一个 .tool-group。与桥侧 history 的判据一致：
+  // 只聚合同名、思考与正文都是天然分隔符。
+  private run: { name: string; rows: HTMLElement[]; group: HTMLDetailsElement | null } | null = null;
   private text: HTMLElement | null = null;
   // 当前正文段的原始文本（markdown 源）。DOM 里可能已经是渲染后的 HTML，
   // 不能反读 textContent 当源——渲染器会把 `**x**` 变成 `<strong>`。
@@ -305,6 +312,10 @@ export class LiveView {
     this.dispose(); this.rendered = 0; this.truncated = false; this.thinkingChars = 0;
     this.segment = null; this.work = null; this.text = null; this.textRaw = ''; this.mdRenderedFor = -1;
     this.thinkEl = null; this.thinkRaw = ''; this.thinkRenderedFor = -1;
+    // run 是「连续同名工具」的候选，持有着上一回合的行引用。
+    // 不清掉的话，下一回合的同名工具会往上一回合（已从 DOM 移除）的行里
+    // 追加、并把标题算成 ×N——计数越滚越大，组却永远不出现。
+    this.run = null;
     const flow = this.root.querySelector('#live-flow');
     if (flow) flow.replaceChildren();
     // 用户气泡必须连同 hidden 一起复位：只清文字的话，「settled 清理之后
@@ -380,6 +391,8 @@ export class LiveView {
   // ensureText 返回当前正文段；当前段是工作（或还没有段）时新开一段。
   private ensureText(): HTMLElement {
     if (this.segment === 'text' && this.text) return this.text;
+    // 正文是「模型改变话题」的信号：前后的同名调用不该合并。
+    this.breakToolRun();
     const flow = this.flowEl();
     this.hidePending();
     // 活动信号交给光标：旧的标题行不再扫光。
@@ -426,7 +439,63 @@ export class LiveView {
       if (list) row.append(list);
     }
     work.items.append(row);
+    this.noteToolRun(name, row);
   }
+
+  // noteToolRun 维护「连续同名工具」的候选，满 toolGroupMinRun 时把这几行
+  // 搬进一个聚合组。
+  //
+  // 为什么边到边搬而不是等回合结束再重排：实时流里用户盯着屏幕看，等到
+  // 结算才分组等于运行期间照样刷屏。代价是行会在成组那一刻移动一次——
+  // 这比「一直铺开到结算」轻得多，而且移动发生在同一位置（只是缩进）。
+  private noteToolRun(name: string, row: HTMLElement): void {
+    const run = this.run;
+    if (!run || run.name !== name) {
+      this.run = { name, rows: [row], group: null };
+      return;
+    }
+    run.rows.push(row);
+    if (run.group) {
+      // 已成组：新行直接进组内，不再走外层。
+      run.group.querySelector('.tool-group-body')?.append(row);
+      this.refreshGroupTitle(run.group, run.rows);
+      return;
+    }
+    if (run.rows.length < TOOL_GROUP_MIN_RUN) return;
+    // 满阈值：把已有几行搬进组。组插在第一行原来的位置。
+    const group = document.createElement('details');
+    group.className = 'tool-group'; group.dataset.ok = 'true';
+    const summary = document.createElement('summary');
+    const label = document.createElement('span'); label.className = 'tool-name';
+    const failed = document.createElement('span'); failed.className = 'tool-group-failed';
+    const chevron = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    for (const [k, v] of Object.entries({ width: '10', height: '10', viewBox: '0 0 10 10', fill: 'none', stroke: 'currentColor', 'stroke-width': '1.6', 'stroke-linecap': 'round', 'stroke-linejoin': 'round', 'aria-hidden': 'true', class: 'tool-chevron' })) chevron.setAttribute(k, v);
+    const poly = document.createElementNS('http://www.w3.org/2000/svg', 'polyline');
+    poly.setAttribute('points', '3.5 2 6.5 5 3.5 8');
+    chevron.append(poly);
+    summary.append(label, failed, chevron);
+    const body = document.createElement('div'); body.className = 'tool-group-body';
+    group.append(summary, body);
+    // 插到第一行的位置，然后把这批行整体搬进去。
+    run.rows[0]!.before(group);
+    for (const r of run.rows) body.append(r);
+    run.group = group;
+    this.refreshGroupTitle(group, run.rows);
+  }
+
+  // refreshGroupTitle 重算组标题：`bash ×3` 与失败计数。
+  private refreshGroupTitle(group: HTMLElement, rows: HTMLElement[]): void {
+    const name = rows[0]?.querySelector('.tool-name')?.textContent ?? '';
+    const failures = rows.filter((r) => r.dataset.ok === 'false').length;
+    const nameEl = group.querySelector('.tool-name');
+    if (nameEl) nameEl.textContent = `${name} ×${rows.length}`;
+    const failedEl = group.querySelector('.tool-group-failed');
+    if (failedEl) failedEl.textContent = failures > 0 ? `${failures} 个失败` : '';
+    group.dataset.ok = failures > 0 ? 'false' : 'true';
+  }
+
+  // breakToolRun 结算当前候选：遇到不同工具、思考或正文时调用。
+  private breakToolRun(): void { this.run = null; }
   // findToolRow 按 toolCallId 定位工具行；缺 ID 时退回最后一个运行中的行。
   private findToolRow(callId: string): HTMLElement | null {
     const rows = this.flowEl().querySelectorAll<HTMLElement>('.live-tool');
@@ -470,6 +539,10 @@ export class LiveView {
     }
     row.dataset.state = 'done';
     row.dataset.ok = event.isError === true ? 'false' : 'true';
+    // 失败数要立刻反映到所属聚合组的标题上：折叠态看不到组内，
+    // 失败若只藏在内部，用户根本不会知道。
+    const run = this.run;
+    if (run?.group && run.rows.includes(row)) this.refreshGroupTitle(run.group, run.rows);
   }
   private append(delta: string): void {
     if (!delta || this.truncated) return;
@@ -542,6 +615,8 @@ export class LiveView {
     let block = work.items.lastElementChild;
     if (!(block instanceof HTMLDetailsElement) || !block.classList.contains('live-think-block')) {
       if (!delta.trim()) return;
+      // 新思考块 = 模型改变了思路：前后的同名工具不该合并。
+      this.breakToolRun();
       block = this.createThinkingBlock();
       work.items.append(block);
       this.thinkEl = null; this.thinkRaw = ''; this.thinkRenderedFor = -1;
